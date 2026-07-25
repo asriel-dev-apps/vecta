@@ -25,7 +25,12 @@ The REST contract is available at `/api/openapi.json`; remote MCP is available a
 
 The initial staffing optimizer uses one fixed lexicographic objective order: earliest finish, least total overtime, lowest planned labor cost, then fewest changed Task/Resource Assignment pairs. A feasible solver response is not trusted directly: the TypeScript Application layer reapplies its exact Scenario commands and recomputes schedule, confirmed-effort coverage, capacity, total overtime, labor cost, Assignment-pair changes, schedule changes, candidate usage, and Skill coverage. Solver version, deterministic seed, one-worker setting, per-stage limits, and objective values/bounds are retained in the Proposal result. Workers AI receives only verified facts and exact changes and cannot alter or approve the plan.
 
-See [docs/mvp-spec.md](docs/mvp-spec.md) for the bounded MVP specification.
+## Documentation
+
+The written documentation — the MVP specification, architecture decision records, design notes and
+operations runbooks — is kept in a private companion repository and is not published with the source.
+[docs/README.md](docs/README.md) explains the split and where each document now lives. The code, the
+test suite and CI do not depend on any of it.
 
 ## Prerequisites
 

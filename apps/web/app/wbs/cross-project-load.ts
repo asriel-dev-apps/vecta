@@ -9,7 +9,8 @@ import type { WbsGridTaskRow } from "@vecta/application";
  * preview can demonstrate the overlay and the capacity-overflow alert with no
  * backend), but the shape is the eventual contract for a real cross-project
  * load read. Phase 2 replaces the synthesizer with an API call that resolves the
- * same person across projects (see `docs/cross-project-load.md`); every consumer
+ * same person across projects (see `../project-docs/vecta/cross-project-load.md`,
+ * in the private documentation repo — see `docs/README.md`); every consumer
  * below reads only this structure, so nothing else has to change.
  */
 export type ExternalLoad = Record<string, Record<string, number>>;
