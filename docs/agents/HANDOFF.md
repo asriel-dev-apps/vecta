@@ -37,7 +37,10 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   Process: `docs/operations/release-and-rollback.md`. Never deploy by hand.
 - DB schema at migration **0006** (7 applied). Prod project holds 48 synthetic tasks (generic
   "Phase A"/"Product 1"/"Member 01"), 8 processes / 6 products / 6 members / 2 templates / 32 deps.
-- Gate: domain 32, application 70, persistence 46, web 264, operations 17.
+- Gate: domain 32, application 70, persistence 46, web 268, operations 17.
+- **A `/projects/:id/*` document request costs TWO sequential Neon round trips** (principal batch, then the
+  workspace batch) — the 2026-07-26 fold. The gate no longer reads the project row on its own: the workspace
+  batch's header IS that row. Do not reintroduce a separate project-row query.
 
 ## How to work here (standing rules, set 2026-07-26)
 
@@ -57,19 +60,17 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
 
 ## Active work — in this order
 
-1. **Round-trip reduction 3 → 2** (user-requested, agreed). Fold the access gate's project-row read into the
-   workspace batch: the workspace header already carries the project row, so the gate's separate read is
-   redundant. Worth ~70 ms per navigation (Tokyo↔Singapore is the floor — see the debt list). **Touches
-   fail-closed access-gate code that had a security review** — keep 404-vs-403 indistinguishability, and keep
-   "deny before any child loader runs". Main implements; Fable reviews the design before merge.
-2. **LLM-driven operation via the command core** (ADR 0012 "(D) vision features"). **Requirements not yet
+1. **LLM-driven operation via the command core** (ADR 0012 "(D) vision features"). **Requirements not yet
    taken** — do NOT start implementing. Open questions for the user: what should it be able to do (read-only
    Q&A over the WBS? propose edits? apply them?), who approves a proposed change, and whether it runs in the
    browser or through `/mcp` (which already exposes list/get/apply as an agent surface). Write the spec to
    `docs/design/` and the decision to `docs/adr/` — not into this file.
-3. **Client/server boundary — enforce it structurally** (user: "絶対に防ぎたい"). Measured 2026-07-26: the
-   client bundle leaks **nothing** (14 patterns — secret names, `drizzle`/`neondatabase`/`pg`/`jose`, server
-   identifiers — all zero). But nothing *enforces* that; only the `.server.ts` suffix does any work.
+2. **Client/server boundary — enforce it structurally** (user: "絶対に防ぎたい"). Re-measured 2026-07-26 after
+   the round-trip fold: the client bundle leaks **nothing** (22 patterns — secret names,
+   `drizzle`/`neondatabase`/`node-postgres`/`jose`, and every server identifier the fold touched — all zero
+   across the 29 client assets). But nothing *enforces* that; only the `.server.ts` suffix does any work, and
+   the fold made `app/middleware/project-access.server.ts` import `@vecta/persistence` directly, so a route
+   module is now one suffix away from the persistence layer.
    **`app/server/` does not mean server-only** — `app/server/project/self-save-revalidation.ts` really is
    shipped as `build/client/assets/self-save-revalidation-*.js`, and correctly so (`shouldRevalidate` runs in
    the browser). The directory name is lying, which is exactly the shape of a future leak. Files under
@@ -80,10 +81,10 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
    ESLint import restriction so client-reachable modules may only `import type` from `~/server/**` — it fails
    earlier and names the culprit. One without the other is insufficient. Also move genuinely isomorphic code
    out of `app/server/`.
-4. **Periodic architecture review** (standing): check code style and directory layout against the
+3. **Periodic architecture review** (standing): check code style and directory layout against the
    language/framework's current best practices *and* this project's own constraints (CLAUDE.md, ADRs). Needs
    web research, so **not delegable to Codex** (no network in its sandbox). Output to `docs/research/`.
-5. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
+4. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
    (third-party actions, `pull_request_target`, token scopes, artifact/secret exposure), and an OWASP-informed
    pass over the app. Survey output goes to `docs/research/`, findings to a doc — not here. Note the repo is
    **public**. The local `sec-scan` skill covers app vulns + pre-push leak audit; the CI/supply-chain half is
@@ -92,14 +93,41 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
 
 ## Carried debt (none of it blocking)
 
+- **`/projects/:id/dashboard` reads a whole workspace for one project name** (from the 2026-07-26 fold;
+  confirmed by the Fable review). It is a Step-4 stub (`ダッシュボードは Step 4 で実装します`), but the nav
+  tabs carry `prefetch="intent"` (`app-bar.tsx:231`), so **hovering the ダッシュボード tab is enough to fire
+  the full 8-query batch**. Left alone deliberately: fixing it means resurrecting the project-row reader the
+  fold just deleted, purely for a stub, and the real dashboard (EVM) will read the workspace anyway.
+  **Trigger: resolve it when the dashboard is actually implemented, as part of designing that screen's read.
+  If it ever ships still showing only the name, the lightweight query has to come back first.** Note the sole
+  production consumer of `requireProjectAccess` is now this route — tidy both together.
+- **Write path: a deleted project answers a member's POST with a DIFFERENT 404 body than the gate's**
+  (from the 2026-07-26 fold; found by the Fable review). `runCommandAction` now reads the membership
+  synchronously, so it no longer throws the gate's opaque `data(null, {status:404})` on the way in; a member
+  whose project row was deleted reaches `applyCommands` and gets `{ ok:false, code:"NOT_FOUND" }` at 404.
+  **Not fixed on purpose**: that response shape is pre-existing (the same race was reachable before, between
+  the row read and the transaction) — the fold only widened the window — and it is a TYPED client contract
+  (`wbs-app.tsx:532`, `master-app.tsx:49`) feeding the save queue's graceful rollback, so throwing an opaque
+  404 instead would turn a rollback into an error boundary. It leaks nothing: only a (former) member of that
+  project can observe it, `project_memberships` cascades on project delete, and the next request 404s at the
+  gate. **Trigger: revisit if the write path's error contract is redesigned, or if an audit demands
+  byte-identical 404s across read AND write.**
+- **`packages/persistence` integration tests flake on THIS Mac under file parallelism.** Each of the 8 test
+  files starts its own `PostgreSqlContainer`; `beforeAll` gets 60 s but the tests keep vitest's 5 s default,
+  and under 8 concurrent containers `subtask-generation.test.ts` blows through it (then cascades:
+  `current transaction is aborted`). Reproduced twice on 2026-07-26; `pnpm vitest run --fileParallelism=false`
+  passes 46/46, and **CI is green** (ubuntu-latest, ~2 min). So it is an environment limit, not a code defect
+  — but it makes a local `pnpm check` unreliable. **Trigger: fix (raise `testTimeout` for the container-backed
+  files, or cap `maxWorkers` for the package) the first time CI itself flakes on it, or the first time it
+  blocks a verification you cannot otherwise complete.**
 - **ADR 0012 debt**:
-  - **web-next Neon-reader debt**: `apps/web` has a direct `drizzle-orm` dep + two thin Neon read-seams that
-    import persistence schema/conn: `app/server/auth/principal-directory.neon.server.ts` and
-    `app/server/project/project-reader.neon.server.ts`. Consider moving both Drizzle impls into
-    `@vecta/persistence` (beside `project-access.ts`/`project-list.ts`), keeping the
-    `PrincipalDirectory`/`ProjectReader` interfaces in the app, and dropping the direct `drizzle-orm` dep. The
-    project-list read already lives in persistence (the right precedent). Interim: keep both `drizzle-orm`
-    pins (0.45.2) in lockstep.
+  - **web Neon-reader debt**: `apps/web` has a direct `drizzle-orm` dep for ONE remaining thin Neon read-seam
+    that imports persistence schema/conn: `app/server/auth/principal-directory.neon.server.ts`. (The second
+    one, `project-reader.neon.server.ts`, was deleted 2026-07-26 by the round-trip fold — the gate reads the
+    workspace instead.) Consider moving that Drizzle impl into `@vecta/persistence` (beside
+    `project-access.ts`/`project-list.ts`), keeping the `PrincipalDirectory` interface in the app, and
+    dropping the direct `drizzle-orm` dep. The project-list read already lives in persistence (the right
+    precedent). Interim: keep both `drizzle-orm` pins (0.45.2) in lockstep.
   - **Save-queue 1000-command cap (from 4d, deferred)**: the coalescing pending buffer can exceed the
     `CommandBatchSchema` 1000-command cap under sustained heavy reorders queued behind a slow save → the drain
     422s and the queue is erased. Low-probability. Follow-up fix = chunk the drain at the cap (successive
