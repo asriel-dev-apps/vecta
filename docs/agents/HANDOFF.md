@@ -39,6 +39,22 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   "Phase A"/"Product 1"/"Member 01"), 8 processes / 6 products / 6 members / 2 templates / 32 deps.
 - Gate: domain 32, application 70, persistence 46, web 264, operations 17.
 
+## How to work here (standing rules, set 2026-07-26)
+
+- **Proceed autonomously.** Ask the user only about (a) genuinely undecidable, foundation-overturning
+  matters and (b) up-front requirements gathering. Decide implementation questions yourself and report
+  the decision with the result. Do not stop to ask "which would you prefer".
+- **After each finished task, produce the HTML + PDF progress report** (`progress-report` skill →
+  `docs/reports/<date>-<slug>/`). This is the user's only sync point now that per-step confirmation is
+  gone, so it is mandatory, and it must include what failed and what is still unverified.
+- **Large diffs get `diff-review`** (two-stage: a reviewer that has NOT seen the plan goes first).
+- **Anything that blocked autonomy** (a skill, hook, or permission) goes into `~/.claude/friction-log.md`
+  with its frequency. Never edit settings yourself.
+- **E2E / seeing the screen is authorised**: install Playwright, and build a staging environment if one is
+  needed — but it must **not** be publicly reachable. Prefer local (`wrangler dev` + Playwright) so nothing
+  is exposed at all. For authenticated screens, **never add a test-only login bypass to product code**;
+  have the test mint a properly signed session cookie with the local `SESSION_SECRET` instead.
+
 ## Active work — next three, in this order
 
 1. **Round-trip reduction 3 → 2** (user-requested, agreed). Fold the access gate's project-row read into the
