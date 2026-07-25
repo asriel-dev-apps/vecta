@@ -222,6 +222,23 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   - **Shared-core hygiene (deferred, not now)**: `projectWbsGrid`/projection sorts use `localeCompare`
     (`packages/application/src/project-projection.ts:211`); byte-identical both SSR sides today (lowercase-hex
     data), but a codepoint compare would make determinism unconditional. A core pass, out of Step-4 scope.
+  - **Connection pooling — deferred, and it is NOT a one-line switch (decided 2026-07-25)**: `DATABASE_URL` is
+    Neon's **direct** endpoint (no `-pooler`). Fine at today's scale: reads go over SQL-over-HTTP and consume no
+    Postgres connection at all, and the WS pool is opened lazily, only for writes, at most one per request. It
+    stops being fine when concurrent **writes** approach the compute's `max_connections` (104 on 0.25 CU, 97
+    usable after 7 reserved for Neon) — past that, `FATAL: remaining connection slots are reserved`. Pooling is
+    free and the pooled endpoint is always live; the Console's toggle only switches which string it *displays*
+    (on by default for new projects, which is why it can look like it changed itself). Neon's own guidance is
+    app → pooled, schema migrations → direct. Switching is **three** changes, not one:
+    1. Worker secret `DATABASE_URL` → the pooled string.
+    2. A SEPARATE direct string for migrations (a second Keychain item), because Neon's PgBouncer runs
+       `pool_mode=transaction`, which explicitly does not support **session-level advisory locks** — exactly what
+       `packages/persistence/scripts/migrate.mjs` uses (`pg_try_advisory_lock`/`pg_advisory_unlock`). Through the
+       pooler that lock silently protects nothing; concurrent migrations would not be excluded and no error is
+       raised.
+    3. A guard in `migrate.mjs` that REFUSES a `-pooler` host, so that silent failure becomes a loud one. It
+       already validates `EXPECTED_DATABASE_HOST`, so this is the same shape of check.
+    Also verify the neon-http read driver against a `-pooler` hostname before switching (unconfirmed).
   - **AGENT read-view policy (deferred decision, from 5a)**: `/api` scopes the GET workspace projection by
     `projectRole` only, so an AGENT with EDITOR role reads `dailyCapacityMinutes` even though its writes are
     scope-fenced. If agent tokens should be least-privilege on reads, map `principalType==="AGENT"` → GENERAL
