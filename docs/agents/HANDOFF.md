@@ -145,7 +145,7 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   (distinct → no cross-surface replay); RFC 9728 metadata at `/.well-known/oauth-protected-resource/mcp`;
   non-POST→405; no ACAO; per-surface `mcp` rate bucket. **249 web-next + 45 persistence tests; bundle 800 KiB
   gzip (~27% of free 3 MB); root `pnpm check` green.** `docs/agents/adr-0012-step5-plan.md` removed (Step 5 done).
-- **Post-cutover — read-path latency (NOT yet deployed)**. Every screen took ~1 s from click to
+- **Post-cutover — read-path latency (`e501ef5`, DEPLOYED, worker version `60a2a77c`)**. Every screen took ~1 s from click to
   paint. Cause was round-trip count, not rendering: each `.data` request opened a **fresh Neon WebSocket pool**
   (TCP+TLS+WS handshake + Postgres startup/auth, unamortisable in a Worker invocation) and then ran **~14
   sequential queries** — principal + 2 membership reads, the project row, and `ProjectRepository.load`'s
@@ -166,8 +166,18 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
     handshake → **3 HTTP round trips** per navigation.
   - Also: the app bar gained a **「プロジェクト一覧」back link** (`/projects/:id/*` was a dead end — every tab
     stayed inside the project and the only other exit was Sign out).
-  - **NOT deployed.** Root `pnpm check` green (domain 32, application 70, persistence 46, web 115, web-next 260).
-    Deploying this is the next user-visible step; verify the served bundle hash after (~30 s propagation).
+  - **Deployed** (worker version `60a2a77c`). Root `pnpm check` green (domain 32, application 70, persistence 46,
+    web 115, web-next 260). Post-deploy verification done for what needs no session: every served
+    `/assets/*` matches `apps/web-next/build/client/assets/` (the stylesheet hash moved `BDGuI7g-`→`C5HNQwdV`,
+    proving the new bundle is live), `/api/health` 200, `/.well-known/oauth-protected-resource/mcp` 200 with
+    `resource: https://vecta.tt-dev.workers.dev/mcp`, unauth `POST /mcp` 401 + `WWW-Authenticate
+    resource_metadata`. **Still owed (needs a browser session): runbook Phase 5.4 login round-trip, 5.5 SSR
+    no-flash view-source of `/projects/<id>/wbs`, 5.6 one benign reversible write.** Existing cookie sessions
+    survive (SESSION_SECRET untouched), so no forced re-login.
+  - **The latency win is derived from round-trip counts, not measured in prod.** Confirm by clicking through;
+    if it is still slow the next suspects are Neon free-tier scale-to-zero (first query after ~5 min idle) and
+    the remaining 3rd round trip (the access gate's project-row read, which the workspace header already
+    carries — merging them touches security-reviewed code, so it was left alone).
   - Deliberately NOT done: hoisting the workspace read to the `/projects/:id` layout so sibling tab clicks skip
     the fetch entirely. RR would not revalidate the layout loader on a sibling nav (`defaultShouldRevalidate`
     false: same pathname, same params) — which is exactly the problem: `skipRevalidationOnSelfSave` also keeps it
