@@ -55,7 +55,7 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   is exposed at all. For authenticated screens, **never add a test-only login bypass to product code**;
   have the test mint a properly signed session cookie with the local `SESSION_SECRET` instead.
 
-## Active work — next three, in this order
+## Active work — in this order
 
 1. **Round-trip reduction 3 → 2** (user-requested, agreed). Fold the access gate's project-row read into the
    workspace batch: the workspace header already carries the project row, so the gate's separate read is
@@ -67,7 +67,23 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
    Q&A over the WBS? propose edits? apply them?), who approves a proposed change, and whether it runs in the
    browser or through `/mcp` (which already exposes list/get/apply as an agent surface). Write the spec to
    `docs/design/` and the decision to `docs/adr/` — not into this file.
-3. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
+3. **Client/server boundary — enforce it structurally** (user: "絶対に防ぎたい"). Measured 2026-07-26: the
+   client bundle leaks **nothing** (14 patterns — secret names, `drizzle`/`neondatabase`/`pg`/`jose`, server
+   identifiers — all zero). But nothing *enforces* that; only the `.server.ts` suffix does any work.
+   **`app/server/` does not mean server-only** — `app/server/project/self-save-revalidation.ts` really is
+   shipped as `build/client/assets/self-save-revalidation-*.js`, and correctly so (`shouldRevalidate` runs in
+   the browser). The directory name is lying, which is exactly the shape of a future leak. Files under
+   `app/server/` with no `.server` suffix: `api/*`, `auth/{id-token,oidc-config,principal-directory,redirect,
+   require-principal,pkce}.ts`, `context.ts` — reachable only from `workers/app.ts` today, by convention not
+   enforcement. Build **both** gates: (a) an artifact scan of `build/client/**` against a denylist, wired into
+   `pnpm check` + CI — it inspects what users actually receive, so no source-level trick evades it; (b) an
+   ESLint import restriction so client-reachable modules may only `import type` from `~/server/**` — it fails
+   earlier and names the culprit. One without the other is insufficient. Also move genuinely isomorphic code
+   out of `app/server/`.
+4. **Periodic architecture review** (standing): check code style and directory layout against the
+   language/framework's current best practices *and* this project's own constraints (CLAUDE.md, ADRs). Needs
+   web research, so **not delegable to Codex** (no network in its sandbox). Output to `docs/research/`.
+5. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
    (third-party actions, `pull_request_target`, token scopes, artifact/secret exposure), and an OWASP-informed
    pass over the app. Survey output goes to `docs/research/`, findings to a doc — not here. Note the repo is
    **public**. The local `sec-scan` skill covers app vulns + pre-push leak audit; the CI/supply-chain half is
