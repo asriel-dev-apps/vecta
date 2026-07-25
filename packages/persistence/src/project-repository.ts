@@ -3,15 +3,26 @@ import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgre
 import type {
   MemberRecord,
   PersistedProjectRecord,
+  ProcessRecord,
+  ProductRecord,
+  SubtaskTemplateStepRecord,
   TaskDependencyRecord,
   TaskRecord,
+  TemplateRecord,
 } from "./project-record.js";
+import {
+  projectDetailQueries,
+  projectHeaderQuery,
+} from "./project-read-queries.js";
 import {
   auditEvents,
   members,
+  processes,
+  products,
   projectCalendars,
   projects,
   schema,
+  subtaskTemplates,
   taskDependencies,
   tasks,
   tenants,
@@ -52,6 +63,20 @@ export class ProjectRepository {
       if (record.members.length > 0) {
         await transaction.insert(members).values([...record.members]);
       }
+      if (record.processes.length > 0) {
+        await transaction.insert(processes).values([...record.processes]);
+      }
+      if (record.products.length > 0) {
+        await transaction.insert(products).values([...record.products]);
+      }
+      if (record.templates.length > 0) {
+        await transaction.insert(subtaskTemplates).values(
+          record.templates.map((template) => ({
+            ...template,
+            subtasks: template.subtasks,
+          })),
+        );
+      }
       if (record.tasks.length > 0) {
         // Self-referential parent FK is satisfied within a single batched
         // insert (immediate constraints are checked at statement end).
@@ -69,52 +94,23 @@ export class ProjectRepository {
   }
 
   async load(tenantId: string, projectId: string): Promise<PersistedProjectRecord | null> {
-    const [projectHeader] = await this.database
-      .select({
-        tenantId: tenants.id,
-        tenantName: tenants.name,
-        projectId: projects.id,
-        name: projects.name,
-        currency: projects.currency,
-        timezone: projects.timezone,
-        projectStart: projects.projectStart,
-        statusDate: projects.statusDate,
-        defaultCalendarId: projects.defaultCalendarId,
-        revision: projects.revision,
-      })
-      .from(projects)
-      .innerJoin(tenants, eq(tenants.id, projects.tenantId))
-      .where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId)))
-      .limit(1);
+    const [projectHeader] = await projectHeaderQuery(this.database, tenantId, projectId);
 
     if (projectHeader === undefined) {
       return null;
     }
 
-    const calendarRows = await this.database
-      .select()
-      .from(projectCalendars)
-      .where(and(eq(projectCalendars.tenantId, tenantId), eq(projectCalendars.projectId, projectId)))
-      .orderBy(asc(projectCalendars.id));
-    const memberRows = await this.database
-      .select()
-      .from(members)
-      .where(and(eq(members.tenantId, tenantId), eq(members.projectId, projectId)))
-      .orderBy(asc(members.id));
-    const taskRows = await this.database
-      .select()
-      .from(tasks)
-      .where(and(eq(tasks.tenantId, tenantId), eq(tasks.projectId, projectId)))
-      .orderBy(asc(tasks.sortOrder), asc(tasks.id));
-    const dependencyRows = await this.database
-      .select()
-      .from(taskDependencies)
-      .where(and(eq(taskDependencies.tenantId, tenantId), eq(taskDependencies.projectId, projectId)))
-      .orderBy(
-        asc(taskDependencies.successorTaskId),
-        asc(taskDependencies.predecessorTaskId),
-        asc(taskDependencies.type),
-      );
+    const details = projectDetailQueries(this.database, tenantId, projectId);
+    const calendarRows = await details.calendars;
+    const memberRows = await details.members;
+    const processRows = await details.processes;
+    const productRows = await details.products;
+    const templateRows = await details.templates;
+    const taskRows = await details.tasks;
+    const dependencyRows = await details.dependencies;
+    // The full record carries the audit trail (the save/round-trip contract);
+    // the workspace read model does not, so `projectDetailQueries` leaves it out
+    // and it is read here only (see `project-read-queries.ts`).
     const auditRows = await this.database
       .select()
       .from(auditEvents)
@@ -122,33 +118,15 @@ export class ProjectRepository {
       .orderBy(asc(auditEvents.sequence));
 
     return {
-      tenant: { id: projectHeader.tenantId, name: projectHeader.tenantName },
-      project: {
-        id: projectHeader.projectId,
-        tenantId: projectHeader.tenantId,
-        name: projectHeader.name,
-        currency: projectHeader.currency,
-        timezone: projectHeader.timezone,
-        projectStart: projectHeader.projectStart,
-        statusDate: projectHeader.statusDate,
-        defaultCalendarId: projectHeader.defaultCalendarId,
-        revision: projectHeader.revision,
-      },
-      calendars: calendarRows.map((row) =>
-        withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
-      ),
-      members: memberRows.map(
-        (row): MemberRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
-      ),
-      tasks: taskRows.map(
-        (row): TaskRecord => ({
-          ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
-          dailyPlan: row.dailyPlan as Record<string, number>,
-        }),
-      ),
-      dependencies: dependencyRows.map(
-        (row): TaskDependencyRecord => withoutGeneratedFields(row, ["createdAt"]),
-      ),
+      ...toProjectDetailRecord(projectHeader, {
+        calendars: calendarRows,
+        members: memberRows,
+        processes: processRows,
+        products: productRows,
+        templates: templateRows,
+        tasks: taskRows,
+        dependencies: dependencyRows,
+      }),
       auditEvents: auditRows.map((row) => ({
         ...withoutGeneratedFields(row, ["sequence"]),
         payload: row.payload as Readonly<Record<string, unknown>>,
@@ -156,4 +134,76 @@ export class ProjectRepository {
       })),
     };
   }
+}
+
+/** The header row shape both readers project the project/tenant identity from. */
+export type ProjectHeaderRow = Awaited<
+  ReturnType<typeof projectHeaderQuery>
+>[number];
+
+/** The seven child-table result sets, as returned by `projectDetailQueries`. */
+export interface ProjectDetailRows {
+  readonly calendars: Awaited<ReturnType<typeof projectDetailQueries>["calendars"]>;
+  readonly members: Awaited<ReturnType<typeof projectDetailQueries>["members"]>;
+  readonly processes: Awaited<ReturnType<typeof projectDetailQueries>["processes"]>;
+  readonly products: Awaited<ReturnType<typeof projectDetailQueries>["products"]>;
+  readonly templates: Awaited<ReturnType<typeof projectDetailQueries>["templates"]>;
+  readonly tasks: Awaited<ReturnType<typeof projectDetailQueries>["tasks"]>;
+  readonly dependencies: Awaited<
+    ReturnType<typeof projectDetailQueries>["dependencies"]
+  >;
+}
+
+/**
+ * Project the header + child rows into the persisted record, minus the audit
+ * trail. Shared by `ProjectRepository.load` (which appends `auditEvents`) and
+ * the batched HTTP workspace reader (which never reads them), so the row→record
+ * mapping — including which generated columns are stripped — exists once.
+ */
+export function toProjectDetailRecord(
+  projectHeader: ProjectHeaderRow,
+  rows: ProjectDetailRows,
+): Omit<PersistedProjectRecord, "auditEvents"> {
+  return {
+    tenant: { id: projectHeader.tenantId, name: projectHeader.tenantName },
+    project: {
+      id: projectHeader.projectId,
+      tenantId: projectHeader.tenantId,
+      name: projectHeader.name,
+      currency: projectHeader.currency,
+      timezone: projectHeader.timezone,
+      projectStart: projectHeader.projectStart,
+      statusDate: projectHeader.statusDate,
+      defaultCalendarId: projectHeader.defaultCalendarId,
+      revision: projectHeader.revision,
+      nextTaskSeq: projectHeader.nextTaskSeq,
+    },
+    calendars: rows.calendars.map((row) =>
+      withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+    ),
+    members: rows.members.map(
+      (row): MemberRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+    ),
+    processes: rows.processes.map(
+      (row): ProcessRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+    ),
+    products: rows.products.map(
+      (row): ProductRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+    ),
+    templates: rows.templates.map(
+      (row): TemplateRecord => ({
+        ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+        subtasks: row.subtasks as readonly SubtaskTemplateStepRecord[],
+      }),
+    ),
+    tasks: rows.tasks.map(
+      (row): TaskRecord => ({
+        ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+        dailyPlan: row.dailyPlan as Record<string, number>,
+      }),
+    ),
+    dependencies: rows.dependencies.map(
+      (row): TaskDependencyRecord => withoutGeneratedFields(row, ["createdAt"]),
+    ),
+  };
 }

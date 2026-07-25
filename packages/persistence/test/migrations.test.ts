@@ -40,8 +40,8 @@ describe("persistence migrations", () => {
       [memberId, tenantId, projectId],
     );
     await client.query(
-      `insert into tasks (id, tenant_id, project_id, name, planned_effort_minutes, progress_basis_points)
-       values ($1, $2, $3, 'Subtask', 480, 5000)`,
+      `insert into tasks (id, tenant_id, project_id, name, seq, planned_effort_minutes, progress_basis_points)
+       values ($1, $2, $3, 'Subtask', 1, 480, 5000)`,
       [taskId, tenantId, projectId],
     );
   }, 60_000);
@@ -60,9 +60,12 @@ describe("persistence migrations", () => {
       "command_receipts",
       "members",
       "principals",
+      "processes",
+      "products",
       "project_calendars",
       "project_memberships",
       "projects",
+      "subtask_templates",
       "task_dependencies",
       "tasks",
       "tenant_memberships",
@@ -103,39 +106,41 @@ describe("persistence migrations", () => {
   });
 
   it("enforces task effort, progress, parent, and date invariants", async () => {
+    // Each insert carries a distinct, non-colliding `seq` (NOT NULL after 0006)
+    // so it is rejected on the invariant under test, not the seq column itself.
     await expect(
       client.query(
-        "insert into tasks (tenant_id, project_id, name, planned_effort_minutes) values ($1, $2, 'Bad', -1)",
+        "insert into tasks (tenant_id, project_id, name, seq, planned_effort_minutes) values ($1, $2, 'Bad', 101, -1)",
         [tenantId, projectId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
       client.query(
-        "insert into tasks (tenant_id, project_id, name, progress_basis_points) values ($1, $2, 'Bad', 10001)",
+        "insert into tasks (tenant_id, project_id, name, seq, progress_basis_points) values ($1, $2, 'Bad', 102, 10001)",
         [tenantId, projectId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
       client.query(
-        "insert into tasks (id, tenant_id, project_id, name, parent_task_id) values ($3, $1, $2, 'Bad', $3)",
+        "insert into tasks (id, tenant_id, project_id, name, seq, parent_task_id) values ($3, $1, $2, 'Bad', 103, $3)",
         [tenantId, projectId, "d0000000-0000-4000-8000-000000000099"],
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
       client.query(
-        "insert into tasks (tenant_id, project_id, name, actual_start, actual_finish) values ($1, $2, 'Bad', '2026-02-01', '2026-01-01')",
+        "insert into tasks (tenant_id, project_id, name, seq, actual_start, actual_finish) values ($1, $2, 'Bad', 104, '2026-02-01', '2026-01-01')",
         [tenantId, projectId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
       client.query(
-        "insert into tasks (tenant_id, project_id, name, assignee_member_id) values ($1, $2, 'Bad', $3)",
+        "insert into tasks (tenant_id, project_id, name, seq, assignee_member_id) values ($1, $2, 'Bad', 105, $3)",
         [tenantId, projectId, "c0000000-0000-4000-8000-0000000000ff"],
       ),
     ).rejects.toMatchObject({ code: "23503" });
     await expect(
       client.query(
-        "insert into tasks (tenant_id, project_id, name, proration_weight_bp) values ($1, $2, 'Bad', 10001)",
+        "insert into tasks (tenant_id, project_id, name, seq, proration_weight_bp) values ($1, $2, 'Bad', 106, 10001)",
         [tenantId, projectId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
@@ -143,7 +148,7 @@ describe("persistence migrations", () => {
 
   it("accepts a null or in-range proration weight from the additive migration", async () => {
     await client.query(
-      "insert into tasks (tenant_id, project_id, name, proration_weight_bp) values ($1, $2, 'Weighted subtask', 2500)",
+      "insert into tasks (tenant_id, project_id, name, seq, proration_weight_bp) values ($1, $2, 'Weighted subtask', 2, 2500)",
       [tenantId, projectId],
     );
     const weighted = await client.query<{ proration_weight_bp: number | null }>(
@@ -155,6 +160,27 @@ describe("persistence migrations", () => {
       [taskId],
     );
     expect(seeded.rows[0]?.proration_weight_bp).toBeNull();
+  });
+
+  it("enforces the immutable display-No. column added by 0006 (§F-1)", async () => {
+    // seq is NOT NULL after the backfill sets it SET NOT NULL.
+    await expect(
+      client.query("insert into tasks (tenant_id, project_id, name) values ($1, $2, 'No seq')", [
+        tenantId,
+        projectId,
+      ]),
+    ).rejects.toMatchObject({ code: "23502" });
+    // seq is unique within (tenant, project): the seed task already holds seq 1.
+    await expect(
+      client.query(
+        "insert into tasks (tenant_id, project_id, name, seq) values ($1, $2, 'Dup seq', 1)",
+        [tenantId, projectId],
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+    // The per-project counter must stay >= 1.
+    await expect(
+      client.query("update projects set next_task_seq = 0 where id = $1", [projectId]),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("enforces member capacity and task-dependency invariants", async () => {
@@ -171,6 +197,33 @@ describe("persistence migrations", () => {
         [tenantId, projectId, taskId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("enforces process/product master invariants and the task master FKs", async () => {
+    const processId = "70000000-0000-4000-8000-000000000001";
+    await client.query(
+      "insert into processes (id, tenant_id, project_id, name, sort_order) values ($1, $2, $3, 'Phase A', 0)",
+      [processId, tenantId, projectId],
+    );
+    // A task may reference a master row in the same project.
+    await client.query(
+      "insert into tasks (tenant_id, project_id, name, seq, process_id) values ($1, $2, 'Bound', 3, $3)",
+      [tenantId, projectId, processId],
+    );
+    // A blank master name is rejected.
+    await expect(
+      client.query(
+        "insert into products (tenant_id, project_id, name) values ($1, $2, '  ')",
+        [tenantId, projectId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+    // A task referencing an unknown process is rejected by the restrict FK.
+    await expect(
+      client.query(
+        "insert into tasks (tenant_id, project_id, name, seq, process_id) values ($1, $2, 'Bad', 107, $3)",
+        [tenantId, projectId, "70000000-0000-4000-8000-0000000000ff"],
+      ),
+    ).rejects.toMatchObject({ code: "23503" });
   });
 
   it("keeps audit events append-only and timezone-normalized", async () => {

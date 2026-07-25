@@ -2,9 +2,13 @@ import type {
   AuditEventRecord,
   MemberRecord,
   PersistedProjectRecord,
+  ProcessRecord,
+  ProductRecord,
   ProjectCalendarRecord,
+  SubtaskTemplateStepRecord,
   TaskDependencyRecord,
   TaskRecord,
+  TemplateRecord,
 } from "./project-record.js";
 
 // Deterministic synthetic fixtures. All labels are generic and anonymized
@@ -43,6 +47,32 @@ function pick<T>(values: readonly T[], random: () => number): T {
 
 const PHASE_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const PER_DAY_MINUTES = [60, 120, 180, 240, 300, 360, 420, 480] as const;
+
+// The two default subtask templates every project starts with (Design 0003 §E-1;
+// the former builtin catalog). Generic PM steps; weights are basis points summing
+// to 10000 so a freshly generated parent's children reproduce its planned effort.
+const DEFAULT_SUBTASK_TEMPLATES: readonly {
+  readonly name: string;
+  readonly subtasks: readonly SubtaskTemplateStepRecord[];
+}[] = [
+  {
+    name: "Standard build",
+    subtasks: [
+      { name: "Design", weightBp: 2_000 },
+      { name: "Review", weightBp: 1_000, dependsOnPrev: { type: "FS", lagWorkingDays: 1 } },
+      { name: "Rework", weightBp: 1_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
+      { name: "Build", weightBp: 4_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
+      { name: "Test", weightBp: 2_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
+    ],
+  },
+  {
+    name: "Design and review",
+    subtasks: [
+      { name: "Design", weightBp: 7_000 },
+      { name: "Review", weightBp: 3_000, dependsOnPrev: { type: "FS", lagWorkingDays: 1 } },
+    ],
+  },
+];
 
 function buildWorkingDays(start: string, count: number): string[] {
   const days: string[] = [];
@@ -92,9 +122,43 @@ export function createSeedProjectRecord(
     dailyCapacityMinutes: 480,
   }));
 
+  // 工程 / プロダクト masters: one row per distinct synthetic phase/product used
+  // by the tasks below. Tasks reference these by id (Design 0003 §E-2 / §C-6).
+  const processes: ProcessRecord[] = [];
+  const processIdByName = new Map<string, string>();
+  const products: ProductRecord[] = [];
+  const productIdByName = new Map<string, string>();
+  for (let parentIndex = 0; parentIndex < parentCount; parentIndex += 1) {
+    const processName = `Phase ${PHASE_LETTERS[parentIndex % PHASE_LETTERS.length]}`;
+    if (!processIdByName.has(processName)) {
+      const id = makeUuid("7", processes.length + 1);
+      processIdByName.set(processName, id);
+      processes.push({ id, tenantId, projectId, name: processName, sortOrder: processes.length });
+    }
+    const productName = `Product ${(parentIndex % 6) + 1}`;
+    if (!productIdByName.has(productName)) {
+      const id = makeUuid("8", products.length + 1);
+      productIdByName.set(productName, id);
+      products.push({ id, tenantId, projectId, name: productName, sortOrder: products.length });
+    }
+  }
+
+  // Subtask-template master seeded with the two project defaults (§E-1).
+  const templates: TemplateRecord[] = DEFAULT_SUBTASK_TEMPLATES.map((template, index) => ({
+    id: makeUuid("6", index + 1),
+    tenantId,
+    projectId,
+    name: template.name,
+    sortOrder: index,
+    subtasks: template.subtasks,
+  }));
+
   const tasks: TaskRecord[] = [];
   const dependencies: TaskDependencyRecord[] = [];
   let sortOrder = 0;
+  // Shared per-project display-No. counter (§F-1): every task and subtask, in
+  // creation order, takes the next value; `nextTaskSeq` below is max + 1.
+  let nextSeq = 1;
   let leafCounter = 0;
   let dependencyCounter = 0;
 
@@ -108,9 +172,10 @@ export function createSeedProjectRecord(
       projectId,
       parentTaskId: null,
       sortOrder: sortOrder++,
+      seq: nextSeq++,
       name: `Phase ${phase} deliverable ${parentIndex + 1}`,
-      process: `Phase ${phase}`,
-      product,
+      processId: processIdByName.get(`Phase ${phase}`)!,
+      productId: productIdByName.get(product)!,
       note: "",
       contract: `Contract ${(parentIndex % 4) + 1}`,
       assigneeMemberId: null,
@@ -149,9 +214,10 @@ export function createSeedProjectRecord(
         projectId,
         parentTaskId: parentId,
         sortOrder: sortOrder++,
+        seq: nextSeq++,
         name: `Subtask ${parentIndex + 1}.${subtaskIndex + 1}`,
-        process: `Phase ${phase}`,
-        product,
+        processId: processIdByName.get(`Phase ${phase}`)!,
+        productId: productIdByName.get(product)!,
         note: subtaskIndex % 3 === 0 ? `Note ${leafCounter}` : "",
         contract: `Contract ${(parentIndex % 4) + 1}`,
         assigneeMemberId: members[leafCounter % memberCount]!.id,
@@ -206,9 +272,13 @@ export function createSeedProjectRecord(
       statusDate,
       defaultCalendarId: "standard",
       revision: 1n,
+      nextTaskSeq: nextSeq,
     },
     calendars,
     members,
+    processes,
+    products,
+    templates,
     tasks,
     dependencies,
     auditEvents,

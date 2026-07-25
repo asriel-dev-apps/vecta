@@ -29,6 +29,27 @@
       "when": 1784591731118,
       "tag": "0003_drop_review_change_ref",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784600000000,
+      "tag": "0004_process_product_masters",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784700000000,
+      "tag": "0005_subtask_template_masters",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784800000000,
+      "tag": "0006_task_display_seq",
+      "breakpoints": true
     }
   ]
 }

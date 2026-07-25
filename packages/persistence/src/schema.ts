@@ -95,6 +95,12 @@ export const projects = pgTable(
     statusDate: date("status_date", { mode: "string" }).notNull(),
     defaultCalendarId: text("default_calendar_id").notNull().default("standard"),
     revision: bigint({ mode: "bigint" }).notNull().default(sql`0`),
+    // Per-project counter for the immutable display No. (Design 0003 §F-1). A new
+    // task takes the current value as its `seq`; the counter then advances, so
+    // numbers are never reused even after a delete (gaps are expected). A
+    // transactional column counter — advanced under the project row lock the
+    // command UoW already holds — is simpler and safer here than a PG sequence.
+    nextTaskSeq: integer("next_task_seq").notNull().default(1),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
     updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
   },
@@ -104,6 +110,7 @@ export const projects = pgTable(
     check("projects_name_not_blank", sql`length(trim(${table.name})) > 0`),
     check("projects_currency_uppercase", sql`${table.currency} ~ '^[A-Z]{3}$'`),
     check("projects_revision_non_negative", sql`${table.revision} >= 0`),
+    check("projects_next_task_seq_positive", sql`${table.nextTaskSeq} >= 1`),
     check("projects_status_after_start", sql`${table.statusDate} >= ${table.projectStart}`),
   ],
 );
@@ -165,6 +172,76 @@ export const members = pgTable(
   ],
 );
 
+export const processes = pgTable(
+  "processes",
+  {
+    id: uuid().defaultRandom().notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    name: text().notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+    updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.id] }),
+    foreignKey({
+      name: "processes_project_fk",
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete("cascade"),
+    check("processes_name_not_blank", sql`length(trim(${table.name})) > 0`),
+    check("processes_sort_order_non_negative", sql`${table.sortOrder} >= 0`),
+  ],
+);
+
+export const products = pgTable(
+  "products",
+  {
+    id: uuid().defaultRandom().notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    name: text().notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+    updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.id] }),
+    foreignKey({
+      name: "products_project_fk",
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete("cascade"),
+    check("products_name_not_blank", sql`length(trim(${table.name})) > 0`),
+    check("products_sort_order_non_negative", sql`${table.sortOrder} >= 0`),
+  ],
+);
+
+export const subtaskTemplates = pgTable(
+  "subtask_templates",
+  {
+    id: uuid().defaultRandom().notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    name: text().notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    subtasks: jsonb().notNull(),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+    updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.id] }),
+    foreignKey({
+      name: "subtask_templates_project_fk",
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete("cascade"),
+    check("subtask_templates_name_not_blank", sql`length(trim(${table.name})) > 0`),
+    check("subtask_templates_sort_order_non_negative", sql`${table.sortOrder} >= 0`),
+  ],
+);
+
 export const projectMemberships = pgTable(
   "project_memberships",
   {
@@ -198,9 +275,14 @@ export const tasks = pgTable(
     projectId: uuid("project_id").notNull(),
     parentTaskId: uuid("parent_task_id"),
     sortOrder: integer("sort_order").notNull().default(0),
+    // Immutable per-project display No. (Design 0003 §F-1), assigned from the
+    // project's `nextTaskSeq` at creation and never renumbered on reorder/delete
+    // (gaps allowed). Tasks and subtasks share this one per-project sequence. The
+    // internal key stays the task UUID; `seq` is a display number only.
+    seq: integer().notNull(),
     name: text().notNull(),
-    process: text().notNull().default(""),
-    product: text().notNull().default(""),
+    processId: uuid("process_id"),
+    productId: uuid("product_id"),
     note: text().notNull().default(""),
     contract: text().notNull().default(""),
     assigneeMemberId: uuid("assignee_member_id"),
@@ -216,6 +298,7 @@ export const tasks = pgTable(
   },
   (table) => [
     unique("tasks_tenant_project_id_unique").on(table.tenantId, table.projectId, table.id),
+    unique("tasks_tenant_project_seq_unique").on(table.tenantId, table.projectId, table.seq),
     index("tasks_parent_idx").on(table.tenantId, table.projectId, table.parentTaskId),
     index("tasks_sort_order_idx").on(table.tenantId, table.projectId, table.sortOrder),
     foreignKey({
@@ -233,8 +316,19 @@ export const tasks = pgTable(
       columns: [table.tenantId, table.projectId, table.assigneeMemberId],
       foreignColumns: [members.tenantId, members.projectId, members.id],
     }).onDelete("restrict"),
+    foreignKey({
+      name: "tasks_process_fk",
+      columns: [table.tenantId, table.projectId, table.processId],
+      foreignColumns: [processes.tenantId, processes.projectId, processes.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "tasks_product_fk",
+      columns: [table.tenantId, table.projectId, table.productId],
+      foreignColumns: [products.tenantId, products.projectId, products.id],
+    }).onDelete("restrict"),
     check("tasks_name_not_blank", sql`length(trim(${table.name})) > 0`),
     check("tasks_sort_order_non_negative", sql`${table.sortOrder} >= 0`),
+    check("tasks_seq_positive", sql`${table.seq} >= 1`),
     check("tasks_planned_effort_non_negative", sql`${table.plannedEffortMinutes} >= 0`),
     check("tasks_actual_effort_non_negative", sql`${table.actualEffortMinutes} >= 0`),
     check(
@@ -368,6 +462,9 @@ export const schema = {
   projects,
   projectCalendars,
   members,
+  processes,
+  products,
+  subtaskTemplates,
   projectMemberships,
   tasks,
   taskDependencies,

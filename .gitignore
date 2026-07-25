@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+build/
+.react-router/
 coverage/
 .wrangler/
 .dev.vars
@@ -12,3 +14,7 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 artifacts/
+
+# apps/web is TypeScript-only (Vite/RR emits to build/); never track stray
+# tsc-transpiled .js next to sources.
+apps/web/**/*.js

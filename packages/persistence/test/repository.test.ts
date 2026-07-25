@@ -7,9 +7,37 @@ import {
   createSeedProjectRecord,
   demoProjectRecord,
   migratePersistenceDatabase,
+  NeonHttpProjectWorkspaceReader,
   ProjectRepository,
   ProjectWorkspaceRepository,
+  type NeonHttpReadDatabase,
+  type PersistenceDatabase,
 } from "../src/index.js";
+
+/** How many queries each `batch(...)` call carried, in call order. */
+const batchedQueryCounts: number[] = [];
+
+/**
+ * A Postgres handle that answers `batch(...)` by running the queries it is
+ * given. Everything else — the query builders the reader constructs, the row
+ * decoding — is the real Drizzle database, so this substitutes the ONE thing a
+ * local Postgres cannot provide (Neon's SQL-over-HTTP batch endpoint) and
+ * nothing else.
+ */
+function batchingReadDatabase(database: PersistenceDatabase): NeonHttpReadDatabase {
+  return new Proxy(database, {
+    get(target, property, receiver) {
+      if (property === "batch") {
+        return (queries: readonly PromiseLike<unknown>[]) => {
+          batchedQueryCounts.push(queries.length);
+          return Promise.all(queries);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as NeonHttpReadDatabase;
+}
 
 describe("ProjectRepository", () => {
   const container = new PostgreSqlContainer("postgres:17.6-alpine");
@@ -35,6 +63,7 @@ describe("ProjectRepository", () => {
   });
 
   beforeEach(async () => {
+    batchedQueryCounts.length = 0;
     await client.query("truncate table tenants cascade");
     await repository.save(demoProjectRecord);
   });
@@ -45,6 +74,8 @@ describe("ProjectRepository", () => {
     expect(loaded?.project.revision).toBe(1n);
     expect(loaded?.tasks).toHaveLength(demoProjectRecord.tasks.length);
     expect(loaded?.members).toHaveLength(demoProjectRecord.members.length);
+    expect(loaded?.processes).toHaveLength(demoProjectRecord.processes.length);
+    expect(loaded?.products).toHaveLength(demoProjectRecord.products.length);
     expect(loaded?.dependencies).toHaveLength(demoProjectRecord.dependencies.length);
     expect(loaded?.auditEvents).toEqual(demoProjectRecord.auditEvents);
 
@@ -70,6 +101,34 @@ describe("ProjectRepository", () => {
     expect(workspace?.current.id).toBe(demoProjectRecord.project.id);
     expect(workspace?.current.tasks).toHaveLength(demoProjectRecord.tasks.length);
     expect(workspace?.current.members).toHaveLength(demoProjectRecord.members.length);
+  });
+
+  it("reads the same workspace through the batched (HTTP) reader", async () => {
+    // The batched reader is what production reads through: it sends the header +
+    // seven child queries as ONE `db.batch(...)` instead of ten sequential round
+    // trips. Only the execution strategy differs — the queries and the row→record
+    // mapping are shared code — so the two readers must agree exactly. Running it
+    // here against the real database exercises the batch WIRING (that all eight
+    // queries are issued, and that the results are threaded back in the right
+    // order) with no fake rows: only `batch` itself is substituted, since the
+    // Neon HTTP endpoint has no local equivalent.
+    const workspace = await new NeonHttpProjectWorkspaceReader(
+      batchingReadDatabase(createPersistenceDatabase(client)),
+    ).load(demoProjectRecord.project.tenantId, demoProjectRecord.project.id);
+
+    expect(workspace).toEqual(
+      await workspaceRepository.load(
+        demoProjectRecord.project.tenantId,
+        demoProjectRecord.project.id,
+      ),
+    );
+    expect(batchedQueryCounts).toEqual([8]);
+
+    await expect(
+      new NeonHttpProjectWorkspaceReader(
+        batchingReadDatabase(createPersistenceDatabase(client)),
+      ).load("00000000-0000-4000-8000-ffffffffffff", demoProjectRecord.project.id),
+    ).resolves.toBeNull();
   });
 
   it("projects a flat WBS grid with derived columns and a rollup", async () => {

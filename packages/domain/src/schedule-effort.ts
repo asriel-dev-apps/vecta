@@ -408,11 +408,11 @@ export function scheduleEffortDailyPlans(input: EffortScheduleInput): EffortSche
   const capacityForMember = (memberId: string | null): number =>
     memberId === null ? defaultDailyCapacity : membersById.get(memberId)!.dailyCapacityMinutes;
 
-  // member id   ISO-date → person-minutes already committed that day. Shared
+  // member id \u0000 ISO-date → person-minutes already committed that day. Shared
   // across tasks so an assignee's tasks (locked or placed) level against a
   // common daily budget. Unassigned tasks are not leveled (no shared resource).
   const ledger = new Map<string, number>();
-  const ledgerKey = (memberId: string, date: string): string => `${memberId} ${date}`;
+  const ledgerKey = (memberId: string, date: string): string => `${memberId}\u0000${date}`;
   const consume = (memberId: string, plan: Readonly<Record<string, number>>): void => {
     for (const [date, minutes] of Object.entries(plan)) {
       if (minutes <= 0) continue;

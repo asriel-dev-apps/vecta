@@ -1,10 +1,12 @@
 import type { DependencyType } from "@vecta/domain";
 
 /**
- * Subtask templates (ADR 0011 Decision 5). A template prorates the parent task's
- * planned effort (L) across named subtasks by basis-point weight, and chains
- * consecutive subtasks with a dependency/lag. All names are generic PM terms; no
- * client, vendor, product, or contract names appear here.
+ * Subtask templates (ADR 0011 Decision 5; Design 0003 §E-1). A template prorates
+ * the parent task's planned effort (L) across named subtasks by basis-point
+ * weight, and chains consecutive subtasks with a dependency/lag. Templates are a
+ * project-scoped master (see {@link ProjectState.templates}); generation resolves
+ * them from project state, not from a built-in catalog. All names are generic PM
+ * terms; no client, vendor, product, or contract names appear here.
  */
 export interface SubtaskTemplateStep {
   /** Generic subtask name (worksheet column F). */
@@ -22,47 +24,12 @@ export interface SubtaskTemplateStep {
   };
 }
 
+/** A project-scoped subtask template master (Design 0003 §E-1). */
 export interface SubtaskTemplate {
   readonly id: string;
   readonly name: string;
+  readonly sortOrder: number;
   readonly subtasks: readonly SubtaskTemplateStep[];
-}
-
-/**
- * Built-in template catalog (MVP). Each template's weights sum to 10000 basis
- * points so a freshly generated parent's children reproduce its planned effort
- * exactly.
- */
-export const SUBTASK_TEMPLATES: readonly SubtaskTemplate[] = [
-  {
-    id: "standard-build",
-    name: "Standard build",
-    subtasks: [
-      { name: "Design", weightBp: 2_000 },
-      { name: "Review", weightBp: 1_000, dependsOnPrev: { type: "FS", lagWorkingDays: 1 } },
-      { name: "Rework", weightBp: 1_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
-      { name: "Build", weightBp: 4_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
-      { name: "Test", weightBp: 2_000, dependsOnPrev: { type: "FS", lagWorkingDays: 0 } },
-    ],
-  },
-  {
-    id: "design-review",
-    name: "Design and review",
-    subtasks: [
-      { name: "Design", weightBp: 7_000 },
-      { name: "Review", weightBp: 3_000, dependsOnPrev: { type: "FS", lagWorkingDays: 1 } },
-    ],
-  },
-];
-
-const TEMPLATES_BY_ID = new Map(SUBTASK_TEMPLATES.map((template) => [template.id, template]));
-
-export function getSubtaskTemplate(id: string): SubtaskTemplate | undefined {
-  return TEMPLATES_BY_ID.get(id);
-}
-
-export function listSubtaskTemplates(): readonly SubtaskTemplate[] {
-  return SUBTASK_TEMPLATES;
 }
 
 /**

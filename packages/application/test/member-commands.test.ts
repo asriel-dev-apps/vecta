@@ -12,14 +12,18 @@ const project: ProjectState = {
     { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
   ],
   members: [],
+  processes: [],
+  products: [],
+  templates: [],
   tasks: [
     {
       id: "task-1",
       parentId: null,
       sortOrder: 0,
+      seq: 1,
       name: "Subtask 1.1",
-      process: "Phase A",
-      product: "Product 1",
+      processId: null,
+      productId: null,
       note: "",
       contract: "",
       assigneeMemberId: null,
@@ -33,6 +37,7 @@ const project: ProjectState = {
       dependencies: [],
     },
   ],
+  nextTaskSeq: 2,
 };
 
 describe("member commands", () => {

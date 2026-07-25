@@ -1,11 +1,11 @@
 import type { DependencyType } from "@vecta/domain";
 import {
   deriveSubtaskId,
-  getSubtaskTemplate,
   prorateLargestRemainder,
+  type SubtaskTemplate,
 } from "./subtask-templates.js";
 
-export type { DependencyType };
+export type { DependencyType, SubtaskTemplate };
 
 export interface ProjectCalendar {
   readonly id: string;
@@ -21,6 +21,20 @@ export interface ProjectMember {
   readonly dailyCapacityMinutes: number;
 }
 
+/** Project-scoped 工程 master (name-only). Supplies the grid's 工程 dropdown. */
+export interface ProjectProcess {
+  readonly id: string;
+  readonly name: string;
+  readonly sortOrder: number;
+}
+
+/** Project-scoped プロダクト master (name-only). Supplies the grid's プロダクト dropdown. */
+export interface ProjectProduct {
+  readonly id: string;
+  readonly name: string;
+  readonly sortOrder: number;
+}
+
 export interface ProjectDependency {
   readonly predecessorId: string;
   readonly type: DependencyType;
@@ -31,9 +45,17 @@ export interface ProjectTask {
   readonly id: string;
   readonly parentId: string | null;
   readonly sortOrder: number;
+  /**
+   * Immutable per-project display No. (Design 0003 §F-1). Assigned from the
+   * project's {@link ProjectState.nextTaskSeq} at creation and never renumbered
+   * on reorder or delete (gaps are allowed). Tasks and subtasks share the one
+   * per-project counter. The internal key stays {@link ProjectTask.id}; `seq` is
+   * a display number only.
+   */
+  readonly seq: number;
   readonly name: string;
-  readonly process: string;
-  readonly product: string;
+  readonly processId: string | null;
+  readonly productId: string | null;
   readonly note: string;
   readonly contract: string;
   readonly assigneeMemberId: string | null;
@@ -61,7 +83,17 @@ export interface ProjectState {
   readonly defaultCalendarId: string;
   readonly calendars: readonly ProjectCalendar[];
   readonly members: readonly ProjectMember[];
+  readonly processes: readonly ProjectProcess[];
+  readonly products: readonly ProjectProduct[];
+  readonly templates: readonly SubtaskTemplate[];
   readonly tasks: readonly ProjectTask[];
+  /**
+   * Next per-project display No. to hand out (Design 0003 §F-1). A task.add or
+   * each task.generateSubtasks child takes this value as its `seq`; the counter
+   * then advances by the number of tasks created, so a batch of N consumes N
+   * numbers and a delete never rewinds it (gaps persist).
+   */
+  readonly nextTaskSeq: number;
 }
 
 /**
@@ -80,13 +112,16 @@ export function leafTaskIds(tasks: readonly ProjectTask[]): ReadonlySet<string> 
 
 export interface AddTaskCommand {
   readonly type: "task.add";
-  readonly task: ProjectTask;
+  // The client never supplies `seq`: the display No. is assigned server-side from
+  // the project's counter (Design 0003 §F-1). `applyProjectCommand` fills it in.
+  readonly task: Omit<ProjectTask, "seq">;
 }
 
 export interface UpdateTaskCommand {
   readonly type: "task.update";
   readonly taskId: string;
-  readonly changes: Partial<Omit<ProjectTask, "id">>;
+  // `seq` is immutable (Design 0003 §F-1), so it can never be a change target.
+  readonly changes: Partial<Omit<ProjectTask, "id" | "seq">>;
 }
 
 export interface DeleteTaskCommand {
@@ -116,6 +151,54 @@ export interface DeleteMemberCommand {
   readonly memberId: string;
 }
 
+export interface AddProcessCommand {
+  readonly type: "process.add";
+  readonly process: ProjectProcess;
+}
+
+export interface UpdateProcessCommand {
+  readonly type: "process.update";
+  readonly processId: string;
+  readonly changes: Partial<Omit<ProjectProcess, "id">>;
+}
+
+export interface DeleteProcessCommand {
+  readonly type: "process.delete";
+  readonly processId: string;
+}
+
+export interface AddProductCommand {
+  readonly type: "product.add";
+  readonly product: ProjectProduct;
+}
+
+export interface UpdateProductCommand {
+  readonly type: "product.update";
+  readonly productId: string;
+  readonly changes: Partial<Omit<ProjectProduct, "id">>;
+}
+
+export interface DeleteProductCommand {
+  readonly type: "product.delete";
+  readonly productId: string;
+}
+
+export interface AddTemplateCommand {
+  readonly type: "template.add";
+  readonly template: SubtaskTemplate;
+}
+
+export interface UpdateTemplateCommand {
+  readonly type: "template.update";
+  readonly templateId: string;
+  readonly changes: Partial<Omit<SubtaskTemplate, "id">>;
+}
+
+export interface DeleteTemplateCommand {
+  readonly type: "template.delete";
+  readonly templateId: string;
+}
+
 export type ProjectCommand =
   | AddTaskCommand
   | UpdateTaskCommand
@@ -123,7 +206,16 @@ export type ProjectCommand =
   | GenerateSubtasksCommand
   | AddMemberCommand
   | UpdateMemberCommand
-  | DeleteMemberCommand;
+  | DeleteMemberCommand
+  | AddProcessCommand
+  | UpdateProcessCommand
+  | DeleteProcessCommand
+  | AddProductCommand
+  | UpdateProductCommand
+  | DeleteProductCommand
+  | AddTemplateCommand
+  | UpdateTemplateCommand
+  | DeleteTemplateCommand;
 
 const DEPENDENCY_TYPES: ReadonlySet<DependencyType> = new Set(["FS", "SS", "FF", "SF"]);
 
@@ -163,6 +255,78 @@ function validateMembers(project: ProjectState): void {
   }
 }
 
+function validateProcesses(project: ProjectState): void {
+  const processIds = new Set<string>();
+  for (const process of project.processes) {
+    if (process.id.trim().length === 0 || processIds.has(process.id)) {
+      throw new Error(`Process ID must be unique: ${process.id}`);
+    }
+    processIds.add(process.id);
+    if (process.name.trim().length === 0) {
+      throw new Error(`Process ${process.id} requires a name`);
+    }
+    validateWholeNonNegative(
+      process.sortOrder,
+      `Process ${process.id} sort order must be a whole number >= 0`,
+    );
+  }
+}
+
+function validateProducts(project: ProjectState): void {
+  const productIds = new Set<string>();
+  for (const product of project.products) {
+    if (product.id.trim().length === 0 || productIds.has(product.id)) {
+      throw new Error(`Product ID must be unique: ${product.id}`);
+    }
+    productIds.add(product.id);
+    if (product.name.trim().length === 0) {
+      throw new Error(`Product ${product.id} requires a name`);
+    }
+    validateWholeNonNegative(
+      product.sortOrder,
+      `Product ${product.id} sort order must be a whole number >= 0`,
+    );
+  }
+}
+
+function validateTemplates(project: ProjectState): void {
+  const templateIds = new Set<string>();
+  for (const template of project.templates) {
+    if (template.id.trim().length === 0 || templateIds.has(template.id)) {
+      throw new Error(`Template ID must be unique: ${template.id}`);
+    }
+    templateIds.add(template.id);
+    if (template.name.trim().length === 0) {
+      throw new Error(`Template ${template.id} requires a name`);
+    }
+    validateWholeNonNegative(
+      template.sortOrder,
+      `Template ${template.id} sort order must be a whole number >= 0`,
+    );
+    template.subtasks.forEach((step, index) => {
+      if (step.name.trim().length === 0) {
+        throw new Error(`Template ${template.id} step ${index} requires a name`);
+      }
+      if (!Number.isInteger(step.weightBp) || step.weightBp < 0 || step.weightBp > 10_000) {
+        throw new Error(
+          `Template ${template.id} step ${index} weight must be whole basis points from 0 to 10000`,
+        );
+      }
+      if (step.dependsOnPrev !== undefined) {
+        if (!DEPENDENCY_TYPES.has(step.dependsOnPrev.type)) {
+          throw new Error(
+            `Template ${template.id} step ${index} has an invalid dependency type: ${step.dependsOnPrev.type}`,
+          );
+        }
+        validateWholeNonNegative(
+          step.dependsOnPrev.lagWorkingDays,
+          `Template ${template.id} step ${index} dependency lag must be a whole number >= 0`,
+        );
+      }
+    });
+  }
+}
+
 function validateParentHierarchy(project: ProjectState, taskIds: ReadonlySet<string>): void {
   const parentById = new Map(project.tasks.map((task) => [task.id, task.parentId]));
   for (const task of project.tasks) {
@@ -186,8 +350,16 @@ function validateParentHierarchy(project: ProjectState, taskIds: ReadonlySet<str
 }
 
 function validateProject(project: ProjectState): void {
+  if (!Number.isInteger(project.nextTaskSeq) || project.nextTaskSeq < 1) {
+    throw new Error("Project next display number must be a whole number >= 1");
+  }
   validateMembers(project);
+  validateProcesses(project);
+  validateProducts(project);
+  validateTemplates(project);
   const memberIds = new Set(project.members.map((member) => member.id));
+  const processIds = new Set(project.processes.map((process) => process.id));
+  const productIds = new Set(project.products.map((product) => product.id));
 
   const taskIds = new Set<string>();
   for (const task of project.tasks) {
@@ -200,6 +372,9 @@ function validateProject(project: ProjectState): void {
   for (const task of project.tasks) {
     if (task.name.trim().length === 0) {
       throw new Error(`Task ${task.id} requires a name`);
+    }
+    if (!Number.isInteger(task.seq) || task.seq < 1) {
+      throw new Error(`Task ${task.id} display number must be a whole number >= 1`);
     }
     validateWholeNonNegative(task.sortOrder, `Task ${task.id} sort order must be a whole number >= 0`);
     validateWholeNonNegative(
@@ -227,6 +402,12 @@ function validateProject(project: ProjectState): void {
     }
     if (task.assigneeMemberId !== null && !memberIds.has(task.assigneeMemberId)) {
       throw new Error(`Task ${task.id} references an unknown member: ${task.assigneeMemberId}`);
+    }
+    if (task.processId !== null && !processIds.has(task.processId)) {
+      throw new Error(`Task ${task.id} references an unknown process: ${task.processId}`);
+    }
+    if (task.productId !== null && !productIds.has(task.productId)) {
+      throw new Error(`Task ${task.id} references an unknown product: ${task.productId}`);
     }
     for (const [date, value] of Object.entries(task.dailyPlan)) {
       if (!isIsoDate(date)) {
@@ -265,7 +446,7 @@ function validateProject(project: ProjectState): void {
         dependency.lagWorkingDays,
         `Task ${task.id} dependency lag must be a whole number >= 0`,
       );
-      const edge = `${dependency.predecessorId} ${dependency.type}`;
+      const edge = `${dependency.predecessorId}\u0000${dependency.type}`;
       if (seenEdges.has(edge)) {
         throw new Error(`Task ${task.id} has a duplicate dependency edge`);
       }
@@ -286,12 +467,14 @@ function validateProject(project: ProjectState): void {
 function generateSubtaskTasks(
   state: ProjectState,
   command: GenerateSubtasksCommand,
-): ProjectTask[] {
+): Omit<ProjectTask, "seq">[] {
   const parent = state.tasks.find((task) => task.id === command.parentTaskId);
   if (parent === undefined) {
     throw new Error(`Unknown parent task: ${command.parentTaskId}`);
   }
-  const template = getSubtaskTemplate(command.templateId);
+  // Resolve the template from the project-scoped master (Design 0003 §E-1); this
+  // is the generate-time validation now that templates are DB state, not builtin.
+  const template = state.templates.find((entry) => entry.id === command.templateId);
   if (template === undefined) {
     throw new Error(`Unknown subtask template: ${command.templateId}`);
   }
@@ -302,13 +485,13 @@ function generateSubtaskTasks(
     deriveSubtaskId(parent.id, index),
   );
 
-  return template.subtasks.map((step, index): ProjectTask => ({
+  return template.subtasks.map((step, index): Omit<ProjectTask, "seq"> => ({
     id: childIds[index]!,
     parentId: parent.id,
     sortOrder: baseSortOrder + index,
     name: step.name,
-    process: "",
-    product: "",
+    processId: null,
+    productId: null,
     note: "",
     contract: "",
     assigneeMemberId: parent.assigneeMemberId,
@@ -380,7 +563,15 @@ export function applyProjectCommand(
 ): ProjectState {
   let next: ProjectState;
   if (command.type === "task.add") {
-    next = { ...state, tasks: [...state.tasks, command.task] };
+    // Assign the immutable display No. from the project counter, then advance it
+    // (Design 0003 §F-1). Server-authoritative: any client-supplied value is
+    // impossible (AddTaskCommand.task omits `seq`), and the optimistic client
+    // runs this same path against its local counter for a provisional No.
+    next = {
+      ...state,
+      tasks: [...state.tasks, { ...command.task, seq: state.nextTaskSeq }],
+      nextTaskSeq: state.nextTaskSeq + 1,
+    };
   } else if (command.type === "task.delete") {
     if (!state.tasks.some((task) => task.id === command.taskId)) {
       throw new Error(`Unknown task: ${command.taskId}`);
@@ -407,7 +598,15 @@ export function applyProjectCommand(
       ),
     };
   } else if (command.type === "task.generateSubtasks") {
-    next = { ...state, tasks: [...state.tasks, ...generateSubtaskTasks(state, command)] };
+    // Each generated child draws the next display No. from the shared per-project
+    // counter (tasks and subtasks are one sequence); the counter advances by the
+    // number of children, so the batch consumes that many numbers (Design §F-1).
+    let seq = state.nextTaskSeq;
+    const children = generateSubtaskTasks(state, command).map((child): ProjectTask => ({
+      ...child,
+      seq: seq++,
+    }));
+    next = { ...state, tasks: [...state.tasks, ...children], nextTaskSeq: seq };
   } else if (command.type === "member.add") {
     next = { ...state, members: [...state.members, command.member] };
   } else if (command.type === "member.update") {
@@ -423,7 +622,7 @@ export function applyProjectCommand(
         member.id === command.memberId ? { ...member, ...command.changes } : member,
       ),
     };
-  } else {
+  } else if (command.type === "member.delete") {
     if (!state.members.some((member) => member.id === command.memberId)) {
       throw new Error(`Unknown member: ${command.memberId}`);
     }
@@ -433,6 +632,84 @@ export function applyProjectCommand(
     next = {
       ...state,
       members: state.members.filter((member) => member.id !== command.memberId),
+    };
+  } else if (command.type === "process.add") {
+    next = { ...state, processes: [...state.processes, command.process] };
+  } else if (command.type === "process.update") {
+    if (Object.keys(command.changes).length === 0) {
+      throw new Error("Process update requires at least one change");
+    }
+    if (!state.processes.some((process) => process.id === command.processId)) {
+      throw new Error(`Unknown process: ${command.processId}`);
+    }
+    next = {
+      ...state,
+      processes: state.processes.map((process) =>
+        process.id === command.processId ? { ...process, ...command.changes } : process,
+      ),
+    };
+  } else if (command.type === "process.delete") {
+    if (!state.processes.some((process) => process.id === command.processId)) {
+      throw new Error(`Unknown process: ${command.processId}`);
+    }
+    if (state.tasks.some((task) => task.processId === command.processId)) {
+      throw new Error(`Process ${command.processId} is used by a task`);
+    }
+    next = {
+      ...state,
+      processes: state.processes.filter((process) => process.id !== command.processId),
+    };
+  } else if (command.type === "product.add") {
+    next = { ...state, products: [...state.products, command.product] };
+  } else if (command.type === "product.update") {
+    if (Object.keys(command.changes).length === 0) {
+      throw new Error("Product update requires at least one change");
+    }
+    if (!state.products.some((product) => product.id === command.productId)) {
+      throw new Error(`Unknown product: ${command.productId}`);
+    }
+    next = {
+      ...state,
+      products: state.products.map((product) =>
+        product.id === command.productId ? { ...product, ...command.changes } : product,
+      ),
+    };
+  } else if (command.type === "product.delete") {
+    if (!state.products.some((product) => product.id === command.productId)) {
+      throw new Error(`Unknown product: ${command.productId}`);
+    }
+    if (state.tasks.some((task) => task.productId === command.productId)) {
+      throw new Error(`Product ${command.productId} is used by a task`);
+    }
+    next = {
+      ...state,
+      products: state.products.filter((product) => product.id !== command.productId),
+    };
+  } else if (command.type === "template.add") {
+    next = { ...state, templates: [...state.templates, command.template] };
+  } else if (command.type === "template.update") {
+    if (Object.keys(command.changes).length === 0) {
+      throw new Error("Template update requires at least one change");
+    }
+    if (!state.templates.some((template) => template.id === command.templateId)) {
+      throw new Error(`Unknown template: ${command.templateId}`);
+    }
+    next = {
+      ...state,
+      templates: state.templates.map((template) =>
+        template.id === command.templateId ? { ...template, ...command.changes } : template,
+      ),
+    };
+  } else {
+    // template.delete — a generated task copies its template's step data (no
+    // template FK is stored on a task), so a delete never orphans a task and
+    // needs no referential guard (Design 0003 §E-1 locked decision 4).
+    if (!state.templates.some((template) => template.id === command.templateId)) {
+      throw new Error(`Unknown template: ${command.templateId}`);
+    }
+    next = {
+      ...state,
+      templates: state.templates.filter((template) => template.id !== command.templateId),
     };
   }
   next = { ...next, tasks: reprorateSubtasks(next.tasks) };

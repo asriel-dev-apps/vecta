@@ -3,14 +3,17 @@ import {
   boundedRequest,
   enforceAuthenticatedLimits,
   enforcePreAuthenticationLimit,
-  errorName,
-  requestId,
+  rateLimitedResponse,
   RequestRateLimitedError,
   routeKey,
   secureResponse,
-  withRequestId,
-  writeHttpRequestLog,
-} from "../src/edge-security.js";
+} from "~/server/api/edge-security";
+
+/**
+ * The framework-free edge-security posture for the Hono `/api` branch (ADR 0012
+ * Step 5a): bounded-body, IP/principal rate limits, and the `secureResponse`
+ * header set. Ported from `apps/web/test/edge-security.test.ts`.
+ */
 
 function limiter(success = true) {
   return {
@@ -27,14 +30,24 @@ describe("edge request security", () => {
     const second = new Request("https://app.test/api/tenants/tenant-b/projects/project-b/commands", { method: "POST" });
     expect(routeKey(first)).toBe("POST:commands");
     expect(routeKey(second)).toBe(routeKey(first));
-    expect(routeKey(new Request("https://app.test/api/tenants/t/projects/p/wbs-grid"))).toBe("GET:wbs-grid");
     expect(routeKey(new Request("https://app.test/api/tenants/t/projects/p"))).toBe("GET:project");
+    expect(routeKey(new Request("https://app.test/api/projects"))).toBe("GET:projects");
     expect(routeKey(new Request("https://app.test/api/health"))).toBe("GET:api-health");
-    expect(routeKey(new Request("https://app.test/.well-known/oauth-protected-resource"))).toBe("GET:oauth-metadata");
+    expect(routeKey(new Request("https://app.test/api/openapi.json"))).toBe("GET:openapi");
     expect(routeKey(new Request("https://app.test/assets/index.js"))).toBe("GET:static-or-unknown");
   });
 
-  it("applies a pre-authentication IP and route limit without exposing the raw key", async () => {
+  it("buckets the /mcp surface (JSON-RPC + RFC 9728 metadata) under its own mcp label", () => {
+    expect(routeKey(new Request("https://app.test/mcp", { method: "POST" }))).toBe("POST:mcp");
+    expect(routeKey(new Request("https://app.test/mcp", { method: "GET" }))).toBe("GET:mcp");
+    expect(
+      routeKey(new Request("https://app.test/.well-known/oauth-protected-resource/mcp")),
+    ).toBe("GET:mcp");
+    // A near-miss path is NOT the MCP surface and stays static-or-unknown.
+    expect(routeKey(new Request("https://app.test/mcpfoo"))).toBe("GET:static-or-unknown");
+  });
+
+  it("applies a pre-authentication IP+route limit without exposing the raw key", async () => {
     const rateLimit = limiter();
     await enforcePreAuthenticationLimit(
       rateLimit,
@@ -61,14 +74,14 @@ describe("edge request security", () => {
     expect(key).not.toContain("principal@example.test");
   });
 
-  it("fails closed when a native rate limiter rejects the key", async () => {
-    await expect(enforcePreAuthenticationLimit(
-      limiter(false),
-      new Request("https://app.test/api/health"),
-    )).rejects.toBeInstanceOf(RequestRateLimitedError);
+  it("fails closed (throws) when a native rate limiter rejects the key", async () => {
+    await expect(
+      enforcePreAuthenticationLimit(limiter(false), new Request("https://app.test/api/health")),
+    ).rejects.toBeInstanceOf(RequestRateLimitedError);
+    expect(rateLimitedResponse().status).toBe(429);
   });
 
-  it("rejects declared and streamed bodies above the limit and preserves bounded bodies", async () => {
+  it("rejects declared and streamed bodies above the 64 KiB limit and preserves bounded bodies", async () => {
     const declared = new Request("https://app.test/api/test", {
       method: "POST",
       headers: { "content-length": "65537" },
@@ -82,71 +95,25 @@ describe("edge request security", () => {
     });
     expect(await boundedRequest(streamed)).toBeNull();
 
-    const bounded = await boundedRequest(new Request("https://app.test/api/test", {
-      method: "POST",
-      body: JSON.stringify({ ok: true }),
-    }));
+    const bounded = await boundedRequest(
+      new Request("https://app.test/api/test", { method: "POST", body: JSON.stringify({ ok: true }) }),
+    );
     expect(await bounded?.json()).toEqual({ ok: true });
   });
 
-  it("generates an internal correlation ID and applies API security headers", () => {
-    const id = requestId();
-    expect(id).toMatch(/^[0-9a-f-]{36}$/);
-    const request = new Request("https://app.test/api/health", {
-      headers: { "x-request-id": "attacker-controlled" },
-    });
-    expect(withRequestId(request, id).headers.get("x-request-id")).toBe(id);
-    const response = secureResponse(request, Response.json({ ok: true }), id);
-    expect(response.headers.get("x-request-id")).toBe(id);
-    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
-    expect(response.headers.get("strict-transport-security")).toBe("max-age=31536000");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("permissions-policy")).not.toBeNull();
-  });
-
-  it("uses a static-safe CSP outside API routes and never logs exception messages", () => {
-    const response = secureResponse(
-      new Request("https://app.test/assets/index.js"),
-      new Response("asset"),
-      "request-id",
-      "https://identity.test/tenant",
+  it("applies no-store and a deny-all CSP with the security header set", () => {
+    const secured = secureResponse(
+      new Request("https://app.test/api/health"),
+      new Response("ok", { status: 200 }),
+      "req-1",
+      "https://accounts.google.example.invalid",
     );
-    expect(response.headers.get("content-security-policy")).toContain("script-src 'self'");
-    expect(response.headers.get("content-security-policy")).toContain("connect-src 'self' https://identity.test");
-    expect(response.headers.get("content-security-policy")).toContain("upgrade-insecure-requests");
-    const local = secureResponse(
-      new Request("http://127.0.0.1:4173/"),
-      new Response("preview"),
-      "request-id",
-      "http://127.0.0.1:9000/",
-    );
-    expect(local.headers.get("content-security-policy")).not.toContain("upgrade-insecure-requests");
-    expect(errorName(new Error("authorization=Bearer secret-token"))).toBe("Error");
-  });
-
-  it("writes machine-readable request logs without URLs, principals, tokens, or error messages", () => {
-    const write = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    writeHttpRequestLog({
-      requestId: "request-1",
-      method: "POST",
-      route: "POST:commands",
-      status: 500,
-      durationMs: 12,
-      error: new Error("Bearer secret-token for principal@example.test at /private/path"),
-    });
-    expect(write).toHaveBeenCalledOnce();
-    const serialized = String(write.mock.calls[0]?.[0]);
-    expect(JSON.parse(serialized)).toEqual({
-      event: "http_request",
-      requestId: "request-1",
-      method: "POST",
-      route: "POST:commands",
-      status: 500,
-      durationMs: 12,
-      errorName: "Error",
-    });
-    expect(serialized).not.toMatch(/secret-token|principal@|private\/path/);
-    write.mockRestore();
+    expect(secured.headers.get("cache-control")).toBe("no-store");
+    expect(secured.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(secured.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(secured.headers.get("x-frame-options")).toBe("DENY");
+    expect(secured.headers.get("x-request-id")).toBe("req-1");
+    // No CORS on the non-browser surface.
+    expect(secured.headers.get("access-control-allow-origin")).toBeNull();
   });
 });

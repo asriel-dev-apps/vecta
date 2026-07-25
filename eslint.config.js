@@ -3,7 +3,13 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/.wrangler/**", "**/dist/**", "**/worker-configuration.d.ts"],
+    ignores: [
+      "**/.wrangler/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/.react-router/**",
+      "**/worker-configuration.d.ts",
+    ],
   },
   eslint.configs.recommended,
   tseslint.configs.recommended,

@@ -81,6 +81,47 @@ describe("PostgreSQL project access", () => {
     });
   });
 
+  it("resolves a principal keyed by verified email through the email fallback", async () => {
+    // A principal seeded before its provider subject is known (keyed `email:<addr>`).
+    // The token surface passes the verified email so the resolver's fallback grants
+    // access even though the provider subject matches nothing directly (ADR 0012 Step 5a).
+    await accessRepository.provision({
+      principal: {
+        id: "90000000-0000-4000-8000-0000000000ee",
+        issuer: "https://identity.example.test/",
+        subject: "email:seed@example.test",
+        type: "HUMAN",
+        displayName: "Seeded by email",
+        allowedScopes: [],
+      },
+      tenantId: demoProjectRecord.tenant.id,
+      tenantRole: "MEMBER",
+      projectId: demoProjectRecord.project.id,
+      projectRole: "EDITOR",
+    });
+
+    await expect(
+      authorizer.authorize({
+        identity: {
+          issuer: "https://identity.example.test/",
+          subject: "unknown-provider-subject",
+          email: "seed@example.test",
+          scopes: [],
+        },
+        tenantId: demoProjectRecord.tenant.id,
+        projectId: demoProjectRecord.project.id,
+        command: {
+          type: "task.update",
+          taskId: demoProjectRecord.tasks[0]!.id,
+          changes: { name: "New name" },
+        },
+      }),
+    ).resolves.toEqual({
+      type: "HUMAN",
+      id: "90000000-0000-4000-8000-0000000000ee",
+    });
+  });
+
   it("does not resolve a membership through a different tenant path", async () => {
     await accessRepository.provision({
       principal: {

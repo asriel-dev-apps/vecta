@@ -15,6 +15,8 @@ export interface ProjectRecord {
   readonly statusDate: string;
   readonly defaultCalendarId: string;
   readonly revision: bigint;
+  /** Next per-project display No. to hand out (Design 0003 §F-1). */
+  readonly nextTaskSeq: number;
 }
 
 export interface ProjectCalendarRecord {
@@ -35,15 +37,52 @@ export interface MemberRecord {
   readonly dailyCapacityMinutes: number;
 }
 
+export interface ProcessRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly sortOrder: number;
+}
+
+export interface ProductRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly sortOrder: number;
+}
+
+/** One ordered step of a subtask template (matches the jsonb column shape). */
+export interface SubtaskTemplateStepRecord {
+  readonly name: string;
+  readonly weightBp: number;
+  readonly dependsOnPrev?: {
+    readonly type: DependencyType;
+    readonly lagWorkingDays: number;
+  };
+}
+
+export interface TemplateRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly sortOrder: number;
+  readonly subtasks: readonly SubtaskTemplateStepRecord[];
+}
+
 export interface TaskRecord {
   readonly id: string;
   readonly tenantId: string;
   readonly projectId: string;
   readonly parentTaskId: string | null;
   readonly sortOrder: number;
+  /** Immutable per-project display No. (Design 0003 §F-1). */
+  readonly seq: number;
   readonly name: string;
-  readonly process: string;
-  readonly product: string;
+  readonly processId: string | null;
+  readonly productId: string | null;
   readonly note: string;
   readonly contract: string;
   readonly assigneeMemberId: string | null;
@@ -84,6 +123,9 @@ export interface PersistedProjectRecord {
   readonly project: ProjectRecord;
   readonly calendars: readonly ProjectCalendarRecord[];
   readonly members: readonly MemberRecord[];
+  readonly processes: readonly ProcessRecord[];
+  readonly products: readonly ProductRecord[];
+  readonly templates: readonly TemplateRecord[];
   readonly tasks: readonly TaskRecord[];
   readonly dependencies: readonly TaskDependencyRecord[];
   readonly auditEvents: readonly AuditEventRecord[];

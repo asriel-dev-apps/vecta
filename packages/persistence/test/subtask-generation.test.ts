@@ -13,6 +13,9 @@ import {
 } from "../src/index.js";
 
 const parentTask = demoProjectRecord.tasks.find((task) => task.parentTaskId === null)!;
+const standardBuildTemplateId = demoProjectRecord.templates.find(
+  (template) => template.name === "Standard build",
+)!.id;
 
 function subtasksOf(record: PersistedProjectRecord | null): TaskRecord[] {
   return (record?.tasks ?? [])
@@ -89,7 +92,11 @@ describe("subtask template generation (write path + scheduler)", () => {
       ...envelope,
       expectedRevision: revision,
       idempotencyKey: "generate-subtasks",
-      command: { type: "task.generateSubtasks", parentTaskId: parentTask.id, templateId: "standard-build" },
+      command: {
+        type: "task.generateSubtasks",
+        parentTaskId: parentTask.id,
+        templateId: standardBuildTemplateId,
+      },
     });
   }
 
