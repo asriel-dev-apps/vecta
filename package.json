@@ -9,7 +9,8 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle",
+    "verify:bundle": "node .github/scripts/verify-client-bundle.mjs",
     "lint": "eslint .",
     "test": "pnpm --recursive test",
     "test:operations": "node --test .github/scripts/*.test.mjs",
