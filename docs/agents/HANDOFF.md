@@ -35,11 +35,23 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   it during normal work**.
 - **Deploy is CI-only**: merge to `main` → `deploy.yml` → a human approves the `production` Environment.
   Process: `docs/operations/release-and-rollback.md`. Never deploy by hand.
-- **Shipping is IN SCOPE, up to the approval gate** (user, 2026-07-26): finish a change by opening the PR,
-  waiting for CI, merging to `main` with a **merge commit** (`gh pr merge --merge`; main's history uses them),
-  and leaving the branch alive. Do not stop at "pushed to the branch". The `production` Environment has a
-  `required_reviewers` rule, so the deploy then sits at `waiting` for the user's click — **that click is
-  theirs; do not approve it**. Report the run URL and carry on with the next item meanwhile.
+- **Shipping is IN SCOPE** (user, 2026-07-26): finish a change by pushing, opening the PR, merging to `main`
+  with a **merge commit** (`gh pr merge --merge`; main's history uses them), and leaving the branch alive.
+  Do not stop at "pushed to the branch".
+- **Do NOT sit and wait for CI** (user, 2026-07-26): push, then keep working. Blocking on a green check burns
+  the session on a progress bar, and a human is not standing by to approve anything the moment it goes
+  amber. Check back when there is a natural pause, or when the result actually gates the next step (a merge
+  does; more editing does not).
+- **Cancel a superseded CI run** rather than letting runs stack up. `ci.yml` already does this for you
+  (`concurrency: cancel-in-progress: true`, keyed on workflow + ref), so a rapid push sequence self-prunes;
+  cancel by hand only when the group key does not match (e.g. a `push` run and a `pull_request` run for the
+  same commits are DIFFERENT refs and therefore both survive). `deploy.yml` deliberately does NOT
+  cancel-in-progress — a half-finished deploy whose verification step never ran is worse than a queued one.
+  Leave that alone.
+- **The `production` Environment's `required_reviewers` rule was removed** (observed 2026-07-26, mid-session:
+  it was present at session start and gone by the second deploy, which started in 3 s instead of waiting
+  7 m 20 s). So **merging to `main` now ships to production with no human gate.** Treat a merge as the
+  irreversible step it now is.
 - DB schema at migration **0006** (7 applied). Prod project holds 48 synthetic tasks (generic
   "Phase A"/"Product 1"/"Member 01"), 8 processes / 6 products / 6 members / 2 templates / 32 deps.
 - Gate: domain 32, application 70, persistence 46, web 268, operations 23.
