@@ -3,15 +3,19 @@ import {
   type MiddlewareFunction,
   type RouterContextProvider,
 } from "react-router";
+import { NeonHttpProjectWorkspaceReader } from "@vecta/persistence";
 import { findProjectMembership } from "~/server/auth/principal-directory";
 import { requirePrincipal } from "~/server/auth/require-principal";
-import { dbSessionContext, projectAccessContext } from "~/server/context";
+import {
+  dbSessionContext,
+  projectMembershipContext,
+  projectWorkspaceContext,
+} from "~/server/context";
 import {
   isProjectId,
-  type ProjectReader,
-  type ResolvedProjectAccess,
+  type ProjectWorkspaceLoader,
+  type ProjectWorkspaceRecord,
 } from "~/server/project/project-access";
-import { createNeonProjectReader } from "~/server/project/project-reader.neon.server";
 
 /**
  * The `/projects/:id` access gate (ADR 0012 §Decision 2), enforced as MIDDLEWARE
@@ -22,8 +26,8 @@ import { createNeonProjectReader } from "~/server/project/project-reader.neon.se
  *   2. awaits the memoised principal (which carries its project memberships);
  *   3. finds the membership via the shared pure {@link findProjectMembership};
  *   4. throws an identical `404` for a non-member OR a nonexistent project — the
- *      two are indistinguishable by design — and only then, on success, installs
- *      a lazily-memoised project-row loader on the context.
+ *      two are indistinguishable by design — and only then, on success, publishes
+ *      the membership and a lazily-memoised workspace loader on the context.
  *
  * VIEWER passes the gate (read access); denial means *no membership*.
  * Write-authorization is the Step-4 command authorizer, not this gate. The
@@ -31,27 +35,35 @@ import { createNeonProjectReader } from "~/server/project/project-reader.neon.se
  * `PostgresProjectAccessGrantResolver` (the token-identity seam for Step 5's
  * Hono surface): it is exact-equivalent here and costs zero extra round trips.
  *
- * `readerFor` is injectable so tests can supply a fake project reader; production
- * defaults to the Neon-backed one built over the per-request session from
- * context. The reader is resolved lazily inside the memoised thunk, so a denied
- * request never touches the project database.
+ * The project row is NOT read separately. The workspace batch's header query IS
+ * the project row (same composite `(tenantId, id)` scope, same fail-closed 404
+ * when it is gone), so folding the two collapses a document request from three
+ * sequential Neon round trips to two: principal, then workspace. A route that
+ * needs only the membership (the command action) reads it straight off the
+ * context and issues none of its own.
+ *
+ * `workspaceLoaderFor` is injectable so tests can supply a fake; production
+ * defaults to the batched Neon HTTP reader built over the per-request session
+ * from context. The loader is resolved lazily inside the memoised thunk, so a
+ * denied request never touches the project database.
  */
 export interface ProjectAccessMiddlewareOptions {
-  readonly readerFor?: (
+  readonly workspaceLoaderFor?: (
     context: Readonly<RouterContextProvider>,
-  ) => ProjectReader;
+  ) => ProjectWorkspaceLoader;
 }
 
-function readerFromContext(
+function workspaceLoaderFromContext(
   context: Readonly<RouterContextProvider>,
-): ProjectReader {
-  return createNeonProjectReader(context.get(dbSessionContext));
+): ProjectWorkspaceLoader {
+  return new NeonHttpProjectWorkspaceReader(context.get(dbSessionContext).read());
 }
 
 export function createProjectAccessMiddleware(
   options: ProjectAccessMiddlewareOptions = {},
 ): MiddlewareFunction<Response> {
-  const readerFor = options.readerFor ?? readerFromContext;
+  const workspaceLoaderFor =
+    options.workspaceLoaderFor ?? workspaceLoaderFromContext;
   return async ({ context, params }) => {
     const projectId = params.id;
     if (!isProjectId(projectId)) {
@@ -65,31 +77,31 @@ export function createProjectAccessMiddleware(
     const tenantRole = principal.tenantMemberships.find(
       (tenant) => tenant.tenantId === membership.tenantId,
     )?.role;
-    // Access granted. Install the memoised project-row thunk; it issues no query
-    // (and does not even resolve the reader/open a connection) until a
-    // loader/component first calls `requireProjectAccess`, then caches it so
-    // parallel loaders share one round trip. The deny paths above never reach
-    // here, so a denied request touches no project database.
-    let cached: Promise<ResolvedProjectAccess> | undefined;
+    // Access granted. The membership needs no query — it came off the principal
+    // that was already loaded — so it is published as a plain value.
+    context.set(projectMembershipContext, {
+      tenantId: membership.tenantId,
+      projectId: membership.projectId,
+      projectRole: membership.role,
+      ...(tenantRole !== undefined ? { tenantRole } : {}),
+    });
+    // Install the memoised workspace thunk; it issues no query (and does not even
+    // resolve the loader) until a loader/component first asks, then caches it so
+    // the parallel layout + child loaders share one round trip. The deny paths
+    // above never reach here, so a denied request touches no project database.
+    let cached: Promise<ProjectWorkspaceRecord> | undefined;
     context.set(
-      projectAccessContext,
+      projectWorkspaceContext,
       () =>
-        (cached ??= readerFor(context)
-          .loadProject(membership.tenantId, projectId)
-          .then((project): ResolvedProjectAccess => {
-            if (project === null) {
-              // Membership exists but the project row is gone: fail closed.
+        (cached ??= workspaceLoaderFor(context)
+          .load(membership.tenantId, projectId)
+          .then((workspace): ProjectWorkspaceRecord => {
+            if (workspace === null) {
+              // Membership exists but the project row is gone: fail closed, with
+              // the gate's own opaque 404 rather than a 500.
               throw data(null, { status: 404 });
             }
-            return {
-              project,
-              membership: {
-                tenantId: membership.tenantId,
-                projectId: membership.projectId,
-                projectRole: membership.role,
-                ...(tenantRole !== undefined ? { tenantRole } : {}),
-              },
-            };
+            return workspace;
           })),
     );
   };

@@ -1,7 +1,6 @@
 import { Outlet, type LinksFunction } from "react-router";
 import type { Route } from "./+types/project";
 import { createProjectAccessMiddleware } from "~/middleware/project-access.server";
-import { requireProjectAccess } from "~/server/project/project-access";
 import { requirePrincipal } from "~/server/auth/require-principal";
 import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";
@@ -16,22 +15,26 @@ export const links: LinksFunction = () => [{ rel: "stylesheet", href: appStyles 
 
 // The `/projects/:id` access gate. Its middleware validates the id, checks the
 // principal's membership, and throws 404 BEFORE any child loader runs on a
-// denial (ADR 0012 §Decision 2). The loader below both surfaces the resolved
-// access to child routes via `useRouteLoaderData("routes/project")` and forces
-// the gate to run on document requests.
+// denial (ADR 0012 §Decision 2). The loader below forces the gate to run on
+// document requests, and gives the app bar the signed-in identity.
 export const middleware: Route.MiddlewareFunction[] = [
   createProjectAccessMiddleware(),
 ];
 
+// The layout reads NOTHING about the project itself. It used to return the
+// resolved `{ project, membership }` "for child routes", but no child ever read
+// it, and now that the project row comes out of the workspace batch, asking for
+// it here would drag that whole batch onto routes that do not want it — worst of
+// all onto the bare `/projects/:id`, which is what the project list links to and
+// which only redirects to `/wbs`. So the layout stays identity-only: the app bar
+// shows the signed-in principal's displayName (ADR 0012 Step 4c-2 — a faithful
+// adaptation of the SPA's JWT email, which the cookie-session redesign removed),
+// and the principal is already memoised by the auth middleware, so this loader
+// costs no round trip at all. Screens that need the project name read it from
+// their own view payload.
 export async function loader({ context }: Route.LoaderArgs) {
-  const { project, membership } = await requireProjectAccess(context);
-  // The tier-1 app bar shows the signed-in identity. The cookie-session
-  // principal is already loaded by the access middleware (memoised on context),
-  // so this adds no DB round trip; it carries no email, so the bar shows the
-  // principal's displayName (ADR 0012 Step 4c-2 — faithful adaptation of the
-  // SPA's JWT email, which no longer exists under the cookie-session redesign).
   const { principal } = await requirePrincipal(context);
-  return { project, membership, displayName: principal.displayName };
+  return { displayName: principal.displayName };
 }
 
 // ADR 0012 Step 4b — a successful WBS self-save must not force this layout to

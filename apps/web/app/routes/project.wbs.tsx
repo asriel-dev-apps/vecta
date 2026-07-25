@@ -45,7 +45,7 @@ export async function action(args: Route.ActionArgs) {
 }
 
 // A successful per-cell save must NOT re-settle: keep the optimistic client state
-// and skip the workspace + project-row re-read (ADR 0012 §4). A conflict falls
+// and skip the workspace re-read (ADR 0012 §4). A conflict falls
 // through to the default so the loader revalidates and the client adopts the
 // fresh state. Exported on the ancestors too so one save doesn't fan out.
 export const shouldRevalidate = skipRevalidationOnSelfSave;

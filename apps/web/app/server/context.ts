@@ -1,7 +1,10 @@
 import { createContext } from "react-router";
 import type { AuthenticatedPrincipal } from "./auth/principal-directory";
 import type { DbSession } from "./db-session.server";
-import type { ResolvedProjectAccess } from "./project/project-access";
+import type {
+  ProjectMembershipView,
+  ProjectWorkspaceRecord,
+} from "./project/project-access";
 
 /**
  * Router context handles shared between the Worker entry (`workers/app.ts`,
@@ -36,13 +39,22 @@ export const principalContext =
   createContext<() => Promise<AuthenticatedPrincipal | null>>();
 
 /**
- * A memoised, per-request loader for the current project's access grant (the
- * resolved project row + the principal's membership). The `/projects/:id`
- * layout's access middleware installs it *after* the fail-closed membership
- * check, so a denied request never sets it and never touches the database. The
- * thunk itself defers the single project-row fetch until a loader/component
- * first calls `requireProjectAccess`, and memoises it so parallel loaders share
- * one round trip. Present only under `/projects/:id`.
+ * The principal's membership in the current project. The `/projects/:id` layout's
+ * access middleware installs it *after* the fail-closed membership check, so a
+ * denied request never sets it. It is a plain value, not a thunk: the membership
+ * comes from the already-memoised principal, so reading it costs no database
+ * round trip. Present only under `/projects/:id`.
  */
-export const projectAccessContext =
-  createContext<() => Promise<ResolvedProjectAccess>>();
+export const projectMembershipContext = createContext<ProjectMembershipView>();
+
+/**
+ * A memoised, per-request loader for the current project's workspace — the ONE
+ * batched read that serves both the project row (the header it already fetches)
+ * and the route's state view. Installed by the same access middleware, after the
+ * same check, so a denied request never sets it and never touches the project
+ * database. The thunk defers the read until a loader/component first asks, and
+ * memoises it so the layout loader and its child share one round trip. Present
+ * only under `/projects/:id`.
+ */
+export const projectWorkspaceContext =
+  createContext<() => Promise<ProjectWorkspaceRecord>>();

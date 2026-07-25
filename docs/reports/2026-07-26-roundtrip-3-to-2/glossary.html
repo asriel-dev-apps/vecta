@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VECTA ラウンドトリップ削減 — 進捗レポート</title>
+<link rel="stylesheet" href="explainer.css" />
+</head>
+<body>
+<div class="wrap">
+<h1 class="brand"><span class="b">VECTA</span> — 進捗レポート 2026-07-26</h1>
+
+<nav class="nav">
+  <a href="index.html">概要</a>
+  <a href="mechanism.html">仕組み</a>
+  <a href="verification.html">検証</a>
+  <a href="risks.html">リスクと残タスク</a>
+  <a href="glossary.html" class="active">用語集</a>
+</nav>
+
+<div class="topic">用語集</div>
+
+<section>
+  <h2>Abstract</h2>
+  <div class="triple">
+    <div><span class="k what">What</span><span>このレポートに出てきた用語だけを、出てきた意味で説明する。</span></div>
+    <div><span class="k why">Why</span><span>用語を薄めて言い換えると正確さが落ちる。用語は残して、意味を足す。</span></div>
+    <div><span class="k how">How</span><span>「それが何か」と「なぜ必要か」を対にして書く。汎用の辞書は作らない。</span></div>
+  </div>
+
+  <svg class="fig" viewBox="0 0 600 200" role="img" aria-label="1リクエストが通る層">
+    <defs><marker id="gl" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6Z" fill="#8a90a2"/></marker></defs>
+    <g font-size="11.5" text-anchor="middle">
+      <rect x="20" y="18" width="560" height="30" rx="7" fill="#eef0ff" stroke="#5865f2"/>
+      <text x="300" y="38" fill="#3b41a8">ブラウザ — 画面を要求する</text>
+      <rect x="20" y="56" width="560" height="30" rx="7" fill="#f4f6ff" stroke="#c9cee0"/>
+      <text x="300" y="76" fill="#444b5e">ミドルウェア — セッション検証 → アクセスゲート（ここで拒否なら以降は動かない）</text>
+      <rect x="20" y="94" width="560" height="30" rx="7" fill="#f4f6ff" stroke="#c9cee0"/>
+      <text x="300" y="114" fill="#444b5e">ローダー — 画面ごとに必要なデータを読む（親子が並列に走る）</text>
+      <rect x="20" y="132" width="560" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/>
+      <text x="300" y="152" fill="#1f7a45">Neon（シンガポール）— SQL over HTTP。db.batch で複数クエリを1リクエストに</text>
+      <text x="300" y="184" font-size="11" fill="#9aa0ad">context は、この縦の流れの中でデータを受け渡す入れ物</text>
+    </g>
+  </svg>
+  <p class="cap">1リクエストが通る層。用語はどれもこの図のどこかに対応する。</p>
+</section>
+
+<section>
+  <h2>Detail</h2>
+
+  <h3>1. リクエストの流れに関する用語</h3>
+  <table>
+    <tr><th>用語</th><th>それが何か / なぜ必要か</th></tr>
+    <tr>
+      <td><b>ラウンドトリップ</b><br />(round trip)</td>
+      <td>プログラムがデータベースに問い合わせて答えが返るまでの、ネットワーク上の1往復。<b>なぜ重要か</b>: 東京とシンガポールの間は光の速さでも往復に時間がかかり、クエリがどれだけ軽くても約70ms は消えない。だから「軽くする」より「回数を減らす」ほうが効く。</td>
+    </tr>
+    <tr>
+      <td><b>逐次 / 並列</b></td>
+      <td>前の答えを待ってから次を出すのが逐次、同時に出すのが並列。<b>なぜ重要か</b>: 3回の問い合わせが並列なら待ち時間は1回ぶんだが、逐次だと3回ぶん積み上がる。今回の3本は完全に逐次だったので、1本消すと1本ぶんまるごと消える。</td>
+    </tr>
+    <tr>
+      <td><b>ミドルウェア</b><br />(middleware)</td>
+      <td>ローダーより<b>前に</b>走る処理。<b>なぜ必要か</b>: 「見てはいけない人のリクエストでは、子のローダーを1つも動かさない」を保証できるのはここだけ。親ローダーでは、子ローダーが並列で走ってしまうため間に合わない。</td>
+    </tr>
+    <tr>
+      <td><b>ローダー</b><br />(loader)</td>
+      <td>画面を描く前にサーバー側で必要なデータを読む関数。<b>特徴</b>: 親レイアウトと子画面のローダーは<b>並列に</b>走る。今回、レイアウト側のローダーを軽くしたのはこの性質が理由。</td>
+    </tr>
+    <tr>
+      <td><b>context</b></td>
+      <td>1リクエストの間だけ生きる受け渡し用の入れ物。<b>なぜ必要か</b>: ミドルウェアが確定した情報（誰か、どのプロジェクトのメンバーか）を、複数のローダーが取り出せるようにするため。リクエストごとに新品なので、他のリクエストに漏れない。</td>
+    </tr>
+  </table>
+
+  <h3>2. データベースに関する用語</h3>
+  <table>
+    <tr><th>用語</th><th>それが何か / なぜ必要か</th></tr>
+    <tr>
+      <td><b>SQL over HTTP</b></td>
+      <td>データベースへの問い合わせを、専用の接続ではなく通常の HTTP リクエストで送る方式。<b>なぜ必要か</b>: Cloudflare Worker は1リクエストごとに起動と終了を繰り返すため、接続を確立するコスト（ハンドシェイク）を回収できない。HTTP なら確立するものが無い。</td>
+    </tr>
+    <tr>
+      <td><b>db.batch</b></td>
+      <td>複数のクエリを<b>1つの HTTP リクエスト</b>にまとめて送る仕組み。サーバー側で1つのトランザクションとして実行される。<b>なぜ重要か</b>: ワークスペース読み取りの8クエリが、ラウンドトリップ1回で済んでいるのはこれのおかげ。「クエリ数」と「往復回数」は別物である、という今回の話の前提。</td>
+    </tr>
+    <tr>
+      <td><b>複合キー</b><br />(composite key)</td>
+      <td>1つの列ではなく複数の列の組み合わせで行を特定すること。ここでは <code>(tenantId, projectId)</code>。<b>なぜ必要か</b>: プロジェクト ID だけで行を引けてしまうと、他社のプロジェクト ID を推測されたときに読めてしまう。テナントとの組で引くことで、構造的にそれを防ぐ。</td>
+    </tr>
+    <tr>
+      <td><b>ON DELETE CASCADE</b></td>
+      <td>親の行が消えたら、それに紐づく子の行も自動で消える設定。<b>ここでの意味</b>: プロジェクトを消すとメンバーシップも消えるので、「メンバーだがプロジェクトが無い」という状態は1リクエストの中でしか存在しない。</td>
+    </tr>
+  </table>
+
+  <h3>3. 今回の設計に固有の用語</h3>
+  <table>
+    <tr><th>用語</th><th>それが何か / なぜ必要か</th></tr>
+    <tr>
+      <td><b>アクセスゲート</b><br />(access gate)</td>
+      <td><code>/projects/:id</code> に入る全リクエストが必ず通る関門。ID の形式、そのユーザーが誰か、そのプロジェクトのメンバーかを順に確認し、駄目なら 404 で打ち切る。</td>
+    </tr>
+    <tr>
+      <td><b>fail closed</b></td>
+      <td>判断がつかないときは<b>拒否側に倒す</b>設計。<b>なぜ必要か</b>: 逆（fail open）だと、障害やデータ不整合のときに見えてはいけないものが見える。ここでは「メンバーではあるがプロジェクト行が読めない」を 404 にしている。</td>
+    </tr>
+    <tr>
+      <td><b>存在オラクル</b><br />(existence oracle)</td>
+      <td>本来知られてはいけない「それが存在するかどうか」を、応答の違いから読み取れてしまう状態。<b>なぜ防ぐか</b>: 「権限がありません(403)」と「ありません(404)」を区別できると、権限が無いのに<b>存在することだけ</b>が分かってしまう。だから両方を、本文まで同一の 404 にしている。</td>
+    </tr>
+    <tr>
+      <td><b>記憶つき（memoise）</b></td>
+      <td>1度計算した結果を覚えておき、2度目以降は覚えた結果を返すこと。<b>なぜ必要か</b>: 親レイアウトと子画面のローダーが並列に同じデータを求めても、問い合わせは1回で済む。</td>
+    </tr>
+    <tr>
+      <td><b>遅延（lazy）</b></td>
+      <td>呼ばれるまで実行しないこと。<b>なぜ必要か</b>: 拒否されたリクエストや、そのデータを使わないルート（素の <code>/projects/:id</code>）が、問い合わせを1本も出さずに済む。</td>
+    </tr>
+    <tr>
+      <td><b>楽観的更新</b><br />(optimistic update)</td>
+      <td>サーバーの返事を待たずに画面を先に更新し、失敗したら巻き戻す方式。<b>ここでの関係</b>: 保存失敗時の応答は、この巻き戻しを駆動するための型付きデータになっている。だから 404 を throw に変えると巻き戻しが壊れる。</td>
+    </tr>
+    <tr>
+      <td><b>prefetch="intent"</b></td>
+      <td>リンクにマウスを載せた時点で、その先のデータを先読みする React Router の設定。<b>ここでの意味</b>: クリックしなくても読み取りが走るので、重いローダーの影響が想定より広く出る。</td>
+    </tr>
+  </table>
+
+  <h3 class="crefh">参考文献</h3>
+  <ol class="cref">
+    <li>React Router — Middleware / Loaders — <a href="https://reactrouter.com/how-to/middleware">reactrouter.com/how-to/middleware</a></li>
+    <li>Neon — Serverless driver — <a href="https://neon.com/docs/serverless/serverless-driver">neon.com/docs/serverless/serverless-driver</a></li>
+    <li>OWASP — Improper access control / user enumeration — <a href="https://owasp.org/www-project-web-security-testing-guide/">owasp.org/www-project-web-security-testing-guide</a></li>
+  </ol>
+</section>
+
+<footer>VECTA 進捗レポート — 2026-07-26</footer>
+</div>
+</body>
+</html>

@@ -5,9 +5,8 @@ import type { ShouldRevalidateFunctionArgs } from "react-router";
  * project write path (WBS grid + the master/member/template routes).
  *
  * Every commit is a command = one action POST, and React Router revalidates every
- * active loader after every action by default (the active route's workspace read
- * AND the project-row read on the `/projects/:id` layout — a full re-read per
- * commit). The optimistic pipeline already advanced the client state, so a
+ * active loader after every action by default — a full workspace re-read per
+ * commit. The optimistic pipeline already advanced the client state, so a
  * SUCCESSFUL self-save needs no re-read (the ADR's no-re-settle win; component
  * `useState` survives revalidation). This predicate therefore returns `false` for
  * any of our own successful self-saves.
@@ -33,7 +32,7 @@ import type { ShouldRevalidateFunctionArgs } from "react-router";
  * `actionResult` (the action's returned payload) is the RR 8.2.0 field; it is
  * present on every active route's `shouldRevalidate` after a fetcher submission.
  * Shared verbatim by each write route and every active ancestor, so one commit
- * never fans out into a workspace + project-row reload.
+ * never fans out into an extra workspace reload.
  */
 // ADR 0012 Step 4d — verification pass. The queue-not-block change adds NO new
 // result shapes: every queue-drained POST returns the same `{ ok, kind, revision }`

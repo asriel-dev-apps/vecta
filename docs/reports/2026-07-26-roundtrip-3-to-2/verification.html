@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VECTA ラウンドトリップ削減 — 進捗レポート</title>
+<link rel="stylesheet" href="explainer.css" />
+</head>
+<body>
+<div class="wrap">
+<h1 class="brand"><span class="b">VECTA</span> — 進捗レポート 2026-07-26</h1>
+
+<nav class="nav">
+  <a href="index.html">概要</a>
+  <a href="mechanism.html">仕組み</a>
+  <a href="verification.html" class="active">検証</a>
+  <a href="risks.html">リスクと残タスク</a>
+  <a href="glossary.html">用語集</a>
+</nav>
+
+<div class="topic">検証</div>
+
+<section>
+  <h2>Abstract</h2>
+  <div class="triple">
+    <div><span class="k what">What</span><span>lint・型・テスト・ビルド・バンドル走査・漏洩監査・独立レビュー・CI を通した。</span></div>
+    <div><span class="k why">Why</span><span>触ったのはアクセス拒否の中核。動くことだけでなく、拒否が壊れていないことを示す必要がある。</span></div>
+    <div><span class="k how">How</span><span>検査には「必ずヒットする対照」を入れ、0件が「安全」なのか「検査できていない」のかを区別した。</span></div>
+  </div>
+
+  <svg class="fig" viewBox="0 0 600 250" role="img" aria-label="検証の対象と結果">
+    <defs><marker id="vf" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6Z" fill="#8a90a2"/></marker></defs>
+    <g font-size="11.5">
+      <rect x="20" y="18" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="38" fill="#1f7a45">lint / typecheck / build</text><text x="278" y="38" text-anchor="end" fill="#1f7a45">緑</text>
+      <rect x="20" y="54" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="74" fill="#1f7a45">ユニット・結合テスト 435 件</text><text x="278" y="74" text-anchor="end" fill="#1f7a45">緑</text>
+      <rect x="20" y="90" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="110" fill="#1f7a45">クライアントバンドル走査</text><text x="278" y="110" text-anchor="end" fill="#1f7a45">0/22</text>
+      <rect x="20" y="126" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="146" fill="#1f7a45">push 前 漏洩監査</text><text x="278" y="146" text-anchor="end" fill="#1f7a45">0件</text>
+      <rect x="20" y="162" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="182" fill="#1f7a45">Fable 独立レビュー</text><text x="278" y="182" text-anchor="end" fill="#1f7a45">承認</text>
+      <rect x="20" y="198" width="270" height="30" rx="7" fill="#eafaf0" stroke="#23a55a"/><text x="34" y="218" fill="#1f7a45">GitHub Actions CI</text><text x="278" y="218" text-anchor="end" fill="#1f7a45">success</text>
+
+      <rect x="320" y="18" width="260" height="66" rx="8" fill="#fff7ed" stroke="#e0c08a"/>
+      <text x="334" y="38" fill="#7a5a18" font-weight="600">未確認</text>
+      <text x="334" y="56" font-size="10.5" fill="#7a5a18">本番の実レイテンシ（未デプロイのため）</text>
+      <text x="334" y="72" font-size="10.5" fill="#7a5a18">往復回数は追跡と計数、時間は見積り</text>
+
+      <rect x="320" y="92" width="260" height="66" rx="8" fill="#fff7ed" stroke="#e0c08a"/>
+      <text x="334" y="112" fill="#7a5a18" font-weight="600">この Mac でのみ失敗</text>
+      <text x="334" y="130" font-size="10.5" fill="#7a5a18">persistence 結合テスト（並列時タイムアウト）</text>
+      <text x="334" y="146" font-size="10.5" fill="#7a5a18">直列なら 46/46 緑・CI も緑</text>
+
+      <rect x="320" y="166" width="260" height="62" rx="8" fill="#f1f2f6" stroke="#9aa0ad"/>
+      <text x="334" y="186" fill="#3a3f4d" font-weight="600">実施しなかった</text>
+      <text x="334" y="204" font-size="10.5" fill="#5b6172">スクリーンショット（画面に変化がないため）</text>
+      <text x="334" y="220" font-size="10.5" fill="#5b6172">アプリバーは実コンポーネントのテストで担保</text>
+    </g>
+  </svg>
+  <p class="cap">通った検査と、通していない・通らなかった検査。右側を落とさないのがこのページの目的。</p>
+
+  <h3>テスト件数の内訳</h3>
+  <ul>
+    <li>domain 32 / application 70 / persistence 46 / <b>web 268</b>（変更前 264、<b>+4</b>）/ operations 19</li>
+    <li>増えた4件はいずれもこの変更の主張そのものを固定するもの（次節）</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Detail</h2>
+
+  <h3>1. 追加したテスト4件</h3>
+  <table>
+    <tr><th>テスト</th><th>何を固定するか</th></tr>
+    <tr><td>membership は DB 往復ゼロで読める</td><td>書き込みパスの往復削減の前提。ワークスペース読み取りが 0 回であることを数える</td></tr>
+    <tr><td>解決済み project 行とビューが1回の読み取りを共有する</td><td>今回の主張そのもの。並列に呼んでも読み取りは 1 回</td></tr>
+    <tr><td>読み取りは membership のテナントに限定される</td><td>ID 単独で行に届かないこと。<code>(tenantId, projectId)</code> で呼ばれることを確認</td></tr>
+    <tr><td>行が消えていても同一の不透明な 404</td><td>ステータスだけでなく<b>本文 <code>null</code></b> まで一致することを確認</td></tr>
+  </table>
+
+  <h3>2. 実測と見積りの区別</h3>
+  <div class="note">
+    <b>実測したもの</b>: テスト件数、シームでの呼び出し回数（1回）、バンドル走査のヒット数、CI の成否。<br />
+    <b>コードから追ったもの</b>: 往復が3本から2本になること。principal 読み取りが <code>db.batch</code> 1本、ワークスペース読み取りが <code>db.batch</code> 1本であることを実装で確認したうえでの結論。<br />
+    <b>見積りにすぎないもの</b>: 「約70ms 短縮」。既存の計測値である「東京↔シンガポール 1往復 約70ms」に、削れた往復数を掛けた数字。<b>本番での前後比較は行っていない</b>（デプロイが CI 経由＋人間承認のため、まだ本番に出ていない）。
+  </div>
+
+  <h3>3. クライアントバンドル走査</h3>
+  <p>
+    今回の変更で、ミドルウェアが <code>@vecta/persistence</code> を直接 import するようになりました。ブラウザに配られる成果物にサーバー専用のものが混ざっていないかを、ビルド後の <code>build/client</code> に対して確認しています。
+  </p>
+  <table>
+    <tr><th>走査対象</th><th>パターン</th><th>ヒット</th></tr>
+    <tr><td>build/client の 29 アセット</td><td>秘密の名前（<code>DATABASE_URL</code> ほか）、<code>drizzle</code> / <code>neondatabase</code> / <code>node-postgres</code> / <code>jose</code>、今回触ったサーバー側識別子 — 計 22</td><td><b>0</b></td></tr>
+  </table>
+  <p>
+    ただしこれは<b>手作業の走査</b>で、自動では回っていません。この「構造で強制する」仕組みづくりが、HANDOFF の次の作業項目です。
+  </p>
+
+  <h3>4. しくじった検査 — 監査 grep を3回書き直した</h3>
+  <p>
+    push 前の漏洩監査で、最初に書いた検査は<b>全パターン 0 ヒットで「クリーン」に見えていました</b>。実際には何も検査できていませんでした。原因は2つ重なっていました。
+  </p>
+  <ul>
+    <li>この環境の <code>grep</code> は <b>ugrep</b> の実体で、複数ファイル指定や <code>-U</code> の解釈が GNU/BSD grep と異なる</li>
+    <li>zsh は変数展開を<b>単語分割しない</b>。<code>FILES=$(...)</code> を <code>grep ... $FILES</code> に渡すと 12 個のファイルが<b>1個の引数</b>になり、ファイルが見つからないまま 0 ヒットが返る</li>
+  </ul>
+  <p>
+    さらに NUL バイト検査は <code>$'\x00'</code> が zsh で空文字列になるため、<b>全ファイルが陽性</b>という逆方向の誤りも出しました。
+  </p>
+  <div class="note">
+    直し方は、実体の <code>/usr/bin/grep</code> を明示し、ファイルパスをコマンドラインに直書きし、<b>必ずヒットする対照パターンを監査に同梱</b>することです。対照が 0 件を返したら、その監査は壊れている——この判別ができない検査は、合格しても何も証明しません。最終結果は対照付きで取り直したもので、ヒットは HANDOFF に元からある公開リポジトリパス1件のみです。
+  </div>
+
+  <h3>5. この Mac でのみ落ちたテスト</h3>
+  <p>
+    <code>packages/persistence</code> の結合テストが、フルの <code>pnpm check</code> で2回とも同じ2件失敗しました。原因は環境です。
+  </p>
+  <table>
+    <tr><th>条件</th><th>結果</th></tr>
+    <tr><td>8ファイル並列（既定）— それぞれが Postgres コンテナを起動</td><td>2件失敗（5秒のテストタイムアウト超過 → 以降 <code>current transaction is aborted</code> で連鎖）</td></tr>
+    <tr><td><code>--fileParallelism=false</code>（直列）</td><td><b>46/46 緑</b></td></tr>
+    <tr><td>GitHub Actions CI（ubuntu-latest）</td><td><b>success</b>（今回のコミットを含め直近9ラン連続）</td></tr>
+  </table>
+  <p>
+    セットアップ側 <code>beforeAll</code> には60秒の猶予がある一方、テスト本体は vitest 既定の5秒のままです。コードの欠陥ではなく環境の制約と判断し、発火条件を付けて債務に記録しました（<a href="risks.html">リスクと残タスク</a>）。<b>ただしローカルの <code>pnpm check</code> が一発で緑にならない状態であることは事実です。</b>
+  </p>
+
+  <h3>6. 独立レビュー</h3>
+  <p>
+    設計レビューを Fable に依頼しました（実装は書かせず、助言のみ）。往復数の主張、セキュリティ3性質、context の設定漏れ経路、レイアウト削減の妥当性、読み取り重量の回帰、記憶つき読み取りの失敗キャッシュ挙動を対象にしています。
+  </p>
+  <ul>
+    <li>往復 3→2 の主張は実コードで裏付けられた。増えた経路はなし</li>
+    <li>セキュリティ3性質は維持。新しい存在オラクルはなし</li>
+    <li>ただし<b>書き込みパスの応答本文に差分</b>があると指摘。既存形状の発生窓が広がったもの（<a href="risks.html">詳細</a>）</li>
+    <li>ダッシュボードの読み取り重量は債務記録が妥当、と同意</li>
+  </ul>
+  <p>
+    指摘のうち事実関係（<code>prefetch="intent"</code> の位置、クライアント側の <code>NOT_FOUND</code> 型契約）は、こちらでもコードを開いて確認しました。
+  </p>
+
+  <h3 class="crefh">参考文献</h3>
+  <ol class="cref">
+    <li>Vitest — Test timeout / file parallelism — <a href="https://vitest.dev/config/">vitest.dev/config</a></li>
+    <li>Testcontainers for Node.js — <a href="https://node.testcontainers.org/">node.testcontainers.org</a></li>
+    <li>リポジトリ内: <code>apps/web/test/project-access.test.ts</code>, <code>apps/web/test/load-project-view.test.ts</code></li>
+    <li>リポジトリ内: <code>.github/workflows/ci.yml</code></li>
+  </ol>
+</section>
+
+<footer>VECTA 進捗レポート — 2026-07-26</footer>
+</div>
+</body>
+</html>

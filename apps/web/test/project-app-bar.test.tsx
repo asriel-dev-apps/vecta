@@ -23,11 +23,9 @@ afterEach(() => {
 const DISPLAY_NAME = "山田 太郎";
 
 function mountLayout(entry: string) {
-  const loader = () => ({
-    project: { id: "p1", tenantId: "t1", name: "Demo Project" },
-    membership: { tenantId: "t1", projectId: "p1", projectRole: "OWNER" as const },
-    displayName: DISPLAY_NAME,
-  });
+  // Identity-only, exactly as the real layout loader returns: the project row is
+  // not part of this payload (nothing rendered here reads it).
+  const loader = () => ({ displayName: DISPLAY_NAME });
   const Stub = createRoutesStub([
     {
       path: "/projects/:id",
