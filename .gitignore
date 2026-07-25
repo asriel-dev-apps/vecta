@@ -18,3 +18,13 @@ artifacts/
 # apps/web is TypeScript-only (Vite/RR emits to build/); never track stray
 # tsc-transpiled .js next to sources.
 apps/web/**/*.js
+
+# Agent working files. This repository is PUBLIC, and these sat untracked but
+# NOT ignored — one `git add -A` away from being published. scratchpad/ holds
+# session artifacts (screenshots, logs); .agents/ and .claude/ hold vendored
+# third-party skills. None of it is product code.
+# skills-lock.json is deliberately left visible in `git status`: it carries no
+# sensitive content, and whether to track it is a decision worth seeing.
+scratchpad/
+.agents/
+.claude/
