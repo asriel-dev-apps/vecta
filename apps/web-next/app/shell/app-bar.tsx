@@ -218,19 +218,31 @@ function ProjectNav() {
 }
 
 /**
- * The unified tier-1 app bar for `/projects/:id/*`: brand lockup · routed nav ·
- * account cluster (theme toggle, identity, Sign out). The identity shows the
- * cookie-session principal's `displayName` — the SPA showed the JWT email, but
- * the cookie-session principal carries no email, so this is the faithful
- * adaptation forced by the auth redesign. Sign out is a POST to `/logout` (the
- * existing action destroys the session).
+ * The unified tier-1 app bar: brand lockup · (routed nav) · account cluster
+ * (theme toggle, identity, Sign out). The identity shows the cookie-session
+ * principal's `displayName` — the SPA showed the JWT email, but the cookie-session
+ * principal carries no email, so this is the faithful adaptation forced by the
+ * auth redesign. Sign out is a POST to `/logout` (the existing action destroys the
+ * session).
+ *
+ * `nav` toggles the project-scoped tab strip: `/projects/:id/*` renders it (the
+ * default), while the `/projects` list — where no project is selected, so WBS /
+ * マスタ / … have nothing to point at — passes `nav={false}` for a brand+account
+ * bar. Without the nav the brand's trailing divider would dangle, so the flush
+ * variant drops it (`.app-bar--flush`).
  */
-export function AppBar({ displayName }: { readonly displayName: string }) {
+export function AppBar({
+  displayName,
+  nav = true,
+}: {
+  readonly displayName: string;
+  readonly nav?: boolean;
+}) {
   const [theme, setTheme] = useThemePref();
   return (
-    <header className="app-bar" data-testid="auth-bar">
+    <header className={`app-bar${nav ? "" : " app-bar--flush"}`} data-testid="auth-bar">
       <BrandLockup />
-      <ProjectNav />
+      {nav ? <ProjectNav /> : null}
       <div className="app-bar__account">
         <ThemeToggle value={theme} onChange={setTheme} />
         <span className="auth-identity" data-testid="auth-identity">

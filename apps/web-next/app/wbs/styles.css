@@ -326,6 +326,12 @@ body {
   color: var(--accent);
 }
 
+/* Flush variant — the `/projects` list bar (no project selected, so no nav
+   tabs). Without the nav the brand's trailing divider would dangle, so it is
+   dropped; the bar sticks to the top of the list's own scroll. */
+.app-bar--flush { position: sticky; top: 0; z-index: 20; }
+.app-bar--flush .app-bar__brand { padding-right: 0; border-right: none; }
+
 .app-bar__mark { display: block; }
 
 .app-bar__wordmark {
@@ -1127,6 +1133,10 @@ body {
 @keyframes login-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes login-fade { from { opacity: 0; } to { opacity: 1; } }
 
+/* The web-next `/login` route now renders the shared asymmetric hero above
+   (`.login-screen` / `.login-aside` / `.login-stage`), so it needs no card of
+   its own. */
+
 /* ── App-bar nav (Design 0003 §E-2): editorial underline tabs ───────────
    Muted text with an accent underline on the active view — no solid block. The
    strip overlaps the bar's bottom hairline so the active underline reads as a tab
@@ -1530,6 +1540,198 @@ body {
 }
 
 .member-day-value { position: relative; z-index: 1; }
+
+/* ── Projects lobby (/projects list) ─────────────────────────────────────
+   The list's own surface: a brand+account bar (the flush AppBar, no project
+   nav) over a calm, centred card grid. Each 案件/project is a card the person
+   opens to its WBS; the only loud thing is the project name and, on every card,
+   VECTA's quiet vector/S-curve mark as branding — never fabricated metrics
+   (the list loader ships none). Every colour resolves from the shared tokens,
+   so it holds in both themes. */
+.projects-frame {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.projects-screen {
+  flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: clamp(28px, 5vw, 52px) clamp(20px, 4vw, 40px) 72px;
+}
+
+.projects-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: clamp(24px, 4vw, 38px);
+}
+
+.projects-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.projects-title {
+  margin: 0;
+  font-size: clamp(25px, 3.4vw, 33px);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.projects-count { margin: 0; font-size: 13px; color: var(--muted); }
+.projects-count__num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.projects-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  gap: clamp(14px, 1.6vw, 20px);
+}
+.projects-grid > li { display: flex; }
+
+.project-card {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 148px;
+  padding: 20px;
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(16, 20, 28, 0.04);
+  transition: transform 170ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 170ms ease, box-shadow 170ms ease;
+}
+.project-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+  box-shadow: 0 14px 32px rgba(16, 20, 28, 0.11);
+}
+.project-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring), 0 14px 32px rgba(16, 20, 28, 0.11);
+}
+
+/* Text/affordance content paints over the corner watermark: all card children
+   are positioned, so DOM order decides paint — the motif is first, so it sits
+   behind the role, name, and open row that follow it. */
+.project-card__role,
+.project-card__name,
+.project-card__open { position: relative; }
+
+/* The signature vector/S-curve mark, tucked into the top-right corner and
+   clipped by the card. Faint at rest; it warms and nudges forward on hover —
+   "the direction and momentum of a project". */
+.project-card__motif {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  width: 122px;
+  height: auto;
+  color: var(--accent);
+  opacity: 0.16;
+  pointer-events: none;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+}
+.project-card:hover .project-card__motif { opacity: 0.3; transform: translate(3px, -3px); }
+
+.project-card__role {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.project-card__name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.32;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.project-card__open {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  transition: color 170ms ease;
+}
+.project-card__open svg { transition: transform 170ms ease; }
+.project-card:hover .project-card__open { color: var(--accent-strong); }
+.project-card:hover .project-card__open svg { transform: translateX(3px); }
+
+/* Empty state — a directional invitation, the signature drawn large. */
+.projects-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: clamp(44px, 9vw, 88px) 24px;
+}
+.projects-empty__mark {
+  width: 150px;
+  height: auto;
+  margin-bottom: 14px;
+  color: var(--accent);
+  opacity: 0.85;
+}
+.projects-empty__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.projects-empty__body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .projects-grid { grid-template-columns: 1fr; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
