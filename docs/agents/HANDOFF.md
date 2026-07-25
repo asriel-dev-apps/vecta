@@ -48,10 +48,16 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   same commits are DIFFERENT refs and therefore both survive). `deploy.yml` deliberately does NOT
   cancel-in-progress — a half-finished deploy whose verification step never ran is worse than a queued one.
   Leave that alone.
-- **The `production` Environment's `required_reviewers` rule was removed** (observed 2026-07-26, mid-session:
-  it was present at session start and gone by the second deploy, which started in 3 s instead of waiting
-  7 m 20 s). So **merging to `main` now ships to production with no human gate.** Treat a merge as the
-  irreversible step it now is.
+- **This repo must stay PUBLIC on the current plan. Do not make it private** (learned the hard way,
+  2026-07-26). GitHub Free supports Environment protection rules, Environment secrets and branch protection
+  only on PUBLIC repos — "if you convert a repository from public to private, any configured protection
+  rules or environment secrets will be ignored". A private flip therefore **silently disabled the
+  `production` Environment's `required_reviewers` gate**: measured, the deploy before the flip waited
+  7 m 20 s for approval, the one after started in 3 s. Nothing was deleted — the plan stopped honouring it,
+  and flipping back to public restored `required_reviewers` intact. **All deploy credentials live at
+  Environment scope** (`CLOUDFLARE_API_TOKEN` + 12 variables; ZERO repo-level secrets or variables), so a
+  private flip also puts production on behaviour GitHub documents as unsupported. If private is ever wanted,
+  the prerequisite is GitHub Pro — not a workaround.
 - DB schema at migration **0006** (7 applied). Prod project holds 48 synthetic tasks (generic
   "Phase A"/"Product 1"/"Member 01"), 8 processes / 6 products / 6 members / 2 templates / 32 deps.
 - Gate: domain 32, application 70, persistence 46, web 268, operations 23.
@@ -83,6 +89,26 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   have the test mint a properly signed session cookie with the local `SESSION_SECRET` instead.
 
 ## Active work — in this order
+
+00. **Move `docs/` out of this PUBLIC repo, into ONE private documentation repo shared by every public
+    project** (user decision, 2026-07-26). The repo stays public; the thinking does not stay in it. Domain
+    modelling, ADRs, and the handoff are the competitive content, and a public repo hands them over.
+    - **History is NOT being rewritten** (user chose "protect from here on"). Everything already committed
+      stays readable in `git log`, and going public re-exposes it. That is accepted — the point is to stop
+      adding, not to un-publish. Do not propose `filter-repo` again unless asked.
+    - **Destination: one private repo holding docs for ALL public projects, structured internally by
+      project** — not a per-project `*-docs`. Name not chosen yet; offer candidates before creating it
+      (see `naming-preferences` — always give several, and romanised Japanese is not the default).
+      Shape: `<repo>/<project>/{adr,design,research,security,operations,agents,reports}/`, with a top-level
+      README explaining how an agent finds the right subtree.
+    - **Technically low-risk: nothing in CI depends on `docs/`.** Verified 2026-07-26 — no reference to
+      `docs/` anywhere in `.github/` or `package.json`. The only in-code pointer is a comment,
+      `apps/web/app/wbs/cross-project-load.ts:12` → `docs/cross-project-load.md`, which will dangle.
+    - Work: create the private repo → move the tree → fix pointers (this file's own paths, `AGENTS.md`,
+      that one source comment) → leave a short `docs/README.md` in the public repo saying where docs live
+      and that the absence is deliberate → clone it beside this one, like `../.wbs-private/`.
+    - `docs/reports/` is 6.1 MB of PDFs and the least sensitive part; moving it also gets the binaries out
+      of a public git history. The actual thinking is ~270 KB of markdown.
 
 0. **DATED, cheap: set `minimumReleaseAge: 10080` in `pnpm-workspace.yaml` — on or after 2026-07-29.**
    User decided the value (7 days) on 2026-07-26; only the timing is deferred. **Do not set it earlier**:
