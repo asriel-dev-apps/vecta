@@ -29,6 +29,9 @@ export default [
       route("masters", "routes/project.masters.tsx"),
       route("members", "routes/project.members.tsx"),
       route("templates", "routes/project.templates.tsx"),
+      // Action-only (ADR 0013): the assistant proposes, it never applies. The
+      // apply POST goes to the routes above, through the unchanged command action.
+      route("assistant", "routes/project.assistant.tsx"),
     ]),
   ]),
 ] satisfies RouteConfig;

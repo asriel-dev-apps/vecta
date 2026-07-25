@@ -54,7 +54,9 @@ export interface ProposalOutput {
 export type ProposalEgress = "in-account" | "external";
 
 export interface ProposalModel {
-  /** Identifier for logs and usage records, e.g. `workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast`. */
+  /** Identifier for logs and usage records, shaped `<provider>:<model-id>`. The
+   * shared core names no vendor and no model — not even in a comment, so that
+   * "one adapter knows the provider" survives a grep rather than an assurance. */
   readonly id: string;
   /** Input budget for this model. Design 0005 §6 derives its allocation from this — never a literal 24,000. */
   readonly contextTokenBudget: number;

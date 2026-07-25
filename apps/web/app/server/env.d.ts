@@ -13,6 +13,14 @@ declare global {
     readonly SESSION_SECRET_PREVIOUS?: string;
     /** Neon serverless Postgres connection string (principal resolution). */
     readonly DATABASE_URL?: string;
+    /**
+     * Which inference adapter serves the assistant (ADR 0013 Decision 12).
+     * Absent = the initial provider the ADR names. A value no adapter implements
+     * fails loudly rather than falling back — see `llm/select-model.server.ts`.
+     * Declared here rather than as a wrangler `var` so no deployment value lands
+     * in a tracked file; production sets it at Environment scope, if at all.
+     */
+    readonly ASSISTANT_MODEL_PROVIDER?: string;
   }
 }
 
