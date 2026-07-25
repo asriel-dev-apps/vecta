@@ -35,9 +35,21 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
   it during normal work**.
 - **Deploy is CI-only**: merge to `main` → `deploy.yml` → a human approves the `production` Environment.
   Process: `docs/operations/release-and-rollback.md`. Never deploy by hand.
+- **Shipping is IN SCOPE, up to the approval gate** (user, 2026-07-26): finish a change by opening the PR,
+  waiting for CI, merging to `main` with a **merge commit** (`gh pr merge --merge`; main's history uses them),
+  and leaving the branch alive. Do not stop at "pushed to the branch". The `production` Environment has a
+  `required_reviewers` rule, so the deploy then sits at `waiting` for the user's click — **that click is
+  theirs; do not approve it**. Report the run URL and carry on with the next item meanwhile.
 - DB schema at migration **0006** (7 applied). Prod project holds 48 synthetic tasks (generic
   "Phase A"/"Product 1"/"Member 01"), 8 processes / 6 products / 6 members / 2 templates / 32 deps.
-- Gate: domain 32, application 70, persistence 46, web 268, operations 17.
+- Gate: domain 32, application 70, persistence 46, web 268, operations 23.
+- **The client/server boundary is ENFORCED as of 2026-07-26**, by two gates that must both stay wired:
+  `.github/scripts/verify-client-bundle.mjs` (scans the built `apps/web/build/client`; authoritative, since it
+  inspects what users receive) runs from `pnpm verify:bundle` at the tail of `pnpm check`, so CI and the
+  deploy gate both run it; and `eslint.config.js`'s `clientServerBoundary` blocks (client-reachable modules may
+  only `import type` from `~/server/**` and the server-only packages; route modules may call server modules but
+  may not import a driver). Both were verified by making them FAIL — see the commit. The scanner self-checks
+  its own rules and refuses to pass on a bundle it did not actually read.
 - **A `/projects/:id/*` document request costs TWO sequential Neon round trips** (principal batch, then the
   workspace batch) — the 2026-07-26 fold. The gate no longer reads the project row on its own: the workspace
   batch's header IS that row. Do not reintroduce a separate project-row query.
@@ -65,33 +77,37 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
    Q&A over the WBS? propose edits? apply them?), who approves a proposed change, and whether it runs in the
    browser or through `/mcp` (which already exposes list/get/apply as an agent surface). Write the spec to
    `docs/design/` and the decision to `docs/adr/` — not into this file.
-2. **Client/server boundary — enforce it structurally** (user: "絶対に防ぎたい"). Re-measured 2026-07-26 after
-   the round-trip fold: the client bundle leaks **nothing** (22 patterns — secret names,
-   `drizzle`/`neondatabase`/`node-postgres`/`jose`, and every server identifier the fold touched — all zero
-   across the 29 client assets). But nothing *enforces* that; only the `.server.ts` suffix does any work, and
-   the fold made `app/middleware/project-access.server.ts` import `@vecta/persistence` directly, so a route
-   module is now one suffix away from the persistence layer.
-   **`app/server/` does not mean server-only** — `app/server/project/self-save-revalidation.ts` really is
-   shipped as `build/client/assets/self-save-revalidation-*.js`, and correctly so (`shouldRevalidate` runs in
-   the browser). The directory name is lying, which is exactly the shape of a future leak. Files under
-   `app/server/` with no `.server` suffix: `api/*`, `auth/{id-token,oidc-config,principal-directory,redirect,
-   require-principal,pkce}.ts`, `context.ts` — reachable only from `workers/app.ts` today, by convention not
-   enforcement. Build **both** gates: (a) an artifact scan of `build/client/**` against a denylist, wired into
-   `pnpm check` + CI — it inspects what users actually receive, so no source-level trick evades it; (b) an
-   ESLint import restriction so client-reachable modules may only `import type` from `~/server/**` — it fails
-   earlier and names the culprit. One without the other is insufficient. Also move genuinely isomorphic code
-   out of `app/server/`.
-3. **Periodic architecture review** (standing): check code style and directory layout against the
+2. **Periodic architecture review** (standing): check code style and directory layout against the
    language/framework's current best practices *and* this project's own constraints (CLAUDE.md, ADRs). Needs
    web research, so **not delegable to Codex** (no network in its sandbox). Output to `docs/research/`.
-4. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
+3. **Security review** (user-requested): pnpm supply-chain posture, GitHub Actions compromise vectors
    (third-party actions, `pull_request_target`, token scopes, artifact/secret exposure), and an OWASP-informed
    pass over the app. Survey output goes to `docs/research/`, findings to a doc — not here. Note the repo is
    **public**. The local `sec-scan` skill covers app vulns + pre-push leak audit; the CI/supply-chain half is
    not its remit. Codex's sandbox has **no network**, so web survey must not be delegated to it — give Codex
    the offline repo/config analysis and do the research elsewhere.
 
+## Open question for the user (asked 2026-07-26, unanswered)
+
+- **Can production latency be measured, and how?** Asked by the user; answered but NOT yet built. Three
+  options, in descending fidelity: (a) emit a `Server-Timing` response header with each DB round trip's
+  duration — the ONLY way to get the real Tokyo→Singapore number, small and standard, durations only so
+  nothing sensitive crosses; (b) TTFB of `/projects/:id/wbs` from outside, which needs a real signed-in
+  session (a credential — do not ask the user to hand one over); (c) time both `db.batch` calls locally
+  against real Neon with the Keychain `DATABASE_URL`, which measures the count for real but from the wrong
+  origin. **Recommended: (a).** It is a product change to a live app, so it was left for the user to green-light
+  rather than shipped as a side effect of a perf task. Until then, the "~70 ms saved" figure stays an
+  ARITHMETIC ESTIMATE (round trips removed × the measured 70 ms floor), not a production measurement.
+
 ## Carried debt (none of it blocking)
+
+- **Isomorphic code still sits under `app/server/`** (unfinished half of the boundary work). The two new gates
+  stop server code reaching the browser, but they do not fix the misleading directory:
+  `app/server/project/self-save-revalidation.ts` is genuinely client code (`shouldRevalidate` runs in the
+  browser) and really is shipped as `build/client/assets/self-save-revalidation-*.js`. The eslint block
+  exempts `app/server/**` from its own rule, so nothing flags it. **Trigger: move it (and anything else under
+  `app/server/` that the bundle proves is client-reachable) out, the next time that file is touched** — check
+  by listing `apps/web/build/client/assets` for names matching modules under `app/server/`.
 
 - **`/projects/:id/dashboard` reads a whole workspace for one project name** (from the 2026-07-26 fold;
   confirmed by the Fable review). It is a Step-4 stub (`ダッシュボードは Step 4 で実装します`), but the nav
