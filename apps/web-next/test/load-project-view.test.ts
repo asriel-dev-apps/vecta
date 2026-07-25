@@ -30,7 +30,11 @@ const project: ProjectState = createDemoProject({
 
 function fakeSession(): DbSession {
   // The injected workspace loader ignores the handle, so it is never touched.
-  return { database: () => ({}) as never, close: async () => undefined };
+  return {
+    read: () => ({}) as never,
+    database: () => ({}) as never,
+    close: async () => undefined,
+  };
 }
 
 function contextFor(

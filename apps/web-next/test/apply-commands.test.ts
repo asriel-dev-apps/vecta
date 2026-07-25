@@ -31,7 +31,11 @@ const otherLeaf = project.tasks.find((task) => task.parentId !== null && task.id
 
 function fakeSession(): DbSession {
   // `unitOfWorkFor` is injected below, so the database handle is never touched.
-  return { database: () => ({}) as never, close: async () => undefined };
+  return {
+    read: () => ({}) as never,
+    database: () => ({}) as never,
+    close: async () => undefined,
+  };
 }
 
 function withKeys(commands: readonly ProjectCommand[]) {

@@ -4,17 +4,16 @@ import type { DbSession } from "../db-session.server";
 import type { ProjectReader } from "./project-access";
 
 /**
- * Neon-backed {@link ProjectReader} built over the per-request {@link DbSession}
- * (ADR 0012 §4-pre). Fetches the project row by its composite `(tenantId, id)`
+ * Neon-backed {@link ProjectReader} built over the per-request {@link DbSession}'s
+ * HTTP read transport. Fetches the project row by its composite `(tenantId, id)`
  * key — never by global id alone — so the row is read through the same tenant
- * scope the membership was matched on. Reads the shared connection via
- * `session.database()` (opened lazily, memoised for the request) and NEVER
- * closes it: the root middleware owns the session lifecycle.
+ * scope the membership was matched on. Opens no connection: one `fetch`, and the
+ * session's write pool stays untouched.
  */
 export function createNeonProjectReader(session: DbSession): ProjectReader {
   return {
     async loadProject(tenantId, projectId) {
-      const database = session.database();
+      const database = session.read();
       const [row] = await database
         .select({
           id: projects.id,

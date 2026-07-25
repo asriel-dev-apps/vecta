@@ -186,7 +186,11 @@ describe("§0 convergence: client transition === server transition (PRIVILEGED)"
 describe("§0 GENERAL: the write path is server-denied (no equivalence assertion)", () => {
   it("a VIEWER (GENERAL projection) write is FORBIDDEN by the authorizer", async () => {
     const uow = new FakeProjectCommandUnitOfWork(base, 1n);
-    const session: DbSession = { database: () => ({}) as never, close: async () => undefined };
+    const session: DbSession = {
+      read: () => ({}) as never,
+      database: () => ({}) as never,
+      close: async () => undefined,
+    };
     const result = await applyCommands(
       {
         session,

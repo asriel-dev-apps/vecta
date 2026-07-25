@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Form, NavLink } from "react-router";
+import { Form, Link, NavLink } from "react-router";
 
 // ADR 0012 Step 4c-2 — the per-project tier-1 app bar, ported from the SPA's
 // `apps/web/src/AppRoot.tsx` `app-bar` (BrandLockup + Gantt glyph, the three-way
@@ -185,6 +185,37 @@ function BrandLockup() {
   );
 }
 
+/**
+ * The way back out of a project. `/projects/:id/*` is otherwise a dead end: the
+ * nav tabs all stay inside the selected project and the only other exit is Sign
+ * out. This sits between the brand and the tabs — the conventional "up one
+ * level" slot — and is rendered only when a project is selected.
+ */
+function BackToProjects() {
+  return (
+    <Link to="/projects" className="app-bar__back" data-testid="nav-projects">
+      <svg
+        className="app-bar__back-chevron"
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          d="M10 3.2 5.2 8l4.8 4.8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      プロジェクト一覧
+    </Link>
+  );
+}
+
 /** The per-project nav destinations (ADR 0012 Step 4c route set). */
 const NAV_ITEMS = [
   { to: "wbs", label: "WBS", testId: "nav-wbs" },
@@ -225,11 +256,12 @@ function ProjectNav() {
  * auth redesign. Sign out is a POST to `/logout` (the existing action destroys the
  * session).
  *
- * `nav` toggles the project-scoped tab strip: `/projects/:id/*` renders it (the
- * default), while the `/projects` list — where no project is selected, so WBS /
- * マスタ / … have nothing to point at — passes `nav={false}` for a brand+account
- * bar. Without the nav the brand's trailing divider would dangle, so the flush
- * variant drops it (`.app-bar--flush`).
+ * `nav` toggles the project-scoped middle section — the "プロジェクト一覧" back
+ * link plus the tab strip. `/projects/:id/*` renders it (the default), while the
+ * `/projects` list — where no project is selected, so the back link points at the
+ * current page and WBS / マスタ / … have nothing to point at — passes `nav={false}`
+ * for a brand+account bar. Without it the brand's trailing divider would dangle,
+ * so the flush variant drops it (`.app-bar--flush`).
  */
 export function AppBar({
   displayName,
@@ -242,6 +274,7 @@ export function AppBar({
   return (
     <header className={`app-bar${nav ? "" : " app-bar--flush"}`} data-testid="auth-bar">
       <BrandLockup />
+      {nav ? <BackToProjects /> : null}
       {nav ? <ProjectNav /> : null}
       <div className="app-bar__account">
         <ThemeToggle value={theme} onChange={setTheme} />

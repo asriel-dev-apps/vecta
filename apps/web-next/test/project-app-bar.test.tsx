@@ -80,6 +80,20 @@ describe("ProjectLayout — tier-1 app bar", () => {
     }
   });
 
+  it("offers the way back out of the project, to the project list", async () => {
+    mountLayout("/projects/p1/wbs");
+    await ready();
+
+    // Without this the project screens are a dead end: every nav tab stays inside
+    // the project and the only other exit is Sign out.
+    const back = screen.getByTestId("nav-projects");
+    expect(back.tagName).toBe("A");
+    expect(back.getAttribute("href")).toBe("/projects");
+    expect(back.textContent).toContain("プロジェクト一覧");
+    // It is an exit, not a sixth destination: no nav-tab underline rail.
+    expect(back.className).not.toContain("nav-tab");
+  });
+
   it("marks the current route's nav link active (underline + aria-current)", async () => {
     mountLayout("/projects/p1/masters");
     await ready();

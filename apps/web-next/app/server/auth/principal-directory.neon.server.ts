@@ -13,19 +13,22 @@ import type {
 
 /**
  * Neon-backed {@link PrincipalDirectory} built over the per-request
- * {@link DbSession} (ADR 0012 §4-pre). Persistence uses a serverless driver
- * (each query is a network round trip), so `loadPrincipal` runs the two
- * membership lookups in parallel after the principal row. Each method reads the
- * shared connection via `session.database()` (opened lazily on first use,
- * memoised for the rest of the request) and NEVER closes it: the root middleware
- * owns the session lifecycle.
+ * {@link DbSession}'s HTTP read transport. Every authenticated request resolves
+ * the principal, so this is the hottest read in the app: `loadPrincipal` sends
+ * the principal row and BOTH membership lookups as a single `db.batch(...)` —
+ * one network round trip, where the earlier shape cost a WebSocket handshake
+ * plus two sequential ones. The three queries are keyed only on `principalId`,
+ * so none depends on another's result and batching changes no semantics: an
+ * absent principal still yields `null` and its membership rows are discarded.
+ *
+ * The session's write connection is never opened by this path.
  */
 export function createNeonPrincipalDirectory(
   session: DbSession,
 ): PrincipalDirectory {
   return {
     async findByIssuerSubject(issuer, subject) {
-      const database = session.database();
+      const database = session.read();
       const [row] = await database
         .select({
           id: principals.id,
@@ -47,24 +50,21 @@ export function createNeonPrincipalDirectory(
     },
 
     async loadPrincipal(principalId) {
-      const database = session.database();
-      const [principal] = await database
-        .select({
-          id: principals.id,
-          issuer: principals.issuer,
-          subject: principals.subject,
-          displayName: principals.displayName,
-          type: principals.type,
-        })
-        .from(principals)
-        .where(
-          and(eq(principals.id, principalId), isNull(principals.disabledAt)),
-        )
-        .limit(1);
-      if (principal === undefined) {
-        return null;
-      }
-      const [tenants, projects] = await Promise.all([
+      const database = session.read();
+      const [[principal], tenants, projects] = await database.batch([
+        database
+          .select({
+            id: principals.id,
+            issuer: principals.issuer,
+            subject: principals.subject,
+            displayName: principals.displayName,
+            type: principals.type,
+          })
+          .from(principals)
+          .where(
+            and(eq(principals.id, principalId), isNull(principals.disabledAt)),
+          )
+          .limit(1),
         database
           .select({
             tenantId: tenantMemberships.tenantId,
@@ -81,6 +81,9 @@ export function createNeonPrincipalDirectory(
           .from(projectMemberships)
           .where(eq(projectMemberships.principalId, principalId)),
       ]);
+      if (principal === undefined) {
+        return null;
+      }
       const resolved: AuthenticatedPrincipal = {
         principal: principal satisfies PrincipalIdentity,
         tenantMemberships: tenants,

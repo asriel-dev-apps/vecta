@@ -334,6 +334,27 @@ body {
 
 .app-bar__mark { display: block; }
 
+/* The way out of a project, in the conventional "up one level" slot between the
+   brand and the tabs. Quieter than a nav tab (no underline rail) so it reads as
+   an exit rather than a sixth destination. */
+.app-bar__back {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  margin-left: -4px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.app-bar__back:hover { color: var(--ink); background: var(--accent-soft); }
+.app-bar__back:focus-visible { outline: none; box-shadow: var(--ring); }
+.app-bar__back-chevron { display: block; }
+
 .app-bar__wordmark {
   font-size: 15px;
   font-weight: 700;

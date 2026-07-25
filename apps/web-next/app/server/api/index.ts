@@ -1,8 +1,8 @@
 import type { AuthenticatedIdentity } from "@vecta/application";
 import {
+  NeonHttpProjectWorkspaceReader,
   PostgresProjectAccessGrantResolver,
   PostgresProjectListReader,
-  ProjectWorkspaceRepository,
 } from "@vecta/persistence";
 import { createDbSession } from "../db-session.server";
 import { createApiApp, type ApiPersistence } from "./app";
@@ -36,10 +36,13 @@ import { createProjectMcpHandler } from "./mcp";
  * audience is `OIDC_CLIENT_ID`, the `/mcp` audience is `MCP_RESOURCE_URL`).
  */
 
+// All three are reads, so they run on the session's HTTP transport: no WebSocket
+// handshake, and the workspace read goes out as one batched round trip. The
+// write pool is still opened lazily by `applyCommands` when a batch is executed.
 const neonApiPersistence: ApiPersistence = {
-  grantResolver: (session) => new PostgresProjectAccessGrantResolver(session.database()),
-  workspace: (session) => new ProjectWorkspaceRepository(session.database()),
-  listReader: (session) => new PostgresProjectListReader(session.database()),
+  grantResolver: (session) => new PostgresProjectAccessGrantResolver(session.read()),
+  workspace: (session) => new NeonHttpProjectWorkspaceReader(session.read()),
+  listReader: (session) => new PostgresProjectListReader(session.read()),
 };
 
 const authenticator = createOidcBearerAuthenticator(createJoseOidcTokenVerifier());

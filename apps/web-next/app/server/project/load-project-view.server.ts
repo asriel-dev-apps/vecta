@@ -6,8 +6,8 @@ import {
   type ProjectState,
 } from "@vecta/application";
 import {
-  ProjectWorkspaceRepository,
-  type PersistenceDatabase,
+  NeonHttpProjectWorkspaceReader,
+  type NeonHttpReadDatabase,
 } from "@vecta/persistence";
 import { requireProjectAccess } from "./project-access";
 import { dbSessionContext } from "../context";
@@ -48,11 +48,11 @@ export interface ProjectViewPayload {
 
 export interface LoadProjectViewDeps {
   /**
-   * Build the workspace loader over the request's database handle. Production
-   * wraps the shared session's `ProjectWorkspaceRepository`; tests inject an
-   * in-memory fake so the loader runs with no real Neon connection.
+   * Build the workspace loader over the request's read handle. Production wraps
+   * the shared session's `NeonHttpProjectWorkspaceReader`; tests inject an
+   * in-memory fake so the loader runs with no real Neon endpoint.
    */
-  readonly workspaceLoaderFor?: (database: PersistenceDatabase) => ProjectWorkspaceLoader;
+  readonly workspaceLoaderFor?: (database: NeonHttpReadDatabase) => ProjectWorkspaceLoader;
 }
 
 export async function loadProjectView(
@@ -62,8 +62,8 @@ export async function loadProjectView(
   const { project, membership } = await requireProjectAccess(context);
   const session = context.get(dbSessionContext);
   const workspaceLoaderFor =
-    deps.workspaceLoaderFor ?? ((database) => new ProjectWorkspaceRepository(database));
-  const workspace = await workspaceLoaderFor(session.database()).load(
+    deps.workspaceLoaderFor ?? ((database) => new NeonHttpProjectWorkspaceReader(database));
+  const workspace = await workspaceLoaderFor(session.read()).load(
     membership.tenantId,
     project.id,
   );

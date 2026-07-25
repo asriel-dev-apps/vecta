@@ -145,14 +145,41 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   (distinct → no cross-surface replay); RFC 9728 metadata at `/.well-known/oauth-protected-resource/mcp`;
   non-POST→405; no ACAO; per-surface `mcp` rate bucket. **249 web-next + 45 persistence tests; bundle 800 KiB
   gzip (~27% of free 3 MB); root `pnpm check` green.** `docs/agents/adr-0012-step5-plan.md` removed (Step 5 done).
-- **NEXT — ADR 0012 Step 6 (CUTOVER — needs the user; a production deploy + user-only secrets, NOT autonomous)**.
-  The whole migration BUILD (Steps 1–5) is done in `apps/web-next`, on the branch, not deployed. Step 6 =
-  **(A) pre-cutover verification** [SSR-over-HTTP smoke + a `wrangler dev` POST-/mcp smoke behind the workerd
-  compat-date toggle; local, needs `.dev.vars`]; **(B) provision prod config/secrets** [see the checklist
-  below]; **(C) the cutover deploy** — deploy `apps/web-next` as the `vecta` worker, verify served bundle hash +
-  login + `/api/health` + `/mcp` metadata, allow ~30 s propagation, then delete `apps/web` and rename
-  `web-next`→`web`. **(D) vision features** (Gantt, dashboard, budget, CSV, member admin, LLM-via-commands) are
-  follow-on work, not the cutover. Real-time = Phase 1 (Cloudflare DO + WebSocket, free) later.
+- **Post-cutover — read-path latency (NOT yet deployed)**. Every screen took ~1 s from click to
+  paint. Cause was round-trip count, not rendering: each `.data` request opened a **fresh Neon WebSocket pool**
+  (TCP+TLS+WS handshake + Postgres startup/auth, unamortisable in a Worker invocation) and then ran **~14
+  sequential queries** — principal + 2 membership reads, the project row, and `ProjectRepository.load`'s
+  `BEGIN` + 9 SELECTs + `COMMIT`. One of those 9 was `audit_events`, which the read model never reads and which
+  grows without bound. Fixed by splitting the transports:
+  - `DbSession` now has **`read()` (Neon SQL-over-HTTP, `neon-http-database.ts`) alongside `database()`** (the WS
+    pool, still required for the write path's interactive `SELECT ... FOR UPDATE`). Reads open no connection; the
+    write pool is opened lazily and a read-only request never touches it.
+  - The workspace read is **one `db.batch(...)`** (`NeonHttpProjectWorkspaceReader`) — header + 7 child queries in
+    a single HTTP request — and `loadPrincipal` batches its 3 reads into one. `audit_events` is out of the read.
+  - Isolation is preserved: `openNeonHttpReadDatabase` sets **`isolationLevel:"RepeatableRead", readOnly:true` on
+    the client**, which Neon sends as `Neon-Batch-*` headers so its proxy opens the batch transaction with them
+    (Drizzle's `batch()` passes no transaction options, so client defaults are what every batch runs under — a
+    `SET TRANSACTION` statement would have been the fragile way to do this).
+  - Queries + row→record mapping are **shared** by both readers (`project-read-queries.ts`,
+    `toProjectDetailRecord`), and `repository.test.ts` asserts the batched reader returns **exactly** what the
+    pool-backed one does against real Postgres, in one batch of 8. Net: ~14 sequential round trips + a WS
+    handshake → **3 HTTP round trips** per navigation.
+  - Also: the app bar gained a **「プロジェクト一覧」back link** (`/projects/:id/*` was a dead end — every tab
+    stayed inside the project and the only other exit was Sign out).
+  - **NOT deployed.** Root `pnpm check` green (domain 32, application 70, persistence 46, web 115, web-next 260).
+    Deploying this is the next user-visible step; verify the served bundle hash after (~30 s propagation).
+  - Deliberately NOT done: hoisting the workspace read to the `/projects/:id` layout so sibling tab clicks skip
+    the fetch entirely. RR would not revalidate the layout loader on a sibling nav (`defaultShouldRevalidate`
+    false: same pathname, same params) — which is exactly the problem: `skipRevalidationOnSelfSave` also keeps it
+    stale after a self-save, so tab-switching would show the pre-edit snapshot. It needs the client state lifted
+    to the layout (the SPA's in-memory tab model) first, which is a real refactor of the optimistic pipeline.
+- **ADR 0012 Step 6 (CUTOVER) — deploy DONE, retire step outstanding.** `https://vecta.tt-dev.workers.dev` serves
+  `apps/web-next` (verified: SSR sign-in page, RR v8 asset graph). Still to do from the runbook: **delete
+  `apps/web` and rename `web-next` → `web`** (both app directories still exist). Retained below for the retire
+  step and for rollback — the runbook's phases (A) pre-cutover verification, (B) prod config/secrets, and (C) the
+  cutover deploy are done; the retire half of (C) is not. **(D) vision features** (Gantt, dashboard, budget, CSV,
+  member admin, LLM-via-commands) are follow-on work, not the cutover. Real-time = Phase 1 (Cloudflare DO +
+  WebSocket, free) later.
 - **Step 6 cutover — full executable runbook (fable-reviewed): `docs/agents/adr-0012-step6-cutover-runbook.md`**
   (phases 0–7: user blockers, R1 principal fix, local smokes, deploy, verify, retire, rollback + risk register).
   User-required inputs (blockers) in brief:

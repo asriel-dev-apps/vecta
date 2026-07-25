@@ -102,6 +102,7 @@ export function fixedAuthenticate(identity: AuthenticatedIdentity): ApiDeps["aut
 
 export function fakeSession(overrides: Partial<DbSession> = {}): DbSession {
   return {
+    read: () => ({}) as never,
     database: () => ({}) as never,
     close: async () => undefined,
     ...overrides,

@@ -6,6 +6,7 @@ import type {
 } from "@vecta/application";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { ProjectReadDatabase } from "./project-read-queries.js";
 import {
   principals,
   projectMemberships,
@@ -109,7 +110,9 @@ export class ProjectAccessRepository {
 }
 
 export class PostgresProjectAccessGrantResolver implements ProjectAccessGrantResolver {
-  constructor(private readonly database: NodePgDatabase<typeof schema>) {}
+  // Read-only, so it accepts either transport — the token surfaces resolve a
+  // grant over the HTTP read database rather than opening the write pool.
+  constructor(private readonly database: ProjectReadDatabase) {}
 
   async resolve(request: ProjectAccessGrantRequest): Promise<ProjectAccessGrant | null> {
     const direct = await this.resolveBySubject(request, request.identity.subject);

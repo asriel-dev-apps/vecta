@@ -1,6 +1,6 @@
 import type { AuthenticatedIdentity, ProjectRole } from "@vecta/application";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import type { PersistenceDatabase } from "./persistence-database.js";
+import type { ProjectReadDatabase } from "./project-read-queries.js";
 import { principals, projectMemberships, projects } from "./schema.js";
 
 /**
@@ -24,7 +24,7 @@ export interface AccessibleProject {
  * by name (then id, since names are not unique) so the result is deterministic.
  */
 export class PostgresProjectListReader {
-  constructor(private readonly database: PersistenceDatabase) {}
+  constructor(private readonly database: ProjectReadDatabase) {}
 
   async listForPrincipal(
     principalId: string,

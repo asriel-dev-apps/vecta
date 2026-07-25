@@ -20,10 +20,9 @@ export interface ProjectListSource {
 }
 
 /**
- * A Neon-backed list source over the shared per-request session (reused by the
- * later Hono surface via persistence). It opens no connection of its own and its
- * `close()` is a no-op: the session's single connection is opened lazily on the
- * first read and closed by the root middleware after the response.
+ * A Neon-backed list source over the shared per-request session's HTTP read
+ * transport (reused by the Hono surface via persistence). It opens no connection
+ * of its own and its `close()` is a no-op.
  */
 export function projectListSourceFromContext(
   context: Readonly<RouterContextProvider>,
@@ -31,7 +30,7 @@ export function projectListSourceFromContext(
   const session = context.get(dbSessionContext);
   return {
     listForPrincipal: (principalId) =>
-      new PostgresProjectListReader(session.database()).listForPrincipal(
+      new PostgresProjectListReader(session.read()).listForPrincipal(
         principalId,
       ),
     close: async () => undefined,
