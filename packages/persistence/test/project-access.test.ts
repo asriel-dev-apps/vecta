@@ -2,7 +2,6 @@ import {
   createProjectCommandAuthorizer,
   ProjectAccessDeniedError,
 } from "@vecta/application";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -13,19 +12,17 @@ import {
   ProjectAccessRepository,
   ProjectRepository,
 } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 describe("PostgreSQL project access", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
   let accessRepository: ProjectAccessRepository;
   let authorizer: ReturnType<typeof createProjectCommandAuthorizer>;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("project_access");
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
     const database = createPersistenceDatabase(client);
     accessRepository = new ProjectAccessRepository(database);
@@ -40,8 +37,7 @@ describe("PostgreSQL project access", () => {
   });
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   it("resolves a provisioned human project editor to an internal audit actor", async () => {

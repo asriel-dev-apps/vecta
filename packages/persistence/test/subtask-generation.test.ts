@@ -1,5 +1,4 @@
 import { createProjectCommandService } from "@vecta/application";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +10,7 @@ import {
   type PersistedProjectRecord,
   type TaskRecord,
 } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 const parentTask = demoProjectRecord.tasks.find((task) => task.parentTaskId === null)!;
 const standardBuildTemplateId = demoProjectRecord.templates.find(
@@ -42,23 +42,19 @@ function span(plan: Readonly<Record<string, number>>): {
 }
 
 describe("subtask template generation (write path + scheduler)", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
   let repository: ProjectRepository;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("subtask_generation");
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
     repository = new ProjectRepository(createPersistenceDatabase(client));
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   beforeEach(async () => {

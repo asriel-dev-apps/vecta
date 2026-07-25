@@ -1,4 +1,3 @@
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -6,6 +5,7 @@ import {
   migratePersistenceDatabase,
   PostgresProjectListReader,
 } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 const TENANT_ID = "20000000-0000-4000-8000-000000000001";
 const PRINCIPAL_ID = "90000000-0000-4000-8000-000000000001";
@@ -15,16 +15,13 @@ const BETA_ID = "10000000-0000-4000-8000-00000000000c";
 const GAMMA_ID = "10000000-0000-4000-8000-00000000000a";
 
 describe("PostgresProjectListReader", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
   let reader: PostgresProjectListReader;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("project_list");
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
     reader = new PostgresProjectListReader(createPersistenceDatabase(client));
   }, 60_000);
@@ -70,8 +67,7 @@ describe("PostgresProjectListReader", () => {
   });
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   it("returns exactly the principal's membership projects, with role and name, sorted by name", async () => {

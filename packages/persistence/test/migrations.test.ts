@@ -1,12 +1,11 @@
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migratePersistenceDatabase } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 describe("persistence migrations", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   const tenantId = "00000000-0000-4000-8000-000000000001";
   const projectId = "10000000-0000-4000-8000-000000000001";
@@ -14,10 +13,8 @@ describe("persistence migrations", () => {
   const taskId = "d0000000-0000-4000-8000-000000000001";
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("migrations");
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
 
     await client.query("insert into tenants (id, name) values ($1, 'Tenant A')", [tenantId]);
@@ -47,8 +44,7 @@ describe("persistence migrations", () => {
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   it("applies the effort-first schema to an empty PostgreSQL database", async () => {

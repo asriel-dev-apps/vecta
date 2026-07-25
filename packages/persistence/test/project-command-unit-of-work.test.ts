@@ -4,7 +4,6 @@ import {
   createProjectCommandService,
   type ProjectTask,
 } from "@vecta/application";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -14,31 +13,28 @@ import {
   PostgresProjectCommandUnitOfWork,
   ProjectRepository,
 } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 const parentTask = demoProjectRecord.tasks.find((task) => task.parentTaskId === null)!;
 const leafTask = demoProjectRecord.tasks.find((task) => task.parentTaskId !== null)!;
 const secondLeaf = demoProjectRecord.tasks.filter((task) => task.parentTaskId !== null)[1]!;
 
 describe("PostgresProjectCommandUnitOfWork", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
   let connectionString: string;
   let repository: ProjectRepository;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    connectionString = started.getConnectionUri();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString });
-    await client.connect();
+    testDatabase = await startTestDatabase("unit_of_work");
+    connectionString = testDatabase.connectionString;
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
     repository = new ProjectRepository(createPersistenceDatabase(client));
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   beforeEach(async () => {
