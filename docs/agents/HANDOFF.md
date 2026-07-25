@@ -96,11 +96,11 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
     - **History is NOT being rewritten** (user chose "protect from here on"). Everything already committed
       stays readable in `git log`, and going public re-exposes it. That is accepted — the point is to stop
       adding, not to un-publish. Do not propose `filter-repo` again unless asked.
-    - **Destination: one private repo holding docs for ALL public projects, structured internally by
-      project** — not a per-project `*-docs`. Name not chosen yet; offer candidates before creating it
-      (see `naming-preferences` — always give several, and romanised Japanese is not the default).
-      Shape: `<repo>/<project>/{adr,design,research,security,operations,agents,reports}/`, with a top-level
-      README explaining how an agent finds the right subtree.
+    - **Destination: `asriel-dev-apps/project-docs`, PRIVATE** (name chosen by the user 2026-07-26) — ONE
+      repo holding docs for ALL public projects, structured internally by project; not a per-project
+      `*-docs`. Shape: `project-docs/<project>/{adr,design,research,security,operations,agents,reports}/`,
+      with a top-level README explaining how an agent finds the right subtree. Clone it beside this repo
+      (`~/ghq/github.com/asriel-dev-apps/project-docs`), the way `../.wbs-private/` already sits beside it.
     - **Technically low-risk: nothing in CI depends on `docs/`.** Verified 2026-07-26 — no reference to
       `docs/` anywhere in `.github/` or `package.json`. The only in-code pointer is a comment,
       `apps/web/app/wbs/cross-project-load.ts:12` → `docs/cross-project-load.md`, which will dangle.
