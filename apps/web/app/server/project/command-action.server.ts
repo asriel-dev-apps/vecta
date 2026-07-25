@@ -1,6 +1,6 @@
 import { data, type RouterContextProvider } from "react-router";
 import { applyCommands } from "./apply-commands.server";
-import { requireProjectAccess } from "./project-access";
+import { requireProjectMembership } from "./project-access";
 import { requirePrincipal } from "../auth/require-principal";
 import { dbSessionContext } from "../context";
 import { CommandBatchSchema, toCommand } from "~/wbs/project-command-contract";
@@ -35,7 +35,10 @@ export async function runCommandAction<K extends SaveKind>(
   kind: K,
 ) {
   const principal = await requirePrincipal(context);
-  const { membership } = await requireProjectAccess(context);
+  // Only the membership is needed to authorize and scope the batch, and the gate
+  // already resolved it from the memoised principal — so the write path reads it
+  // synchronously and never fetches the project row it would only discard.
+  const membership = requireProjectMembership(context);
   const session = context.get(dbSessionContext);
 
   // A malformed JSON body must not 500: JSON syntax errors → 400 (the request is

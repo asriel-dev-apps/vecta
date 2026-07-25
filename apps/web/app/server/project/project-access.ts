@@ -1,19 +1,21 @@
 import type { RouterContextProvider } from "react-router";
+import type { ProjectState } from "@vecta/application";
 import type {
   ProjectMembership,
   TenantMembership,
 } from "../auth/principal-directory";
-import { projectAccessContext } from "../context";
+import { projectMembershipContext, projectWorkspaceContext } from "../context";
 
 /**
  * Project access for the cookie-session surface (ADR 0012 §Decision 2). This
  * module is DB-free on purpose — the same split as the principal directory — so
  * the access gate and its tests can depend on the shapes and the reader seam
- * without importing the persistence layer. The Neon-backed {@link ProjectReader}
- * lives in `project-reader.neon.server.ts`; tests pass a fake.
+ * without importing the persistence layer. The Neon-backed
+ * {@link ProjectWorkspaceLoader} is `@vecta/persistence`'s batched HTTP reader,
+ * wired in by the gate middleware; tests pass a fake.
  */
 
-/** The project row the gate fetches once access is granted (minimal shell fields). */
+/** The project row a loader/component reads (minimal shell fields). */
 export interface ProjectRow {
   readonly id: string;
   readonly tenantId: string;
@@ -39,12 +41,18 @@ export interface ResolvedProjectAccess {
   readonly membership: ProjectMembershipView;
 }
 
-/** Fetch a single project row scoped by its owning tenant. */
-export interface ProjectReader {
-  loadProject(
+/** The workspace snapshot a project route reads: current state + its revision. */
+export interface ProjectWorkspaceRecord {
+  readonly revision: bigint;
+  readonly current: ProjectState;
+}
+
+/** The persistence seam the gate reads the workspace through (fakeable in tests). */
+export interface ProjectWorkspaceLoader {
+  load(
     tenantId: string,
     projectId: string,
-  ): Promise<ProjectRow | null>;
+  ): Promise<ProjectWorkspaceRecord | null>;
 }
 
 // Canonical lowercase only (no `i` flag): Postgres emits lowercase uuids, and
@@ -65,14 +73,50 @@ export function isProjectId(value: string | undefined): value is string {
 }
 
 /**
- * Read the resolved project access for a `/projects/:id` loader/action. The
- * layout's access middleware guarantees the membership check has already passed
- * and installs the memoised loader on {@link projectAccessContext}; this awaits
- * it, so parallel loaders share a single project-row fetch.
+ * The principal's membership in the current project — SYNCHRONOUS, because it is
+ * derived entirely from the already-memoised principal. The gate middleware puts
+ * it on the context *after* the fail-closed membership check, so reaching this at
+ * all means access was granted. Costs no database round trip, which is why the
+ * command action (which needs only the role and the tenant/project ids) uses it
+ * instead of {@link requireProjectAccess}.
+ */
+export function requireProjectMembership(
+  context: Readonly<RouterContextProvider>,
+): ProjectMembershipView {
+  return context.get(projectMembershipContext);
+}
+
+/**
+ * The current project's workspace — the ONE batched read every project route
+ * shares. The gate installs it as a memoised thunk, so the layout loader and its
+ * child loader (which React Router runs in parallel) resolve a single round trip
+ * between them, and a route that never asks issues no query at all.
+ */
+export function requireProjectWorkspace(
+  context: Readonly<RouterContextProvider>,
+): Promise<ProjectWorkspaceRecord> {
+  return context.get(projectWorkspaceContext)();
+}
+
+/**
+ * Read the resolved project access for a `/projects/:id` loader/component. The
+ * layout's access middleware guarantees the membership check has already passed;
+ * the project row itself comes out of the shared workspace read rather than a
+ * query of its own, so asking for it costs no round trip beyond the one the
+ * route was going to make anyway (the header the workspace batch already
+ * fetches IS the project row).
  */
 export async function requireProjectAccess(
   context: Readonly<RouterContextProvider>,
 ): Promise<ResolvedProjectAccess> {
-  const loadAccess = context.get(projectAccessContext);
-  return loadAccess();
+  const membership = requireProjectMembership(context);
+  const workspace = await requireProjectWorkspace(context);
+  return {
+    project: {
+      id: workspace.current.id,
+      tenantId: membership.tenantId,
+      name: workspace.current.name,
+    },
+    membership,
+  };
 }

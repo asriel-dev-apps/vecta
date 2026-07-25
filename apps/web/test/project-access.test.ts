@@ -8,9 +8,13 @@ import {
 } from "~/server/project/project-list.server";
 import {
   requireProjectAccess,
-  type ProjectReader,
+  requireProjectMembership,
   type ProjectRow,
+  type ProjectWorkspaceLoader,
+  type ProjectWorkspaceRecord,
 } from "~/server/project/project-access";
+import { createDemoProject } from "./fixtures/demo-project";
+import { loadProjectView } from "~/server/project/load-project-view.server";
 import { appContext, principalContext } from "~/server/context";
 import { fakeEnv } from "./helpers";
 
@@ -29,6 +33,18 @@ const PROJECT_ROW: ProjectRow = {
   id: PROJECT_ID,
   tenantId: TENANT_ID,
   name: "Project 1",
+};
+
+// The gate no longer fetches the project row on its own: the workspace batch's
+// header IS that row, so the fake workspace carries the identity the resolved
+// `project` must be derived from.
+const WORKSPACE: ProjectWorkspaceRecord = {
+  revision: 5n,
+  current: {
+    ...createDemoProject({ parentCount: 1, subtasksPerParent: 1, memberCount: 1 }),
+    id: PROJECT_ID,
+    name: "Project 1",
+  },
 };
 
 function principalWith(
@@ -72,7 +88,7 @@ interface GateRun {
   readonly context: RouterContextProvider;
   readonly childLoader: ReturnType<typeof vi.fn>;
   readonly loadPrincipal: ReturnType<typeof vi.fn>;
-  readonly loadProject: ReturnType<typeof vi.fn>;
+  readonly loadWorkspace: ReturnType<typeof vi.fn>;
 }
 
 /**
@@ -86,23 +102,23 @@ async function runGate(
   params: Record<string, string | undefined>,
 ): Promise<GateRun> {
   const loadPrincipal = vi.fn(async () => principal);
-  const loadProject = vi.fn(async () => PROJECT_ROW);
+  const loadWorkspace = vi.fn(async () => WORKSPACE);
   const childLoader = vi.fn(async () => new Response(null));
 
   const context = new RouterContextProvider();
   context.set(appContext, { env: fakeEnv(), ctx });
   context.set(principalContext, loadPrincipal);
 
-  const reader: ProjectReader = { loadProject };
-  const gate = createProjectAccessMiddleware({ readerFor: () => reader });
+  const loader: ProjectWorkspaceLoader = { load: loadWorkspace };
+  const gate = createProjectAccessMiddleware({ workspaceLoaderFor: () => loader });
 
   try {
     await gate(middlewareArgs(context, params), childLoader);
     // Framework proceeds to the child loaders once the gate resolves.
     await childLoader();
-    return { denied: false, thrown: undefined, context, childLoader, loadPrincipal, loadProject };
+    return { denied: false, thrown: undefined, context, childLoader, loadPrincipal, loadWorkspace };
   } catch (thrown) {
-    return { denied: true, thrown, context, childLoader, loadPrincipal, loadProject };
+    return { denied: true, thrown, context, childLoader, loadPrincipal, loadWorkspace };
   }
 }
 
@@ -155,9 +171,9 @@ describe("project access gate (middleware)", () => {
     expect(nonExistent.denied).toBe(true);
     expect(thrownStatus(nonMember.thrown)).toBe(404);
     expect(thrownStatus(nonExistent.thrown)).toBe(404);
-    // Neither reached the project-row fetch: the deny path touches no project DB.
-    expect(nonMember.loadProject).toHaveBeenCalledTimes(0);
-    expect(nonExistent.loadProject).toHaveBeenCalledTimes(0);
+    // Neither reached the workspace read: the deny path touches no project DB.
+    expect(nonMember.loadWorkspace).toHaveBeenCalledTimes(0);
+    expect(nonExistent.loadWorkspace).toHaveBeenCalledTimes(0);
     // Identical by payload shape too (not just status), so no existence oracle
     // can leak even if a future refactor diverges one deny site.
     expect((nonMember.thrown as { data: unknown }).data).toBeNull();
@@ -169,9 +185,9 @@ describe("project access gate (middleware)", () => {
 
     expect(run.denied).toBe(true);
     expect(thrownStatus(run.thrown)).toBe(404);
-    // Rejected before the principal load and before any project-row fetch.
+    // Rejected before the principal load and before any workspace read.
     expect(run.loadPrincipal).toHaveBeenCalledTimes(0);
-    expect(run.loadProject).toHaveBeenCalledTimes(0);
+    expect(run.loadWorkspace).toHaveBeenCalledTimes(0);
   });
 
   it("treats a non-canonical (uppercase) UUID as malformed: 404 before any principal load", async () => {
@@ -185,7 +201,7 @@ describe("project access gate (middleware)", () => {
     expect(run.denied).toBe(true);
     expect(thrownStatus(run.thrown)).toBe(404);
     expect(run.loadPrincipal).toHaveBeenCalledTimes(0);
-    expect(run.loadProject).toHaveBeenCalledTimes(0);
+    expect(run.loadWorkspace).toHaveBeenCalledTimes(0);
   });
 
   it("rejects a missing id with a 404 before any principal load", async () => {
@@ -196,7 +212,7 @@ describe("project access gate (middleware)", () => {
     expect(run.loadPrincipal).toHaveBeenCalledTimes(0);
   });
 
-  it("resolves ONE project-row fetch under two parallel requireProjectAccess awaits", async () => {
+  it("resolves ONE workspace read under two parallel requireProjectAccess awaits", async () => {
     const run = await runGate(principalWith("EDITOR"), { id: PROJECT_ID });
     expect(run.denied).toBe(false);
 
@@ -208,7 +224,69 @@ describe("project access gate (middleware)", () => {
     expect(a.project).toEqual(PROJECT_ROW);
     expect(b.project).toEqual(PROJECT_ROW);
     // Memoised thunk: parallel loaders share a single round trip.
-    expect(run.loadProject).toHaveBeenCalledTimes(1);
+    expect(run.loadWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEADLINE: the membership is readable with NO database round trip", async () => {
+    // The round-trip reduction rests on this: the write path (and anything else
+    // that needs only the role + ids) reads the membership straight off the
+    // context, so it never triggers the workspace read at all.
+    const run = await runGate(principalWith("EDITOR"), { id: PROJECT_ID });
+
+    const membership = requireProjectMembership(run.context);
+
+    expect(membership).toEqual({
+      tenantId: TENANT_ID,
+      projectId: PROJECT_ID,
+      projectRole: "EDITOR",
+      tenantRole: "MEMBER",
+    });
+    expect(run.loadWorkspace).toHaveBeenCalledTimes(0);
+  });
+
+  it("HEADLINE: the resolved project row and the route's view share ONE read", async () => {
+    // The round-trip reduction itself. Before the fold the project row was a
+    // query of its own, awaited before the workspace could even be requested, so
+    // a document request cost three SEQUENTIAL Neon round trips: principal, then
+    // project row, then workspace. Now the row comes out of the workspace
+    // header, so both consumers resolve a single read and the request costs two.
+    const run = await runGate(principalWith("OWNER"), { id: PROJECT_ID });
+
+    const [access, view] = await Promise.all([
+      requireProjectAccess(run.context),
+      loadProjectView(run.context),
+    ]);
+
+    expect(access.project).toEqual(PROJECT_ROW);
+    expect(view.revision).toBe("5");
+    expect(run.loadWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes the workspace read to the membership's tenant, never the id alone", async () => {
+    const run = await runGate(principalWith("OWNER"), { id: PROJECT_ID });
+
+    await requireProjectAccess(run.context);
+
+    expect(run.loadWorkspace).toHaveBeenCalledWith(TENANT_ID, PROJECT_ID);
+  });
+
+  it("fails closed with the same opaque 404 when the workspace row is gone", async () => {
+    // Membership exists but the project was deleted between the check and the
+    // read: it must present exactly as a non-member does, payload included.
+    const loadPrincipal = vi.fn(async () => principalWith("OWNER"));
+    const context = new RouterContextProvider();
+    context.set(appContext, { env: fakeEnv(), ctx });
+    context.set(principalContext, loadPrincipal);
+    const gate = createProjectAccessMiddleware({
+      workspaceLoaderFor: () => ({ load: async () => null }),
+    });
+
+    await gate(middlewareArgs(context, { id: PROJECT_ID }), async () => new Response(null));
+
+    await expect(requireProjectAccess(context)).rejects.toMatchObject({
+      init: { status: 404 },
+      data: null,
+    });
   });
 });
 
