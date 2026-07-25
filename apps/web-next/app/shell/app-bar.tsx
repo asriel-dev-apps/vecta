@@ -193,7 +193,12 @@ function BrandLockup() {
  */
 function BackToProjects() {
   return (
-    <Link to="/projects" className="app-bar__back" data-testid="nav-projects">
+    <Link
+      to="/projects"
+      prefetch="intent"
+      className="app-bar__back"
+      data-testid="nav-projects"
+    >
       <svg
         className="app-bar__back-chevron"
         viewBox="0 0 16 16"
@@ -238,8 +243,22 @@ function ProjectNav() {
         <NavLink
           key={to}
           to={to}
+          // Every tab click is a `.data` round trip (the access gate has to
+          // re-run, and each screen reads the workspace fresh — the layout can't
+          // hold it, see the port notes). `intent` spends the hover/focus time
+          // that already precedes a click on fetching it, so by the time the
+          // pointer lands the payload is usually cached and the switch is
+          // instant. Touch and keyboard-Enter still pay it — that is what the
+          // layout's pending indicator is for.
+          prefetch="intent"
           data-testid={testId}
-          className={({ isActive }) => `nav-tab${isActive ? " nav-tab--active" : ""}`}
+          // `isPending` is the tab you clicked while its data is still in flight.
+          // Marking it — rather than a global spinner — puts the feedback exactly
+          // where the pointer already is, and keeps the current screen on screen
+          // instead of blanking it.
+          className={({ isActive, isPending }) =>
+            `nav-tab${isActive ? " nav-tab--active" : ""}${isPending ? " nav-tab--pending" : ""}`
+          }
         >
           {label}
         </NavLink>

@@ -1,5 +1,5 @@
 import type { ProjectRole } from "@vecta/application";
-import { Link, type LinksFunction } from "react-router";
+import { Link, useNavigation, type LinksFunction } from "react-router";
 import type { Route } from "./+types/projects";
 import { requirePrincipal } from "~/server/auth/require-principal";
 import { loadProjectList } from "~/server/project/project-list.server";
@@ -76,8 +76,25 @@ function ProjectCard({
   readonly name: string;
   readonly role: ProjectRole;
 }) {
+  const to = `/projects/${id}`;
+  // Opening a project is the heaviest navigation in the app, so say which card is
+  // opening rather than leaving the list looking inert. `Link` has no `isPending`
+  // of its own (that is a `NavLink` affordance), so it comes off the pending
+  // location — which is the card's own path, or a route beneath it once the index
+  // route redirects on to `/wbs`.
+  const navigation = useNavigation();
+  const pendingPath = navigation.location?.pathname;
+  const opening =
+    pendingPath !== undefined && (pendingPath === to || pendingPath.startsWith(`${to}/`));
   return (
-    <Link to={`/projects/${id}`} className="project-card" data-testid="project-card">
+    <Link
+      to={to}
+      // Spend the hover that already precedes the click on fetching the payload.
+      prefetch="intent"
+      className={`project-card${opening ? " project-card--opening" : ""}`}
+      aria-busy={opening || undefined}
+      data-testid="project-card"
+    >
       <VectorMotif className="project-card__motif" />
       <span className="project-card__role">{ROLE_LABEL[role]}</span>
       <h2 className="project-card__name">{name}</h2>

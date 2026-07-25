@@ -1192,6 +1192,33 @@ body {
 .nav-tab--active { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 .nav-tab--active:hover { color: var(--ink); border-bottom-color: var(--accent); }
 
+/* The tab you clicked, while its data is still in flight. The accent rail slides
+   in from the left as a pure "something is happening" signal — deliberately NOT
+   a progress estimate, since we don't know the duration. Prefetch-on-intent means
+   most clicks never reach this state; it exists for touch and keyboard-Enter. */
+.nav-tab--pending { color: var(--ink); }
+.nav-tab--pending::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+  animation: nav-tab-pending 900ms ease-out infinite;
+}
+.nav-tab { position: relative; }
+
+@keyframes nav-tab-pending {
+  from { transform: scaleX(0); opacity: 0.9; }
+  to { transform: scaleX(1); opacity: 0.15; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-tab--pending::after { animation: none; opacity: 0.55; }
+}
+
 /* ── Master edit screen (Design 0003 §E-2) ──────────────────────────── */
 .master-shell { overflow-y: auto; }
 
@@ -1656,6 +1683,28 @@ body {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--ring), 0 14px 32px rgba(16, 20, 28, 0.11);
+}
+
+/* The card whose project is opening. It holds the hover lift (the pointer is
+   still on it) and grows an accent rail along the bottom edge — same vocabulary
+   as the nav tab's pending state, so "waiting" reads the same everywhere. */
+.project-card--opening {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+}
+.project-card--opening::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--accent);
+  transform-origin: left;
+  animation: nav-tab-pending 900ms ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-card--opening::after { animation: none; opacity: 0.55; }
 }
 
 /* Text/affordance content paints over the corner watermark: all card children
