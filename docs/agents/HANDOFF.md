@@ -72,6 +72,26 @@ mechanical work; git state changes go to git-haiku. See `~/.claude/skills/delega
 
 ## Active work — in this order
 
+0. **DATED, cheap: set `minimumReleaseAge: 10080` in `pnpm-workspace.yaml` — on or after 2026-07-29.**
+   User decided the value (7 days) on 2026-07-26; only the timing is deferred. **Do not set it earlier**:
+   measured that day, `pnpm install --frozen-lockfile` fails `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`
+   (exit 1) on four transitive entries the current lockfile pins — `fast-uri@3.1.4` (2026-07-19),
+   `p-map@7.0.6` (07-20), `prettier@3.9.6` (07-21), `@cloudflare/codemode@0.4.4` (07-22). They age past
+   seven days by 07-29, at which point the value lands with **no lockfile diff at all**, which is the whole
+   point of waiting — re-resolving the lockfile to force it would churn the dependency tree for no security
+   gain. Procedure: add the key, run `pnpm install --frozen-lockfile` (must exit 0), then `pnpm check`, then
+   PR as usual. If a NEW fresh transitive has appeared by then, wait again rather than re-resolving.
+   - **The unit is MINUTES**, and pnpm 11's built-in default is 1440 (one day) — so today's posture is a
+     default nobody chose, not an absence of protection. 10080 = 7 days.
+   - **`minimumReleaseAgeExclude` entries carrying `@version` are version-specific in practice**, contrary
+     to the docs' "matched by package name, applies to all versions". Measured: `@cloudflare/codemode@0.4.3`
+     is in the list and `0.4.4` was still rejected. All six existing entries carry versions, so **do not read
+     them as "this package is exempt"** — they exempt exactly the pinned version.
+   - `ignore-scripts` needs NO change and should not be added: pnpm 10+ blocks dependency lifecycle scripts
+     by default and `allowBuilds` is the explicit allowlist. `node_modules/.modules.yaml` shows
+     `ignoredBuilds: []` / `pendingBuilds: []`, i.e. every dependency with a build script has an explicit
+     true/false decision. A blanket `ignore-scripts=true` would be strictly worse — it would also break
+     esbuild / workerd / sharp, which legitimately need to place binaries.
 1. **LLM-driven operation via the command core** (ADR 0012 "(D) vision features"). **Requirements not yet
    taken** — do NOT start implementing. Open questions for the user: what should it be able to do (read-only
    Q&A over the WBS? propose edits? apply them?), who approves a proposed change, and whether it runs in the
