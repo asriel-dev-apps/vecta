@@ -103,6 +103,34 @@ test("passes when the served bundle, health, and both MCP surfaces are correct",
   assert.match(result.stdout, /deployment_verified/u);
 });
 
+test("follows the sign-in redirect, since / answers 302 to an unauthenticated caller", async () => {
+  // How this broke in production: CI is never signed in, so `/` is a 302 with no
+  // body, and the check reported "no /assets/* references" against an otherwise
+  // perfectly good deployment.
+  const result = await verify({
+    routes: (baseUrl) =>
+      healthyRoutes(baseUrl, {
+        "/": { status: 302, headers: { location: "/login" } },
+        "/login": document(LIVE_ASSET),
+      }),
+  });
+  assert.match(result.stdout, /deployment_verified/u);
+});
+
+test("refuses to follow a redirect off the deployed origin", async () => {
+  // The reason it cannot just follow blindly: the sign-in flow ends at the
+  // identity provider, and we must not start asserting against Google's HTML.
+  await expectFailure(
+    {
+      routes: (baseUrl) =>
+        healthyRoutes(baseUrl, {
+          "/": { status: 302, headers: { location: "https://accounts.example.test/o/oauth2" } },
+        }),
+    },
+    /redirected off-origin/u,
+  );
+});
+
 test("fails when the edge still serves the previous bundle", async () => {
   // The trap this script exists for: `wrangler deploy` reports success and a new
   // version id, and users keep getting the old app.
