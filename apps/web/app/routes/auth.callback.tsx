@@ -9,6 +9,7 @@ import { oidcConfigFromEnv } from "~/server/auth/oidc-config";
 import { clearOidcTx } from "~/server/auth/oidc-tx.server";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
 import { appContext, dbSessionContext } from "~/server/context";
+import { NoticeScreen } from "~/shell/notice-screen";
 
 // Module-scoped so the remote JWKS is fetched and cached per isolate across
 // logins (the verifier builds `createRemoteJWKSet` lazily on first `verify`).
@@ -78,11 +79,15 @@ const SCREENS: Record<CallbackScreen, { title: string; body: string }> = {
 
 export default function AuthCallback({ loaderData }: Route.ComponentProps) {
   const screen = SCREENS[loaderData.screen];
+  // The same notice surface the error boundary uses, so a refused sign-in looks
+  // like part of VECTA rather than an unstyled failure. The status is not shown:
+  // these screens are addressed to a person mid-sign-in, and the number would
+  // only add noise (it is still on the response).
   return (
-    <main>
-      <h1>{screen.title}</h1>
-      <p>{screen.body}</p>
-      <a href="/login">サインイン画面へ</a>
-    </main>
+    <NoticeScreen
+      title={screen.title}
+      body={screen.body}
+      action={{ href: "/login", label: "サインイン画面へ" }}
+    />
   );
 }

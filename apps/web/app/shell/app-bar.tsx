@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Form, Link, NavLink } from "react-router";
+import { GanttGlyph } from "./brand";
 
 // ADR 0012 Step 4c-2 — the per-project tier-1 app bar, ported from the SPA's
 // `apps/web/src/AppRoot.tsx` `app-bar` (BrandLockup + Gantt glyph, the three-way
@@ -146,29 +147,6 @@ export function ThemeToggle({
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * VECTA's signature glyph: a Gantt/schedule mark — three staggered,
- * decreasing-opacity accent bars, because the product IS a time-phased WBS.
- * `currentColor` picks up the accent from the surface that renders it.
- */
-function GanttGlyph({ className }: { readonly className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 18 18"
-      width="18"
-      height="18"
-      role="img"
-      aria-label="VECTA"
-      focusable="false"
-    >
-      <rect x="1" y="3.5" width="12" height="3" rx="1.5" fill="currentColor" />
-      <rect x="4" y="7.5" width="10" height="3" rx="1.5" fill="currentColor" opacity="0.72" />
-      <rect x="7" y="11.5" width="9" height="3" rx="1.5" fill="currentColor" opacity="0.46" />
-    </svg>
   );
 }
 

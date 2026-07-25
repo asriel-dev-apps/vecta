@@ -1685,6 +1685,90 @@ body {
   box-shadow: var(--ring), 0 14px 32px rgba(16, 20, 28, 0.11);
 }
 
+/* ── Notice screen (errors, refused sign-in, 404) ────────────────────
+   The page the app shows instead of a workspace. It used to be unstyled markup,
+   which read as "the site is broken" even for a routine 404, so it now carries
+   the same panel surface, hairline, type scale, and brand lockup as everything
+   else, and inherits the light/dark tokens. Centred and narrow: there is one
+   thing to read and one thing to do. */
+.notice-screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.notice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 440px;
+  padding: clamp(32px, 6vw, 48px) clamp(24px, 5vw, 40px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(16, 20, 28, 0.04);
+}
+
+.notice-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+.notice-lockup__mark { display: block; }
+.notice-lockup__wordmark {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  color: var(--ink);
+}
+
+/* The status number is context, not the message — sized and coloured to be
+   findable when reporting a problem and ignorable otherwise. */
+.notice-status {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.notice-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.notice-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+.notice-action {
+  margin-top: 10px;
+  padding: 9px 18px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+.notice-action:hover { border-color: var(--accent); background: var(--accent-soft); }
+.notice-action:focus-visible { outline: none; box-shadow: var(--ring); }
+
 /* The card whose project is opening. It holds the hover lift (the pointer is
    still on it) and grows an accent rail along the bottom edge — same vocabulary
    as the nav tab's pending state, so "waiting" reads the same everywhere. */

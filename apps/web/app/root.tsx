@@ -7,10 +7,19 @@ import {
   Scripts,
   ScrollRestoration,
   useRouteError,
+  type LinksFunction,
 } from "react-router";
 import type { Route } from "./+types/root";
 import { appContext, dbSessionContext } from "~/server/context";
 import { createDbSession } from "~/server/db-session.server";
+import { NoticeScreen } from "~/shell/notice-screen";
+import appStyles from "~/wbs/styles.css?url";
+
+// Linked from the ROOT, not just from each screen, so the error boundary is
+// styled no matter which route failed — an error thrown before a leaf route's
+// own `links` are applied used to leave an unstyled white page. React Router
+// dedupes the identical href against the screens that also link it.
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: appStyles }];
 
 /**
  * Root middleware (ADR 0012 §4-pre): install a per-request database session and
@@ -65,18 +74,44 @@ export default function App() {
   return <Outlet />;
 }
 
-// Last-resort backstop: any unhandled throw (loader/render) renders this clean
-// page inside `Layout` instead of a blank document. Kept intentionally minimal.
+/**
+ * Last-resort backstop: any unhandled throw (loader/render) renders inside
+ * `Layout` instead of a blank document.
+ *
+ * The copy is split by what the user can actually do about it. A 404 is
+ * routine — the project link is stale, or it is not theirs (the access gate
+ * returns 404 rather than 403 on purpose, so a denial and a nonexistent project
+ * are indistinguishable). A 5xx or an unexpected throw is ours, and the only
+ * useful advice is to try again. Nothing here reveals which of those a 404 was,
+ * and no error detail reaches the page.
+ */
 export function ErrorBoundary() {
   const error = useRouteError();
-  const message = isRouteErrorResponse(error)
-    ? "お探しのページを表示できませんでした。"
-    : "予期しないエラーが発生しました。時間をおいて、もう一度お試しください。";
+  const routeError = isRouteErrorResponse(error) ? error : null;
+  const notice =
+    routeError?.status === 404
+      ? {
+          title: "ページが見つかりません",
+          body: "リンクが古いか、このアカウントからは開けないプロジェクトです。プロジェクト一覧からお探しください。",
+          action: { href: "/projects", label: "プロジェクト一覧へ" },
+        }
+      : routeError !== null
+        ? {
+            title: "表示できませんでした",
+            body: "このページを開けませんでした。時間をおいて、もう一度お試しください。",
+            action: { href: "/projects", label: "プロジェクト一覧へ" },
+          }
+        : {
+            title: "予期しないエラーが発生しました",
+            body: "処理を完了できませんでした。時間をおいて、もう一度お試しください。",
+            action: { href: "/", label: "最初から開き直す" },
+          };
   return (
-    <main>
-      <h1>エラーが発生しました</h1>
-      <p>{message}</p>
-      <a href="/">トップへ戻る</a>
-    </main>
+    <NoticeScreen
+      title={notice.title}
+      body={notice.body}
+      action={notice.action}
+      {...(routeError === null ? {} : { status: routeError.status })}
+    />
   );
 }
