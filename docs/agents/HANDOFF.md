@@ -166,18 +166,26 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
     handshake → **3 HTTP round trips** per navigation.
   - Also: the app bar gained a **「プロジェクト一覧」back link** (`/projects/:id/*` was a dead end — every tab
     stayed inside the project and the only other exit was Sign out).
-  - **Deployed** (worker version `60a2a77c`). Root `pnpm check` green (domain 32, application 70, persistence 46,
-    web 115, web-next 260). Post-deploy verification done for what needs no session: every served
-    `/assets/*` matches `apps/web-next/build/client/assets/` (the stylesheet hash moved `BDGuI7g-`→`C5HNQwdV`,
-    proving the new bundle is live), `/api/health` 200, `/.well-known/oauth-protected-resource/mcp` 200 with
-    `resource: https://vecta.tt-dev.workers.dev/mcp`, unauth `POST /mcp` 401 + `WWW-Authenticate
-    resource_metadata`. **Still owed (needs a browser session): runbook Phase 5.4 login round-trip, 5.5 SSR
-    no-flash view-source of `/projects/<id>/wbs`, 5.6 one benign reversible write.** Existing cookie sessions
-    survive (SESSION_SECRET untouched), so no forced re-login.
-  - **The latency win is derived from round-trip counts, not measured in prod.** Confirm by clicking through;
-    if it is still slow the next suspects are Neon free-tier scale-to-zero (first query after ~5 min idle) and
-    the remaining 3rd round trip (the access gate's project-row read, which the workspace header already
-    carries — merging them touches security-reviewed code, so it was left alone).
+  - **Deployed and fully verified.** The credential-free checks (asset graph vs. build, `/api/health`, RFC 9728
+    metadata `resource`, unauth `POST /mcp` 401) are now codified in `.github/scripts/verify-deployment.mjs` and
+    run on every deploy. The three that need a browser session — login round trip, SSR no-flash, one write —
+    were confirmed by the user on 2026-07-26. **All of runbook Phase 5 is closed.**
+  - **The remaining ~200 ms has a floor we cannot move**: the Neon project is in **`ap-southeast-1` (Singapore)**
+    and a Neon project's region is fixed at creation. Tokyo↔Singapore is ~70–90 ms per round trip, so 3 round
+    trips ≈ 210 ms. **Neon has no Tokyo region** (AWS: Asia is Singapore and Sydney only), so there is nowhere
+    closer to move. This is also the arithmetic that confirms the original diagnosis: ~14 round trips × ~70 ms
+    ≈ the 1 s that was reported. Options, none of them free wins:
+    **(a)** 3 → 2 round trips by folding the access gate's project-row read into the workspace batch (the
+    workspace header already carries the project row) — best value, but it touches security-reviewed gate code.
+    **(b)** Cloudflare `placement` to run the Worker beside the DB — free and one line, but it trades 3 DB
+    round trips for 1 user round trip, so at 3 it barely wins and **after (a) it is a wash**; they do not stack.
+    **(c)** 1 round trip by resolving principal + membership + project + workspace in a single statement — the
+    theoretical floor (~70 ms), much larger change.
+    Prefetch-on-intent (below) already hides all of this on hover, which is why none of these is urgent.
+  - **Prefetch-on-intent** (`8358635`): the nav tabs, the back link, and the project cards carry
+    `prefetch="intent"`, so the round trip happens during the hover that precedes a click and the switch feels
+    immediate. The clicks it cannot cover (touch, keyboard Enter) get a pending affordance instead of a frozen
+    screen — `isPending` on the tab, the pending location on the card, both growing the same accent rail.
   - Deliberately NOT done: hoisting the workspace read to the `/projects/:id` layout so sibling tab clicks skip
     the fetch entirely. RR would not revalidate the layout loader on a sibling nav (`defaultShouldRevalidate`
     false: same pathname, same params) — which is exactly the problem: `skipRevalidationOnSelfSave` also keeps it
