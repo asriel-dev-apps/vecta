@@ -27,13 +27,13 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   **`13c29cb5`** = latest G-1 deploy). Auth = Google OIDC; persistence = Neon serverless
   (`DATABASE_URL` secret). After a deploy, allow **~30 s propagation** before the served
   `index-*.js` hash matches the build (verify the hash, not just the version id).
-- **DB schema at migration 0005** (Neon, prod): `tasks` model + `members` + project-scoped masters
+- **DB schema at migration 0006** (Neon, prod; 7 applied): `tasks` model + `members` + project-scoped masters
   `processes`/`products` + `subtask_templates`; review/change refs and `daily_plan_locked` dropped.
 - **Prod project holds 48 synthetic test tasks** (8 phases × 5 subtasks) + 8 processes / 6 products /
   6 members / 2 default templates / 32 deps (all generic "Phase A"/"Product 1"/"Member 01"); admin
   membership intact (revision 11). Replaced the earlier junk stubs.
-- Full gate green on the branch (domain 32, application 67, persistence 34, web 112); CI (`ci.yml`,
-  checks-only) runs on every branch push + PRs and is green on Actions.
+- Full gate green (domain 32, application 70, persistence 46, web 264, operations 17). `ci.yml`
+  (checks-only) runs on every push + PRs; `deploy.yml` deploys `main`.
 
 ## Active work / backlog
 
@@ -195,9 +195,12 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   gate), materializes config into the BUILD output (never the tracked `wrangler.jsonc`), deploys, then runs
   `.github/scripts/verify-deployment.mjs` — the served asset graph vs. the build (a version id does NOT prove
   users got the new bundle), `/api/health`, the RFC 9728 metadata `resource`, and the unauth `POST /mcp` 401
-  challenge. **Blocked on the user creating the GitHub Environment `production` secret + vars** (listed in
-  `release-and-rollback.md`); until then merging to `main` runs the deploy job and it fails at wrangler.
-  **The branch is still not merged to `main`** — do that after the vars exist.
+  challenge. **Live**: the branch is merged (PR #29), GitHub Environment `production` holds the token + 13
+  variables, and the environment has **required reviewers** — so a merge queues a deploy that a human must
+  approve in Actions. Three things broke on the first run and are fixed: the lockfile was not regenerated for
+  the `apps/web-next`→`apps/web` rename; `worker-configuration.d.ts` depended on a local `.dev.vars`
+  (`types:worker` now passes `--env-file worker-types.env`, which REPLACES that default); and the post-deploy
+  check did not follow `/`'s 302 to `/login` (it now follows same-origin redirects only).
 - **ADR 0012 debt** (carried, not blocking):
   - **web-next Neon-reader debt**: `apps/web` has a direct `drizzle-orm` dep + two thin Neon read-seams that
     import persistence schema/conn: `app/server/auth/principal-directory.neon.server.ts` and
@@ -211,7 +214,12 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
     422s and the queue is erased. Low-probability. Follow-up fix = chunk the drain at the cap (successive
     drains) rather than let it grow unbounded (`app/wbs/save-queue.ts` pending-append).
   - **Local dev**: real login needs `.dev.vars` (OIDC client secret + `SESSION_SECRET`) + the workerd
-    compat-date toggle noted under Step 1.
+    compat-date toggle noted under Step 1. After the 2026-07-25 Neon password rotation, `.dev.vars`'s
+    `DATABASE_URL` is stale if it ever held a real value — local dev will fail to connect until it is updated
+    (prod is unaffected; its secret was rotated). `wrangler types` no longer reads it (see `worker-types.env`).
+  - **Repo leftovers from the SPA era**: the GitHub `staging` Environment and the `GOOGLE_CLIENT_ID` /
+    `PRODUCTION_TENANT_ID` / `PRODUCTION_PROJECT_ID` variables are unreferenced by `deploy.yml`. Deleting the
+    environment is irreversible, so it was left for the user to decide.
   - **SSR-over-HTTP smoke (from 4a)**: 4a proved the SSR grid via `renderToString` (no-DOM) + bundle grep,
     NOT a live HTTP request (the root middleware's eager `DATABASE_URL` + the auth gate blocked a headless
     curl). Do a one-time local run behind the compat-date toggle, and add to the deploy check:
