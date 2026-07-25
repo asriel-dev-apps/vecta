@@ -183,47 +183,29 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
     false: same pathname, same params) — which is exactly the problem: `skipRevalidationOnSelfSave` also keeps it
     stale after a self-save, so tab-switching would show the pre-edit snapshot. It needs the client state lifted
     to the layout (the SPA's in-memory tab model) first, which is a real refactor of the optimistic pipeline.
-- **ADR 0012 Step 6 (CUTOVER) — deploy DONE, retire step outstanding.** `https://vecta.tt-dev.workers.dev` serves
-  `apps/web-next` (verified: SSR sign-in page, RR v8 asset graph). Still to do from the runbook: **delete
-  `apps/web` and rename `web-next` → `web`** (both app directories still exist). Retained below for the retire
-  step and for rollback — the runbook's phases (A) pre-cutover verification, (B) prod config/secrets, and (C) the
-  cutover deploy are done; the retire half of (C) is not. **(D) vision features** (Gantt, dashboard, budget, CSV,
-  member admin, LLM-via-commands) are follow-on work, not the cutover. Real-time = Phase 1 (Cloudflare DO +
-  WebSocket, free) later.
-- **Step 6 cutover — full executable runbook (fable-reviewed): `docs/agents/adr-0012-step6-cutover-runbook.md`**
-  (phases 0–7: user blockers, R1 principal fix, local smokes, deploy, verify, retire, rollback + risk register).
-  User-required inputs (blockers) in brief:
-  1. **Google OAuth *confidential* client secret** — ADR 0012 amended auth to a **server-side authorization-code
-     flow**, which needs `OIDC_CLIENT_SECRET` (the old app used a client-side flow with NO secret). Create/enable a
-     confidential client secret in Google Cloud Console and register the **redirect URI** `https://<host>/auth/callback`.
-  2. **`SESSION_SECRET`** (+ optional `SESSION_SECRET_PREVIOUS`) — new; signs the httpOnly cookie session. Generate a
-     strong random secret. Both go in `.dev.vars` locally and `wrangler secret put` in prod.
-  3. **`MCP_RESOURCE_URL`** — the `/mcp` audience / RFC 9728 resource id, canonical form path `/mcp`
-     (e.g. `https://<host>/mcp`); a `vars` entry per environment.
-  4. **`OIDC_*` vars** per env in `apps/web-next/wrangler.jsonc` (issuer `https://accounts.google.com`, jwks
-     `https://www.googleapis.com/oauth2/v3/certs`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `OIDC_AUTH_ENDPOINT`,
-     `OIDC_TOKEN_ENDPOINT`) + the **3 `ratelimits` bindings** (PRE_AUTH/AUTH/COMPUTE) + `DATABASE_URL` secret
-     (existing Keychain `vecta-database-url`). Audience for `/api` = `OIDC_CLIENT_ID`.
-  5. **Verify prod `principals.subject`** carry the real Google `sub` (not `email:<addr>`) — see R1 above. The `/api`
-     `email:` fallback softens this for the token surface but the **cookie login still needs it**; do the one-time
-     check/migration before cutover.
-  6. **Local smokes** (behind the workerd compat-date toggle, with `.dev.vars`): (a) view-source of `/projects/:id/wbs`
-     shows `data-row-id` rows on first paint (SSR no-flash); (b) a `wrangler dev` POST to `/mcp` (initialize) succeeds
-     (closes the CI-doesn't-run-workerd residual).
-  Only after 1–6 is the cutover deploy (§C) run. The deploy itself is outward-facing — confirm with the user.
-- **ADR 0012 cutover gates / debt** (before treating the migration done):
-  - **Prod principal identity (R1, P1-2)**: the old app resolved access via a `subject="email:<addr>"`
-    fallback (admin-seed path); web-next matches **exact `(issuer,subject)`** only. If the prod admin
-    `principals` row still carries an `email:` subject, the first web-next login → forbidden / empty list.
-    **Verify prod `principals.subject` values carry the real provider `sub` before cutover** (or do a
-    one-time deliberate migration). Do NOT add the email fallback to the session login.
-  - **web-next Neon-reader debt**: web-next has a direct `drizzle-orm` dep + two thin Neon read-seams that
+- **ADR 0012 Step 6 (CUTOVER) — COMPLETE, including retirement.** `https://vecta.tt-dev.workers.dev` serves the
+  SSR app. The old SPA is deleted and `apps/web-next` is renamed **`apps/web`** (package `@vecta/web`, local
+  wrangler name `vecta-local`); `scripts/verify-beta-readiness.mjs` and the SPA-only `verify-web-build` /
+  old `materialize-deploy-config` scripts are gone with it. The runbook
+  (`docs/agents/adr-0012-step6-cutover-runbook.md`) is retained as executed history only — the live process is
+  `docs/operations/release-and-rollback.md`. **(D) vision features** (Gantt, dashboard, budget, CSV, member
+  admin, LLM-via-commands) are follow-on work. Real-time = Phase 1 (Cloudflare DO + WebSocket, free) later.
+- **Deploy is CI-driven (deploy.yml rewritten).** `main` → deploy; that is the only path, and `--tag $GITHUB_SHA`
+  makes the live version traceable to a commit. The job runs `pnpm check` itself (a deploy cannot outrun its own
+  gate), materializes config into the BUILD output (never the tracked `wrangler.jsonc`), deploys, then runs
+  `.github/scripts/verify-deployment.mjs` — the served asset graph vs. the build (a version id does NOT prove
+  users got the new bundle), `/api/health`, the RFC 9728 metadata `resource`, and the unauth `POST /mcp` 401
+  challenge. **Blocked on the user creating the GitHub Environment `production` secret + vars** (listed in
+  `release-and-rollback.md`); until then merging to `main` runs the deploy job and it fails at wrangler.
+  **The branch is still not merged to `main`** — do that after the vars exist.
+- **ADR 0012 debt** (carried, not blocking):
+  - **web-next Neon-reader debt**: `apps/web` has a direct `drizzle-orm` dep + two thin Neon read-seams that
     import persistence schema/conn: `app/server/auth/principal-directory.neon.server.ts` and
-    `app/server/project/project-reader.neon.server.ts`. **Consider consolidating before/around Step 5** (the
-    API/MCP surface adds more reads over the same tables): move both Drizzle impls into `@vecta/persistence`
-    (beside `project-access.ts`/`project-list.ts`), keep the `PrincipalDirectory`/`ProjectReader` interfaces in
-    web-next, drop the direct `drizzle-orm` dep. The project-list read already lives in persistence (the right
-    precedent). Interim: keep both `drizzle-orm` pins (0.45.2) in lockstep.
+    `app/server/project/project-reader.neon.server.ts`. Consider moving both Drizzle impls into
+    `@vecta/persistence` (beside `project-access.ts`/`project-list.ts`), keeping the
+    `PrincipalDirectory`/`ProjectReader` interfaces in the app, and dropping the direct `drizzle-orm` dep. The
+    project-list read already lives in persistence (the right precedent). Interim: keep both `drizzle-orm`
+    pins (0.45.2) in lockstep.
   - **Save-queue 1000-command cap (from 4d, deferred)**: the coalescing pending buffer can exceed the
     `CommandBatchSchema` 1000-command cap under sustained heavy reorders queued behind a slow save → the drain
     422s and the queue is erased. Low-probability. Follow-up fix = chunk the drain at the cap (successive
@@ -240,44 +222,22 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   - **Shared-core hygiene (deferred, not now)**: `projectWbsGrid`/projection sorts use `localeCompare`
     (`packages/application/src/project-projection.ts:211`); byte-identical both SSR sides today (lowercase-hex
     data), but a codepoint compare would make determinism unconditional. A core pass, out of Step-4 scope.
-  - **Step-5 `/api` deploy-recipe additions**: 5a added **3 `ratelimits` bindings** to `apps/web-next/wrangler.jsonc`
-    (PRE_AUTH/AUTH/COMPUTE) — the Step-6 cutover deploy config MUST carry them or the public API loses its
-    throttle. 5b will add a `MCP_RESOURCE_URL` var (RFC 9728) — carry it too. `/api` auth reuses the existing
-    OIDC `vars` (audience = `OIDC_CLIENT_ID`), no new secret.
   - **AGENT read-view policy (deferred decision, from 5a)**: `/api` scopes the GET workspace projection by
     `projectRole` only, so an AGENT with EDITOR role reads `dailyCapacityMinutes` even though its writes are
     scope-fenced. If agent tokens should be least-privilege on reads, map `principalType==="AGENT"` → GENERAL
     (or gate on a read scope). A product-policy call — left as-is (EDITOR-consistent) pending a decision.
 - `docs/design/0004-performance-realtime-architecture.md` is **superseded by ADR 0012** (its Phase-0/1
   framing is resolved there).
-- **Merge-to-main workflow**: user proposed branch → push → merge to main → deploy-on-main; not yet
-  adopted (deploy is still manual). `deploy.yml` is manual-only + main-only + non-functional (needs
-  GH secrets/vars).
+- **Merge-to-main workflow — ADOPTED** (user decision): branch → push → merge to `main` → `deploy.yml`
+  deploys automatically. Do not deploy by hand any more; if you must (an emergency where CI is down),
+  the only safe shape is build → `.github/scripts/materialize-deploy-config.mjs` → `wrangler deploy -c
+  build/server/wrangler.json` → `.github/scripts/verify-deployment.mjs`, and NEVER by editing the
+  tracked `wrangler.jsonc`.
 
-## Manual deploy recipe (deploy is manual until CI is wired)
+## Deploy
 
-1. Temporarily overwrite `apps/web/wrangler.jsonc` with a FLAT config: `name:"vecta"`, `main`,
-   `assets`(ASSETS), OIDC `vars` = Google standard (issuer `https://accounts.google.com`, audience =
-   the Google client id, jwks `https://www.googleapis.com/oauth2/v3/certs`), three `ratelimits`
-   (1001/1002/1003), **NO `hyperdrive` binding**, no `env` blocks.
-2. Build with auth: `VITE_GOOGLE_CLIENT_ID=<id> VITE_VECTA_TENANT_ID=<t> VITE_VECTA_PROJECT_ID=<p>
-   pnpm --dir apps/web build` (values in private memory `earned-signal-realignment.md`). Do **NOT**
-   pass `--mode production` (the cloudflare plugin would suffix the worker to `vecta-production`).
-3. **Deploy from the plugin-generated config, not the flat one** —
-   `pnpm --dir apps/web exec wrangler deploy -c dist/vecta/wrangler.json --name vecta`. The flat
-   `apps/web/wrangler.jsonc` has `assets` with **no `directory`** → it uploads the worker but serves
-   **STALE assets** (success + new version, old bundle live). `dist/vecta/wrangler.json` carries
-   `assets.directory: "../client"` (fresh) and just needs `--name vecta` to override its
-   `vecta-production` name. **Verify after**: `ax https://vecta.tt-dev.workers.dev/` and confirm the
-   served `assets/index-*.js` hash equals `apps/web/dist/client/index.html`'s (version id alone is
-   NOT enough).
-4. Migrate (only when there's a new migration): `DEPLOY_ENV=production DATABASE_URL=<keychain>
-   EXPECTED_DATABASE_HOST=<url host> EXPECTED_DATABASE_NAME=<url dbname>
-   pnpm --dir packages/persistence db:migrate` (script `packages/persistence/scripts/migrate.mjs`).
-5. Restore `apps/web/wrangler.jsonc` (never commit the flat override) — `git stash push -- <file> &&
-   git stash drop` (plain `git restore`/`checkout` are blocked by a hook → use stash or git-haiku).
-6. Secret (persists; only to set/refresh): `printf '%s' "$(security find-generic-password -w -s
-   vecta-database-url)" | wrangler secret put DATABASE_URL --name vecta`.
+`docs/operations/release-and-rollback.md` is the source of truth (trigger, materialize, verify,
+Environment secret/vars, migration, rollback). Nothing about deploying belongs in this file.
 
 Screenshot pipeline (session-local, recreate as needed): a React-only vite build with the cloudflare
 plugin dropped + `define` `import.meta.env.VITE_VECTA_PREVIEW` = "1"; the config must live **inside

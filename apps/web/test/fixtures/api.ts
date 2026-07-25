@@ -36,7 +36,7 @@ import { fakeEnv } from "../helpers";
 
 // Match the wrangler `vars`: the `/api` audience is OIDC_CLIENT_ID.
 export const API_ISSUER = "https://accounts.google.example.invalid";
-export const API_AUDIENCE = "vecta-web-next-local.apps.googleusercontent.invalid";
+export const API_AUDIENCE = "vecta-web-local.apps.googleusercontent.invalid";
 export const API_JWKS_URL = "https://www.googleapis.example.invalid/oauth2/v3/certs";
 
 export const TENANT_ID = "11111111-1111-4111-8111-111111111111";

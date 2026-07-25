@@ -6,7 +6,7 @@ import { Form, Link, NavLink } from "react-router";
 // theme toggle, identity, Sign out, and the editorial nav). Rendered once by the
 // `/projects/:id` layout above each screen's own tier-2 `app-header`.
 //
-// Two faithful adaptations forced by the web-next architecture (both flagged in
+// Two faithful adaptations forced by the SSR architecture (both flagged in
 // the port notes):
 //   • Theme is applied in an effect/handler ONLY. The root `<head>` inline script
 //     owns load-time application (before first paint, no flash); re-applying at

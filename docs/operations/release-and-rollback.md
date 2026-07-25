@@ -2,108 +2,116 @@
 
 ## リリース単位
 
-一つのリリースは、Git commit、三つの Worker version ID、Container image、データベース migration の組で識別する。
-「直前の Git commit」だけでは、実際に配信中の Worker と Container を特定できない。
+一つのリリースは、`main` の Git commit と Cloudflare Worker version ID の組で識別する。
+Worker には commit SHA が `--tag` として記録されるため、稼働中の version からその出所の commit を必ず辿れる。
 
-データベース変更は原則として後方互換な拡張、アプリケーション切替、不要構造の削除という複数リリースに分ける。
+配信対象は Worker 一つ（`apps/web`）だけである。
+React Router の SSR アプリと Hono の `/api`・`/mcp` が同一 Worker に同居し、静的 asset は Worker の `ASSETS` binding が配信する。
+
+データベース変更は、後方互換な拡張、アプリケーションの切替、不要構造の削除という複数リリースに分ける。
 Worker のロールバックは migration を戻さないため、同じスキーマで旧版と新版の双方が動く期間を設ける。
 
-`.github/workflows/deploy.yml` の環境別 job が migration の実行境界である。
-GitHub Environment の直列化に加え、`packages/persistence/scripts/migrate.mjs` が接続先 host/database の一致を確認し、PostgreSQL advisory lock を取得してから Drizzle migration を適用する。
-実行履歴は Git commit、GitHub Actions run、environment、Drizzle migration journal を対応付けて変更記録へ残す。
-production migration を手元の一時的な JavaScript や SQL の loop で実行しない。
+## 配信の起動条件
+
+`main` への push だけが本番配信を起動する。
+`.github/workflows/deploy.yml` が唯一の配信経路であり、手元の `wrangler deploy` は使わない。
+つまり「本番で何が動いているか」は常に `main` の内容であり、誰かの手元の記録に依存しない。
+
+commit を変えずに配信をやり直したい場合（secret のローテーション直後など）だけ、同 workflow を `workflow_dispatch` で実行する。
+
+workflow は次の順で進む。いずれかが失敗した時点で配信は中止される。
+
+1. `pnpm check`（lint、typecheck、全テスト、operations テスト、build）と `pnpm types:worker --check`。
+   検査を配信 job の中に置いてあるため、配信が自分の検査を追い越すことはない。
+2. `pnpm --dir apps/web build`。
+3. `node .github/scripts/materialize-deploy-config.mjs`。
+4. `wrangler deploy -c build/server/wrangler.json --name "$WORKER_NAME" --tag "$GITHUB_SHA"`。
+5. `node .github/scripts/verify-deployment.mjs`。
+
+## 設定の materialize
+
+`apps/web/wrangler.jsonc` は `.invalid` のプレースホルダを保持したまま git 管理される。
+実際の値は materialize 手順が **build 成果物**（`apps/web/build/server/wrangler.json`、gitignore 対象）にだけ書き込む。
+git 管理下のファイルを配信のたびに手で書き換えて戻す運用は取らない。
+このリポジトリは public であり、その書き換えの間に一度でも `git commit -a` が走れば履歴に残るためである。
+
+materialize 手順は、過去に実際に踏んだ罠を検査する。
+
+- `MCP_RESOURCE_URL` の path が `/mcp` であること。ここが違うと `/mcp` の audience が静かに壊れる。
+- `OIDC_REDIRECT_URI` が `/auth/callback` で、かつ `MCP_RESOURCE_URL` と同一 origin であること。旧ホストのまま残った redirect URI は配信自体は成功し、ログインで初めて失敗する。
+- rate-limit namespace ID が相異なる正の整数であること。
+- `assets.directory` が build 成果物に存在すること。欠けると Worker は更新されるのに asset は旧版のまま配信される。
+- `.invalid` がどこにも残っていないこと。
+
+Worker 名も materialize 手順が設定する。
+`--name` の指定漏れで別 Worker に配信され、本番が黙って据え置かれる事故を防ぐためである。
+
+## 配信の検証
+
+`verify-deployment.mjs` は、version ID ではなく**利用者が実際に受け取るもの**を確認する。
+`wrangler deploy` は、旧 asset を配信し続ける Worker を上げた場合でも成功と新しい version ID を報告するため、version ID は配信の証拠にならない。
+
+検査内容は次の四つである。
+
+- `/` が参照する `/assets/*` がすべて今回の build 成果物に存在すること（伝播待ちのためポーリングする）。
+- `/api/health` が 200 を返すこと。
+- `/.well-known/oauth-protected-resource/mcp` が 200 を返し、`resource` が `MCP_RESOURCE_URL` と一致すること。
+- 未認証の `POST /mcp` が 401 を返し、`WWW-Authenticate` に `resource_metadata` を含むこと。
+
+cookie session を必要とする経路（ログイン往復、WBS 画面の SSR、書き込み）は資格情報なしでは検証できないため、配信後に人が確認する。
 
 ## GitHub Environment の設定
 
-配備 workflow は `staging` を必ず先に実行し、`production` を選んだ場合だけ staging 成功後に production job を開始する。
-各 GitHub Environment に次を登録し、production には required reviewer を設定する。
+Environment `production` に次を登録する。
+required reviewer を設定すれば、`main` へのマージ後に人の承認を挟める。設定しなければマージがそのまま配信になる。
 
-- Secrets: `CLOUDFLARE_API_TOKEN`、`DATABASE_URL`。
-- Environment variables: `CLOUDFLARE_ACCOUNT_ID`、`OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`、`MCP_RESOURCE_URL`、`DATABASE_HOST`、`DATABASE_NAME`、`BASE_URL`、`BACKUP_RESTORE_EVIDENCE_URL`、`BACKUP_RESTORE_VERIFIED_AT`、`MONITORING_EVIDENCE_URL`、`ALERT_DRILL_VERIFIED_AT`。
-- Repository variables: `STAGING_HYPERDRIVE_ID`、`PRODUCTION_HYPERDRIVE_ID` と、各環境を接頭辞にした `PRE_AUTH_RATE_LIMIT_NAMESPACE_ID`、`AUTH_RATE_LIMIT_NAMESPACE_ID`、`COMPUTE_RATE_LIMIT_NAMESPACE_ID` の計八つ。deploy gate は両環境の Hyperdrive と六つの rate-limit namespace がすべて分離されていることを比較する。
+- Secrets: `CLOUDFLARE_API_TOKEN`。Workers Scripts の編集権限に限定し、対象 account だけを許可する。
+- Variables: `CLOUDFLARE_ACCOUNT_ID`、`WORKER_NAME`、`VECTA_BASE_URL`、`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_JWKS_URL`、`OIDC_REDIRECT_URI`、`OIDC_AUTH_ENDPOINT`、`OIDC_TOKEN_ENDPOINT`、`MCP_RESOURCE_URL`、`PRE_AUTH_RATE_LIMIT_NAMESPACE_ID`、`AUTH_RATE_LIMIT_NAMESPACE_ID`、`COMPUTE_RATE_LIMIT_NAMESPACE_ID`。
 
-Cloudflare token は三つの Worker、Workflow、Queue、Container、Hyperdriveを対象環境内で配備するための最小権限に限定する。
-`DATABASE_HOST` と `DATABASE_NAME` は秘密値ではなく、migration が `DATABASE_URL` の接続先を誤らないための独立した確認値である。
-三つの rate-limit namespace ID は正の整数かつ相互に異なり、Cloudflare account 内の他の binding とも重複させない。
-backup restore と alert drill の証跡 URL は資格情報を含まない HTTPS URL とし、確認時刻は直近90日以内に更新する。deploy gate は証跡の内容を推測せず、期限切れまたは未登録なら配備を停止する。
+これらの variables はいずれも秘密値ではない。
+OIDC の client ID と redirect URI はサインイン時にブラウザの URL に現れ、MCP の resource identifier は無認証の metadata document で配信される。
+variables として持つ理由は秘匿ではなく、git 管理下のファイルを手で書き換えずに配信を再現可能にすることにある。
 
-## リリース前の確認
+真の秘密は Worker secret として保持し、CI を通さない。
 
-次の条件を満たさないリリースは開始しない。
+- `OIDC_CLIENT_SECRET`: Google の confidential client secret。authorization code の交換に使う。
+- `SESSION_SECRET`（および rotation 時の `SESSION_SECRET_PREVIOUS`）: httpOnly cookie session の署名鍵。
+- `DATABASE_URL`: Neon の接続文字列。
 
-- main の対象 commit がレビュー済みで、CI、依存関係監査、リポジトリの security scan が成功している。
-- staging と production が別の OIDC client、Hyperdrive、Queue、DLQ、Workflow、Worker 名を使う。
-- Wrangler 設定に `example.invalid`、全桁ゼロの resource ID、開発用 Origin が残っていない。
-- PostgreSQL 提供者の PITR が有効で、最新の復旧演習が記録されている。
-- migration の forward path と旧 Worker との互換性がレビュー済みである。
-- production migration job の接続先、排他実行、監査記録を staging で検証している。
-- リリース責任者が直前の正常な Worker version ID を記録している。
+いずれも `wrangler secret put <NAME> --name <WORKER_NAME>` で一度登録すれば配信をまたいで保持される。
+値を画面やログに出さず、標準入力へ直接流し込む。
 
-ローカルの静的な構成検査は、Wrangler の環境名を環境変数で渡して実行する。
-別の設定ファイルを使う構成だけ、三つの config path を上書きする。
+## migration
+
+スキーマ変更があるときだけ、配信の前に一度だけ適用する。
 
 ```sh
-VECTA_ENV=production node scripts/verify-beta-readiness.mjs
+DEPLOY_ENV=production DATABASE_URL=<接続文字列> \
+EXPECTED_DATABASE_HOST=<host> EXPECTED_DATABASE_NAME=<dbname> \
+pnpm --dir packages/persistence db:migrate
 ```
 
-この検査は Cloudflare、OIDC、PostgreSQL の実リソースを照合しない。
-成功はリリース承認の代わりにならない。
+`packages/persistence/scripts/migrate.mjs` が接続先の host と database 名の一致を確認し、PostgreSQL advisory lock を取得してから Drizzle migration を適用する。
+本番の migration を、その場限りの JavaScript や SQL のループで実行しない。
 
-## 配信順序
-
-まず staging で同じ commit と migration を配信し、[公開ベータ開始チェックリスト](public-beta-go-live.md)の smoke test を実行する。
-production では次の順序を守る。
-
-1. PostgreSQL の復元可能時点と schema version を変更記録に残す。
-2. 後方互換な migration を一度だけ適用し、migration 管理テーブルと期待した制約を確認する。
-3. `vecta-optimizer-production` を配信し、Workflow と Staffing Solver Container を確認する。
-4. `vecta-simulator-production` を配信し、Queue consumer、DLQ consumer、Forecast Simulator Container を確認する。
-5. `vecta-production` を最後に配信し、REST API と MCP が新しい非同期処理を起動できる状態にする。
-6. 読み取り専用 smoke test の後、専用の synthetic tenant で `scripts/beta-e2e.mjs` を実行し、WBS 更新、Scenario、要員提案、予測、REST、MCP を確認する。
-7. Worker version ID、Container rollout、検証結果を変更記録へ追記する。
-
-各 Worker の配信ではリポジトリに固定した Wrangler を使う。
-`RELEASE_TAG` に秘密値を含めない。
+## ロールバック
 
 ```sh
-pnpm --dir apps/optimizer exec wrangler deploy --env production --strict --containers-rollout gradual --tag "$RELEASE_TAG"
-pnpm --dir apps/simulator exec wrangler deploy --env production --strict --containers-rollout gradual --tag "$RELEASE_TAG"
-pnpm --dir apps/web build --mode production
-pnpm --dir apps/web exec wrangler deploy --strict --tag "$RELEASE_TAG"
+pnpm --dir apps/web exec wrangler versions list --name <WORKER_NAME>
+pnpm --dir apps/web exec wrangler rollback <KNOWN_GOOD_VERSION_ID> --name <WORKER_NAME> --message "incident rollback"
 ```
 
-Web は Vite mode から `vite.config.ts` が `CLOUDFLARE_ENV` を選び、Cloudflare Vite Plugin が named environment を平坦化した Worker bundle と静的 asset directory を `.wrangler/deploy/config.json` に生成するため、build 後の deploy に `--env` を重ねない。workflow は Vite mode を明示して環境の取り違えを防ぐ。
-環境別 config を別ファイルにする場合は、レビュー済みの `--config` を各コマンドへ追加する。
-Cloudflare Dashboard で本番設定だけを変更すると、リポジトリの設定と実環境が分岐するため、緊急変更も事後にコードへ反映する。
+version ID は資格情報ではないが、誤った version を指さないよう変更記録からコピーする。
 
-## ロールバック判断
+binding の形が変わった配信をまたぐロールバックは Cloudflare が拒否することがある。
+その場合は古い commit をそのまま再配信せず、`main` を revert して通常の配信経路でやり直す。
 
-認証不能、テナント境界違反、データ破損、書き込み失敗の増加、全リクエストの失敗は直ちに変更停止と影響範囲確認を行う。
-性能や一部の非同期処理の劣化は、負荷の停止、Queue delivery の一時停止、旧版への切替のどれがデータ整合性を保つかを incident commander が判断する。
-
-ロールバック前に次を確認する。
-
-- 旧版が現在の PostgreSQL schema と Queue message contract を読める。
-- 対象期間に Durable Object migration または削除済み binding がない。
-- 旧 Container image が現在の Workflow step と simulator request contract に対応する。
-- 進行中の Workflow と Queue message を旧版が安全に再実行できる。
-
-配信中の version を確認し、明示した version ID へ戻す。
-
-```sh
-pnpm --dir apps/web exec wrangler versions list --env production --json
-pnpm --dir apps/web exec wrangler rollback "$KNOWN_GOOD_WEB_VERSION" --env production --message "incident rollback"
-```
-
-同じ手順を影響を受けた Worker にだけ適用する。
-version ID は資格情報ではないが、誤った環境の ID を使わないよう変更記録からコピーする。
-
-Container を含む Worker の rollback が platform resource の変更により拒否された場合、古い Git commit をそのまま再配信しない。
-現在の binding と schema に対応する修正版を新しい version として配信する。
+どちらの場合も migration は戻らない。
+直前のリリースがスキーマを変更していたなら、旧版がその新しいスキーマで動くことを先に確認する。
 
 ## ロールバック後
 
-smoke test、synthetic tenant、エラー率、PostgreSQL の書き込み、Queue backlog、DLQ、Workflow failure を再確認する。
-予測実行と要員提案は PostgreSQL の terminal status と監査レコードを確認し、見た目上の Worker 成功だけで完了と判断しない。
+配信の自動検証（`verify-deployment.mjs`）に加えて、ログイン往復、WBS 画面の表示、書き込みが一巡することを人が確認する。
+Worker の成功応答だけで完了と判断せず、書き込みは再読み込み後に永続化されていることまで見る。
 
 参照：[Cloudflare Workers rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)

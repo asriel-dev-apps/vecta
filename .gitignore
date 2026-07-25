@@ -15,6 +15,6 @@ coverage/
 .DS_Store
 artifacts/
 
-# apps/web-next is TypeScript-only (Vite/RR emits to build/); never track stray
+# apps/web is TypeScript-only (Vite/RR emits to build/); never track stray
 # tsc-transpiled .js next to sources.
-apps/web-next/**/*.js
+apps/web/**/*.js

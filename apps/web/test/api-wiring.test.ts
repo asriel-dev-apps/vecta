@@ -40,7 +40,7 @@ const ctx = {
 function wiringEnv(authLimit: RateLimit): Env {
   const env = fakeEnv({
     OIDC_ISSUER: "https://accounts.google.example.invalid",
-    OIDC_CLIENT_ID: "vecta-web-next-local.apps.googleusercontent.invalid",
+    OIDC_CLIENT_ID: "vecta-web-local.apps.googleusercontent.invalid",
     OIDC_JWKS_URL: "https://www.googleapis.example.invalid/oauth2/v3/certs",
     DATABASE_URL: "postgres://user:pass@db.example.invalid/vecta",
   });

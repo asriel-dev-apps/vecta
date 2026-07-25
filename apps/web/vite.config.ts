@@ -1,10 +1,12 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
-import react from "@vitejs/plugin-react";
+import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vite";
+import tsconfigPaths from "vite-tsconfig-paths";
 
-export default defineConfig(({ mode }) => {
-  if (mode === "staging" || mode === "production") {
-    process.env.CLOUDFLARE_ENV = mode;
-  }
-  return { plugins: [react(), cloudflare()] };
+export default defineConfig({
+  plugins: [
+    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    reactRouter(),
+    tsconfigPaths(),
+  ],
 });

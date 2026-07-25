@@ -6,7 +6,23 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "types": ["./worker-configuration.d.ts", "vite/client", "vitest/globals", "node"]
+    // Vite/React Router does the building; tsc is typecheck-only. `noEmit` keeps a
+    // bare `tsc` (without --noEmit) from transpiling .js next to every source file.
+    "noEmit": true,
+    "rootDirs": [".", "./.react-router/types"],
+    "paths": {
+      "~/*": ["./app/*"]
+    },
+    "types": ["./worker-configuration.d.ts", "vite/client", "node"]
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts", "worker-configuration.d.ts"]
+  "include": [
+    "app",
+    "workers",
+    "test",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "react-router.config.ts",
+    "worker-configuration.d.ts",
+    ".react-router/types/**/*"
+  ]
 }

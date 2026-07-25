@@ -1,5 +1,11 @@
 # ADR 0012 Step 6 — CUTOVER runbook (`apps/web-next` → live worker `vecta`)
 
+> **EXECUTED — historical record only.** The cutover and the retirement are done: the SSR app is live
+> and now lives at `apps/web` (the SPA this runbook calls `apps/web` was deleted). Do NOT follow the
+> commands below; they refer to a directory layout and a manual recipe that no longer exist. The live
+> release process is **`docs/operations/release-and-rollback.md`** (deploy on merge to `main` via
+> `.github/workflows/deploy.yml`). Kept for the decisions, the traps, and the risk register.
+
 Replace the live production worker `vecta` (currently the old React SPA `apps/web`) with the new
 React Router v8 SSR app `apps/web-next`, then retire `apps/web`. The migration BUILD (Steps 1–5) is
 done + pushed, **not deployed**. This runbook is fable-reviewed and grounded in verified repo facts.

@@ -1,125 +1,59 @@
 name: Deploy
 
+# Production is whatever `main` says it is. Merging to `main` deploys; nothing
+# else does. That is the property the previous manual recipe could not offer —
+# the live Worker was deployed from a feature branch, so "what is running?" was
+# answerable only from someone's notes.
+#
+# `workflow_dispatch` is kept for re-running a deploy without a new commit (for
+# example after rotating a secret, which does not change the code).
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      target:
-        description: Highest environment to deploy after staging succeeds
-        required: true
-        type: choice
-        default: staging
-        options:
-          - staging
-          - production
 
 permissions:
   contents: read
 
-jobs:
-  staging:
-    name: Deploy staging
-    if: ${{ inputs.target == 'staging' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment: staging
-    concurrency:
-      group: vecta-staging-deploy
-      cancel-in-progress: false
-    env:
-      DEPLOY_ENV: staging
-      # Frontend (Vite) build-time auth config — required so the login screen
-      # renders real Google sign-in (A-1); all three or the app shows the
-      # "sign-in unavailable" screen. Set these as repo variables.
-      VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-      VITE_VECTA_TENANT_ID: ${{ vars.STAGING_TENANT_ID }}
-      VITE_VECTA_PROJECT_ID: ${{ vars.STAGING_PROJECT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      HYPERDRIVE_ID: ${{ vars.STAGING_HYPERDRIVE_ID }}
-      OTHER_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
-      OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
-      OIDC_JWKS_URL: ${{ vars.OIDC_JWKS_URL }}
-      MCP_RESOURCE_URL: ${{ vars.MCP_RESOURCE_URL }}
-      PRE_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      COMPUTE_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_COMPUTE_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_COMPUTE_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_COMPUTE_RATE_LIMIT_NAMESPACE_ID }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      EXPECTED_DATABASE_HOST: ${{ vars.DATABASE_HOST }}
-      EXPECTED_DATABASE_NAME: ${{ vars.DATABASE_NAME }}
-      VECTA_BASE_URL: ${{ vars.BASE_URL }}
-      BACKUP_RESTORE_EVIDENCE_URL: ${{ vars.BACKUP_RESTORE_EVIDENCE_URL }}
-      BACKUP_RESTORE_VERIFIED_AT: ${{ vars.BACKUP_RESTORE_VERIFIED_AT }}
-      MONITORING_EVIDENCE_URL: ${{ vars.MONITORING_EVIDENCE_URL }}
-      ALERT_DRILL_VERIFIED_AT: ${{ vars.ALERT_DRILL_VERIFIED_AT }}
-      RELEASE_TAG: ${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.12.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm types:worker --check
-      - name: Materialize and verify staging configuration
-        run: |
-          node .github/scripts/materialize-deploy-config.mjs
-          VECTA_ENV=staging node scripts/verify-beta-readiness.mjs
-          node .github/scripts/verify-operations-evidence.mjs
-      - name: Apply database migrations once
-        run: pnpm --dir packages/persistence db:migrate
-      - name: Build and deploy web worker with static assets
-        run: |
-          pnpm --dir apps/web build --mode staging
-          node .github/scripts/verify-web-build.mjs
-          pnpm --dir apps/web exec wrangler deploy --strict --tag "$RELEASE_TAG"
+# Never let two deploys race. Not cancel-in-progress: a half-finished deploy that
+# is cancelled would leave the verification step unrun.
+concurrency:
+  group: vecta-production-deploy
+  cancel-in-progress: false
 
-  production:
+jobs:
+  deploy:
     name: Deploy production
-    if: ${{ inputs.target == 'production' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment: production
-    concurrency:
-      group: vecta-production-deploy
-      cancel-in-progress: false
+    timeout-minutes: 30
+    # Configure required reviewers on this GitHub Environment to gate deploys on
+    # a human approval; leave it unprotected for deploy-on-merge.
+    environment:
+      name: production
+      url: ${{ vars.VECTA_BASE_URL }}
     env:
-      DEPLOY_ENV: production
-      # Frontend (Vite) build-time auth config — required for the login screen (A-1).
-      VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-      VITE_VECTA_TENANT_ID: ${{ vars.PRODUCTION_TENANT_ID }}
-      VITE_VECTA_PROJECT_ID: ${{ vars.PRODUCTION_PROJECT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      OTHER_HYPERDRIVE_ID: ${{ vars.STAGING_HYPERDRIVE_ID }}
+      # None of the following is a secret: an OIDC client id, issuer, endpoints
+      # and redirect URI are all visible in the browser during sign-in, and the
+      # MCP resource identifier is served unauthenticated at its metadata
+      # document. They are environment *variables* so the tracked config can keep
+      # its `.invalid` placeholders and nobody hand-edits a file to deploy. The
+      # actual secrets (OIDC_CLIENT_SECRET, SESSION_SECRET, DATABASE_URL) are
+      # Worker secrets, set once with `wrangler secret put`, and never travel
+      # through CI.
+      WORKER_NAME: ${{ vars.WORKER_NAME }}
+      VECTA_BASE_URL: ${{ vars.VECTA_BASE_URL }}
       OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
-      OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
+      OIDC_CLIENT_ID: ${{ vars.OIDC_CLIENT_ID }}
       OIDC_JWKS_URL: ${{ vars.OIDC_JWKS_URL }}
+      OIDC_REDIRECT_URI: ${{ vars.OIDC_REDIRECT_URI }}
+      OIDC_AUTH_ENDPOINT: ${{ vars.OIDC_AUTH_ENDPOINT }}
+      OIDC_TOKEN_ENDPOINT: ${{ vars.OIDC_TOKEN_ENDPOINT }}
       MCP_RESOURCE_URL: ${{ vars.MCP_RESOURCE_URL }}
-      PRE_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      COMPUTE_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRODUCTION_COMPUTE_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_PRE_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_AUTH_RATE_LIMIT_NAMESPACE_ID }}
-      OTHER_COMPUTE_RATE_LIMIT_NAMESPACE_ID: ${{ vars.STAGING_COMPUTE_RATE_LIMIT_NAMESPACE_ID }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      EXPECTED_DATABASE_HOST: ${{ vars.DATABASE_HOST }}
-      EXPECTED_DATABASE_NAME: ${{ vars.DATABASE_NAME }}
-      VECTA_BASE_URL: ${{ vars.BASE_URL }}
-      BACKUP_RESTORE_EVIDENCE_URL: ${{ vars.BACKUP_RESTORE_EVIDENCE_URL }}
-      BACKUP_RESTORE_VERIFIED_AT: ${{ vars.BACKUP_RESTORE_VERIFIED_AT }}
-      MONITORING_EVIDENCE_URL: ${{ vars.MONITORING_EVIDENCE_URL }}
-      ALERT_DRILL_VERIFIED_AT: ${{ vars.ALERT_DRILL_VERIFIED_AT }}
-      RELEASE_TAG: ${{ github.sha }}
+      PRE_AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.PRE_AUTH_RATE_LIMIT_NAMESPACE_ID }}
+      AUTH_RATE_LIMIT_NAMESPACE_ID: ${{ vars.AUTH_RATE_LIMIT_NAMESPACE_ID }}
+      COMPUTE_RATE_LIMIT_NAMESPACE_ID: ${{ vars.COMPUTE_RATE_LIMIT_NAMESPACE_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -131,17 +65,34 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The gate is part of the deploy, not a separate workflow that happens to
+      # be green: a deploy cannot outrun its own checks.
       - run: pnpm check
       - run: pnpm types:worker --check
-      - name: Materialize and verify production configuration
-        run: |
-          node .github/scripts/materialize-deploy-config.mjs
-          VECTA_ENV=production node scripts/verify-beta-readiness.mjs
-          node .github/scripts/verify-operations-evidence.mjs
-      - name: Apply database migrations once
-        run: pnpm --dir packages/persistence db:migrate
-      - name: Build and deploy web worker with static assets
-        run: |
-          pnpm --dir apps/web build --mode production
-          node .github/scripts/verify-web-build.mjs
-          pnpm --dir apps/web exec wrangler deploy --strict --tag "$RELEASE_TAG"
+
+      - name: Build the Worker
+        run: pnpm --dir apps/web build
+
+      # Writes the real configuration into the BUILT config (gitignored), never
+      # into the tracked source. Also validates the deploy traps: the MCP
+      # resource path, the redirect URI origin, distinct rate-limit namespaces,
+      # a surviving `assets.directory`, and that no placeholder remains.
+      - name: Materialize the deployment configuration
+        run: node .github/scripts/materialize-deploy-config.mjs
+
+      # `--name` is redundant (the materializer sets it) and passed anyway: with
+      # neither, a deploy would land on the config's local development name and
+      # the live site would silently stay on the previous version.
+      - name: Deploy
+        run: >-
+          pnpm --dir apps/web exec wrangler deploy
+          -c build/server/wrangler.json
+          --name "$WORKER_NAME"
+          --tag "$GITHUB_SHA"
+
+      # A version id proves the upload happened, not that users receive the new
+      # bundle. This polls the live origin until the served asset graph matches
+      # the build, then checks the two credential-free surfaces.
+      - name: Verify the deployment
+        run: node .github/scripts/verify-deployment.mjs
