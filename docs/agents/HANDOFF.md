@@ -220,10 +220,12 @@ independently verifies (`pnpm check` + scope/leak grep + screenshots), commits, 
   - **Repo leftovers from the SPA era**: the GitHub `staging` Environment and the `GOOGLE_CLIENT_ID` /
     `PRODUCTION_TENANT_ID` / `PRODUCTION_PROJECT_ID` variables are unreferenced by `deploy.yml`. Deleting the
     environment is irreversible, so it was left for the user to decide.
-  - **SSR-over-HTTP smoke (from 4a)**: 4a proved the SSR grid via `renderToString` (no-DOM) + bundle grep,
-    NOT a live HTTP request (the root middleware's eager `DATABASE_URL` + the auth gate blocked a headless
-    curl). Do a one-time local run behind the compat-date toggle, and add to the deploy check:
-    **view-source of `/projects/:id/wbs` shows `data-row-id` rows on first paint**.
+  - **SSR-over-HTTP smoke (from 4a) — CLOSED 2026-07-26.** View-source of the live
+    `/projects/:id/wbs` carries **37 `data-row-id` rows in the first-paint HTML**, which is exactly the
+    server-side virtual window: `initialRect` height 720 ÷ `ROW_H` 30 = 25 rows (including the partial one)
+    plus `overscan` 12. Not 48 — the grid is virtualised, so 48 would mean virtualisation was NOT working.
+    Only a signed-in browser can produce this evidence (the auth gate blocks a headless request), so it
+    stays a manual check after any change to the virtualizer seeding.
   - **Grid CPU at scale (from 4a)**: SSR of a **5000-row** grid ≈107 ms in node (nothing O(n²); ~1–2 ms at
     prod's 48 tasks — fine now). If a project ever grows large, the ADR fallbacks apply (per-route
     `clientLoader`/SPA-mode for the wbs route, or the $5 Workers Paid plan).
