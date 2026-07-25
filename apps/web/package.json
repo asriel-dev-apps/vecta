@@ -8,7 +8,7 @@
     "dev": "react-router dev",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run",
-    "types:worker": "wrangler types"
+    "types:worker": "wrangler types --env-file worker-types.env"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
