@@ -50,17 +50,45 @@ async function builtAssets() {
 }
 
 /**
- * Poll `/` until every asset it references exists in the build we just deployed.
- * A stale edge still serves the previous bundle's filenames, which are not in
- * this build's output — so this is the check that a mismatch cannot pass.
+ * Fetch a document, following redirects only WITHIN the deployed origin.
+ *
+ * `/` answers 302 to `/login` for an unauthenticated caller, and CI is always
+ * unauthenticated, so the document to inspect is a hop away. Following blindly
+ * is not an option either: `/login`'s own flow ends at the identity provider,
+ * and chasing that would have us asserting against Google's HTML.
+ */
+async function fetchDocument(pathname, hops = 3) {
+  let url = at(pathname);
+  for (let hop = 0; hop <= hops; hop += 1) {
+    const response = await fetch(url, { redirect: "manual" });
+    if (response.status < 300 || response.status >= 400) {
+      return { response, html: await response.text(), url };
+    }
+    const location = response.headers.get("location");
+    if (location === null) {
+      throw new Error(`${url} answered ${response.status} with no Location`);
+    }
+    const next = new URL(location, url);
+    if (next.origin !== baseUrl.origin) {
+      throw new Error(`${url} redirected off-origin to ${next.origin}`);
+    }
+    url = next.href;
+  }
+  throw new Error(`more than ${hops} redirects starting at ${at(pathname)}`);
+}
+
+/**
+ * Poll the app's document until every asset it references exists in the build we
+ * just deployed. A stale edge still serves the previous bundle's filenames,
+ * which are not in this build's output — so this is the check that a mismatch
+ * cannot pass.
  */
 async function verifyServedBundle(built) {
   const deadline = Date.now() + timeoutMs;
   let lastMismatch;
   for (;;) {
     try {
-      const response = await fetch(at("/"), { redirect: "manual" });
-      const html = await response.text();
+      const { response, html } = await fetchDocument("/");
       const referenced = referencedAssets(html);
       if (referenced.length === 0) {
         lastMismatch = `no /assets/* references in the document (status ${response.status})`;
