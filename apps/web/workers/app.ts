@@ -51,7 +51,9 @@ export default {
   async fetch(request, env, ctx) {
     // ADR 0014 — the staging gate runs BEFORE anything else, including the `/api`
     // and `/mcp` dispatch: an environment that is meant to be unreachable must not
-    // have a surface that is reachable. Inert unless `DEPLOY_ENV === "staging"`.
+    // have a surface that is reachable. Armed by `DEPLOY_ENV === "staging"` OR by
+    // the presence of the `STAGING_ACCESS_KEY` secret — see `isStagingGateArmed`
+    // for why the second signal exists (ASVS M4).
     const gate = await stagingGate(request, env);
     if (gate.response !== null) return gate.response;
 

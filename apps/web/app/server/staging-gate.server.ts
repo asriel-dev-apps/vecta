@@ -150,6 +150,44 @@ export interface StagingGateResult {
 }
 
 /**
+ * Is the gate armed? (2026-07-27 ASVS L2 scan, M4.)
+ *
+ * It used to be `DEPLOY_ENV === "staging"` alone, and that put the arming signal
+ * in the one place a deploy erases. `DEPLOY_ENV` is not in the tracked
+ * `wrangler.jsonc`; only `deploy-staging.mjs` writes it into the build output.
+ * `wrangler deploy` REPLACES the Worker's plain bindings with whatever the config
+ * carries, so any deploy that did not go through that script — a hand `wrangler
+ * deploy`, a future workflow, a rerun with the production config — would drop
+ * `DEPLOY_ENV` and staging would go public. Silently: the only symptom is that it
+ * works for everyone.
+ *
+ * That is the same shape this file's header rejects Cloudflare Access for. The
+ * `var` was just a different place to be detached from.
+ *
+ * So the gate now also arms on the presence of `STAGING_ACCESS_KEY` — which is a
+ * Worker SECRET, and secrets SURVIVE a deploy that replaces `vars`. The arming
+ * signal and the credential are then the same object: to disarm staging you have
+ * to delete the key, which is a deliberate act against the staging Worker, not a
+ * side effect of deploying something else.
+ *
+ * Deliberately NOT the inversion the scan report suggested (inert only when
+ * `DEPLOY_ENV === "production"`). That reads well but moves the failure into
+ * production: `materialize-deploy-config.mjs` builds `config.vars` from scratch,
+ * so a production deploy that did not also learn to set the new value would arm
+ * the gate on the live site and take it down. Trading a staging exposure for a
+ * production outage is not a straight win, and the secret-based signal needs no
+ * deploy-config change at all.
+ *
+ * `STAGING_ACCESS_KEY` is set only on the `vecta-staging` Worker
+ * (`set-staging-secrets.mjs` hardcodes `--name vecta-staging`), production never
+ * receives it, and `.dev.vars` has none — so local dev stays inert.
+ */
+export function isStagingGateArmed(env: StagingGateBindings): boolean {
+  if (env.DEPLOY_ENV === "staging") return true;
+  return (env.STAGING_ACCESS_KEY?.trim().length ?? 0) > 0;
+}
+
+/**
  * Decide whether a request may reach the application at all.
  *
  * Returns `{ response: null }` to continue. Any other result must be returned to
@@ -159,7 +197,7 @@ export async function stagingGate(
   request: Request,
   env: StagingGateBindings,
 ): Promise<StagingGateResult> {
-  if (env.DEPLOY_ENV !== "staging") return { response: null };
+  if (!isStagingGateArmed(env)) return { response: null };
 
   const key = env.STAGING_ACCESS_KEY?.trim();
   if (key === undefined || key.length === 0) {

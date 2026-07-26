@@ -44,13 +44,37 @@ async function decide(request: Request, env: StagingGateBindings) {
   return response;
 }
 
-describe("staging gate — inert everywhere except staging", () => {
-  it("lets production through untouched, even with a key present", async () => {
-    expect(await decide(get(), { DEPLOY_ENV: "production", STAGING_ACCESS_KEY: KEY })).toBeNull();
+describe("staging gate — what arms it (ASVS M4)", () => {
+  it("is inert where neither signal is present — production and local dev", async () => {
+    // Production has no `DEPLOY_ENV` and no `STAGING_ACCESS_KEY`: nothing sets the
+    // former outside `deploy-staging.mjs`, and the latter is put only on the
+    // `vecta-staging` Worker. `.dev.vars` has neither either.
+    expect(await decide(get(), {})).toBeNull();
+    expect(await decide(get(), { DEPLOY_ENV: "production" })).toBeNull();
   });
 
-  it("lets an unlabelled environment through — it is not staging", async () => {
-    expect(await decide(get(), {})).toBeNull();
+  it("arms on DEPLOY_ENV, as before", async () => {
+    expect(await decide(get(), { DEPLOY_ENV: "staging" })).not.toBeNull();
+  });
+
+  it("arms on the KEY ALONE, because a deploy cannot erase a secret", async () => {
+    // This is the finding. `DEPLOY_ENV` lives in `vars`, which `wrangler deploy`
+    // REPLACES wholesale from the config — so any deploy that skipped
+    // `deploy-staging.mjs` used to leave staging serving the whole internet, with
+    // no symptom other than that it worked for everybody. A Worker secret survives
+    // that deploy, so the arming signal now travels with the credential.
+    expect(await decide(get(), { STAGING_ACCESS_KEY: KEY })).not.toBeNull();
+    // ...and it still admits the holder, so arming did not become a brick.
+    expect(
+      await decide(get("/", { "x-staging-key": KEY }), { STAGING_ACCESS_KEY: KEY }),
+    ).toBeNull();
+  });
+
+  it("treats a blank key as no key at all, in BOTH directions", async () => {
+    // Not armed by whitespace...
+    expect(await decide(get(), { STAGING_ACCESS_KEY: "   " })).toBeNull();
+    // ...but if something else armed it, a blank key refuses everything (below).
+    expect(await decide(get(), { DEPLOY_ENV: "staging", STAGING_ACCESS_KEY: "   " })).not.toBeNull();
   });
 });
 
