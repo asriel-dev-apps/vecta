@@ -31,17 +31,28 @@ export interface ProposalPrompt {
   readonly maxOutputTokens: number;
 }
 
-/** Provider-native usage. Workers AI counts neurons; an API-billed provider counts tokens. */
+/**
+ * Provider-native usage, in whatever unit the provider actually reports.
+ *
+ * Every field is optional and the whole thing is nullable, because **a provider
+ * that reports nothing must be distinguishable from one that reports zero.**
+ * Defaulting an absent count to 0 was a real defect: the panel displayed
+ * "入力 0 / 出力 0 tokens", which reads as a measurement and is a fabrication —
+ * the same mistake as calling tokens "neurons", made one layer down.
+ */
 export interface ProposalUsage {
   readonly unit: string;
-  readonly input: number;
-  readonly output: number;
+  readonly input?: number;
+  readonly output?: number;
+  /** Some providers report only the combined figure. */
+  readonly total?: number;
 }
 
 export interface ProposalOutput {
   /** UNVALIDATED model output. Validation is the core's job, never the adapter's. */
   readonly raw: unknown;
-  readonly usage: ProposalUsage;
+  /** `null` when the provider reported no usage at all — say so, never show a 0. */
+  readonly usage: ProposalUsage | null;
 }
 
 /**
