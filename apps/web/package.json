@@ -6,6 +6,7 @@
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
+    "typegen": "react-router typegen",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run",
     "types:worker": "wrangler types --env-file worker-types.env"
