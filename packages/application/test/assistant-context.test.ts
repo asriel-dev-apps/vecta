@@ -191,3 +191,69 @@ describe("prompt assembly — built in the core, never by an adapter", () => {
     expect(prompt.messages).toHaveLength(1);
   });
 });
+
+/**
+ * The defect this closes: the chat system prompt described `update` and never once
+ * said the model may ADD a task. The schema allowed it, so nothing failed — the
+ * model simply followed its instructions, answered that it could only update, and
+ * returned an empty task list. The user saw "0 件追加 / 0 件更新" and no error.
+ *
+ * A capability the schema permits but the prompt never mentions is invisible in
+ * review and surfaces only as "the feature does not work". So the invariant is
+ * checked generically rather than by spot-checking words: EVERY `op` the schema
+ * admits must be named in the prompt that carries that schema.
+ */
+function opsInSchema(schema: unknown): Set<string> {
+  const found = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    const properties = record.properties as Record<string, unknown> | undefined;
+    const op = properties?.op as Record<string, unknown> | undefined;
+    if (typeof op?.const === "string") found.add(op.const);
+    for (const value of Object.values(record)) {
+      if (Array.isArray(value)) value.forEach(walk);
+      else walk(value);
+    }
+  };
+  walk(schema);
+  return found;
+}
+
+describe("prompt — every operation the schema allows is stated in the prompt", () => {
+  const base = { snapshot: "1\t既存", masters: "工程: 設計", userInput: "何かして" };
+
+  it.each(["chat", "ingest"] as const)("%s mode names each of its ops", (mode) => {
+    const budget = assistantContextBudget(mode, LLAMA_70B_CONTEXT);
+    const prompt = buildProposalPrompt({ ...base, mode, budget });
+    const ops = opsInSchema(prompt.schema);
+    expect(ops.size).toBeGreaterThan(0); // control: the walker really found something
+    for (const op of ops) {
+      expect(prompt.system.toLowerCase(), `${mode} prompt never mentions op "${op}"`).toContain(
+        op.toLowerCase(),
+      );
+    }
+  });
+
+  it("tells the chat model it may add, not only update", () => {
+    const prompt = buildProposalPrompt({
+      ...base,
+      mode: "chat",
+      budget: assistantContextBudget("chat", LLAMA_70B_CONTEXT),
+    });
+    expect(prompt.system).toContain("`add`");
+    // And how to place a new task under an existing one, which is the part a model
+    // cannot guess from the schema alone.
+    expect(prompt.system).toContain("parentSeq");
+  });
+
+  it("still forbids the ingest model from updating", () => {
+    const prompt = buildProposalPrompt({
+      ...base,
+      mode: "ingest",
+      budget: assistantContextBudget("ingest", LLAMA_70B_CONTEXT),
+    });
+    expect(prompt.system).toContain("only ADD");
+    expect(prompt.system).not.toContain("parentSeq");
+  });
+});

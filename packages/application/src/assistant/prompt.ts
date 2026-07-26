@@ -31,8 +31,12 @@ const COMMON_RULES = [
 ] as const;
 
 const CHAT_RULES = [
-  "The user is the signed-in project editor, so you may propose `update` for existing tasks.",
-  "An update may only touch: name, process, product, assignee, effortHours, progressPercent, note. Structure (parent, order, dependencies) and actuals (daily plan, actual start/finish) are the human's to edit.",
+  "The user is the signed-in project editor. You may propose BOTH `add` (new tasks) and `update` (existing ones) — pick whichever the request actually asks for.",
+  "To ADD a task, use `op: \"add\"` with a `name`. Set `effortHours` when the user states a duration; leave it out when they do not, and a person will fill it in.",
+  "To put a new task UNDER an existing one, set `parentSeq` to that task's No. To put it under another task you are creating in this same answer, set `parent` to that new task's name.",
+  "To UPDATE an existing task, address it by `seq` and touch only: name, process, product, assignee, effortHours, progressPercent, note. Structure (parent, order, dependencies) and actuals (daily plan, actual start/finish) are the human's to edit.",
+  "To break an existing task into its standard steps, use `op: \"generateSubtasks\"` with that task's `seq` and the exact name of one of the listed テンプレート. The steps come from the stored template — you never invent them.",
+  "Use ONLY the fields in the schema. An answer carrying any other field is discarded whole, so a near-miss name like `hours` or `taskName` loses the entire proposal.",
 ] as const;
 
 const INGEST_RULES = [
