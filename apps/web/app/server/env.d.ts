@@ -21,6 +21,20 @@ declare global {
      * in a tracked file; production sets it at Environment scope, if at all.
      */
     readonly ASSISTANT_MODEL_PROVIDER?: string;
+    /**
+     * ADR 0014 — which environment this deploy is. `"staging"` ARMS the staging
+     * gate; anything else leaves it inert. Declared here rather than as a wrangler
+     * `var` so no deployment value lands in a tracked file.
+     */
+    readonly DEPLOY_ENV?: string;
+    /**
+     * The staging gate's shared key. On staging its ABSENCE rejects every request,
+     * so a deploy that forgot it serves nothing rather than everything.
+     * Never in the repo: Keychain + Worker secret only.
+     */
+    readonly STAGING_ACCESS_KEY?: string;
+    /** Optional exact IPs (comma-separated) that may reach staging without the key. */
+    readonly STAGING_ALLOWED_IPS?: string;
   }
 }
 

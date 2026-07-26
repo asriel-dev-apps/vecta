@@ -16,7 +16,9 @@
     "test:operations": "node --test .github/scripts/*.test.mjs",
     "typecheck": "pnpm --recursive typecheck",
     "types:worker": "pnpm --recursive --filter './apps/**' --if-present types:worker",
-    "verify:assistant": "node .github/scripts/verify-assistant-boundary.mjs"
+    "verify:assistant": "node .github/scripts/verify-assistant-boundary.mjs",
+    "deploy:staging": "node .github/scripts/deploy-staging.mjs",
+    "staging:secrets": "node .github/scripts/set-staging-secrets.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
