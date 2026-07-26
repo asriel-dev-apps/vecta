@@ -99,6 +99,15 @@ function guard(config) {
   // value is printed — the same shape as `migrate.mjs`'s EXPECTED_DATABASE_HOST guard.
   const staging = keychainSecret("vecta-staging-database-url");
   const production = keychainSecret("vecta-database-url");
+  if (staging !== null && production === null) {
+    // A comparison with a missing input is silent, and silence here reads exactly
+    // like a pass. Non-blocking: a machine with no production credential is the
+    // safer machine, not the riskier one.
+    console.warn(
+      '\nNOT CHECKED: Keychain has no "vecta-database-url", so the staging DATABASE_URL was ' +
+        "not compared against production. Confirm by hand that it names the staging Neon branch.",
+    );
+  }
   if (staging !== null && production !== null) {
     const hostOf = (url) => {
       try {

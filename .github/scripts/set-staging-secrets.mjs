@@ -129,6 +129,16 @@ for (const secret of SECRETS) {
 // damage real data, so it is refused rather than warned about.
 const staging = keychainRead("vecta-staging-database-url");
 const production = keychainRead("vecta-database-url");
+if (staging !== null && production === null) {
+  // Say so out loud. A comparison whose input is missing produces silence that
+  // is indistinguishable from a pass — the same shape as the audit-with-no-
+  // control problem. This does not block: the operator may legitimately be on a
+  // machine that has no production credential, which is safer, not worse.
+  console.warn(
+    '\nNOT CHECKED: Keychain has no "vecta-database-url", so the staging DATABASE_URL was ' +
+      "not compared against production. Confirm by hand that it names the staging Neon branch.",
+  );
+}
 if (staging !== null && production !== null) {
   const hostOf = (url) => {
     try {
