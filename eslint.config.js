@@ -98,6 +98,14 @@ export default tseslint.config(
       "**/build/**",
       "**/.react-router/**",
       "**/worker-configuration.d.ts",
+      // `spikes/` is exploration code, deliberately OUTSIDE the pnpm workspace
+      // (`pnpm-workspace.yaml` lists only `apps/*` and `packages/*`), so CI never
+      // installs its dependencies. Type-aware linting there is not noisy, it is
+      // impossible: with the types unresolvable every expression is `any`, and
+      // enabling `recommendedTypeChecked` turned that into 306 CI errors in a
+      // directory that ships nothing. It was green locally only because this
+      // machine happens to have `spikes/tanstack-grid/node_modules`.
+      "spikes/**",
     ],
   },
   eslint.configs.recommended,
