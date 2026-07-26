@@ -6,6 +6,7 @@ import {
 import { appContext } from "../app/server/context";
 import { handleApiRequest, handleMcpRequest } from "../app/server/api";
 import { withDocumentSecurityHeaders } from "../app/server/document-security.server";
+import { stagingGate } from "../app/server/staging-gate.server";
 
 const reactRouterHandler = createRequestHandler(
   // React Router's generated virtual-build exports type each optional field as
@@ -47,6 +48,12 @@ export function isMcpPath(pathname: string): boolean {
 
 export default {
   async fetch(request, env, ctx) {
+    // ADR 0014 — the staging gate runs BEFORE anything else, including the `/api`
+    // and `/mcp` dispatch: an environment that is meant to be unreachable must not
+    // have a surface that is reachable. Inert unless `DEPLOY_ENV === "staging"`.
+    const gate = await stagingGate(request, env);
+    if (gate.response !== null) return gate.response;
+
     const { pathname } = new URL(request.url);
     if (isApiPath(pathname)) {
       return handleApiRequest(request, env, ctx);

@@ -9,18 +9,23 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant && pnpm verify:no-secret-in-url",
     "verify:bundle": "node .github/scripts/verify-client-bundle.mjs",
-    "lint": "eslint .",
+    "lint": "pnpm --recursive --if-present typegen && eslint .",
     "test": "pnpm --recursive test",
     "test:operations": "node --test .github/scripts/*.test.mjs",
     "typecheck": "pnpm --recursive typecheck",
     "types:worker": "pnpm --recursive --filter './apps/**' --if-present types:worker",
-    "verify:assistant": "node .github/scripts/verify-assistant-boundary.mjs"
+    "verify:assistant": "node .github/scripts/verify-assistant-boundary.mjs",
+    "deploy:staging": "node .github/scripts/deploy-staging.mjs",
+    "staging:secrets": "node .github/scripts/set-staging-secrets.mjs",
+    "verify:no-secret-in-url": "node .github/scripts/verify-no-secret-in-url.mjs",
+    "security:surfaces": "node .github/scripts/security-surfaces.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "eslint": "10.7.0",
+    "eslint-plugin-security": "^4.0.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.63.0"
   }

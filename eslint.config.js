@@ -1,5 +1,6 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
+import security from "eslint-plugin-security";
 
 /**
  * Packages that exist only on the Worker. A value import of any of these from
@@ -97,10 +98,104 @@ export default tseslint.config(
       "**/build/**",
       "**/.react-router/**",
       "**/worker-configuration.d.ts",
+      // `spikes/` is exploration code, deliberately OUTSIDE the pnpm workspace
+      // (`pnpm-workspace.yaml` lists only `apps/*` and `packages/*`), so CI never
+      // installs its dependencies. Type-aware linting there is not noisy, it is
+      // impossible: with the types unresolvable every expression is `any`, and
+      // enabling `recommendedTypeChecked` turned that into 306 CI errors in a
+      // directory that ships nothing. It was green locally only because this
+      // machine happens to have `spikes/tanstack-grid/node_modules`.
+      "spikes/**",
     ],
   },
   eslint.configs.recommended,
-  tseslint.configs.recommended,
+  // TYPE-AWARE linting (2026-07-27). `recommended` alone leaves every rule that
+  // needs type information switched off, and those are the ones that matter here:
+  // `no-floating-promises` is what stops an authorization check from being written
+  // without `await` — a check that never runs looks identical to one that passed.
+  // Measured before enabling: 155 findings, of which 30 were in the security-
+  // relevant families and only 6 outside tests. One of those six was a real defect
+  // in the staging gate's credential path, found the moment the rules were turned on.
+  tseslint.configs.recommendedTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      // Off on purpose, with the reason, so nobody re-enables them expecting value:
+      // these are style, and 96 of the 155 findings were theirs. A gate that mostly
+      // reports style gets skimmed, and then the six that mattered get skimmed too.
+      "@typescript-eslint/require-await": "off",
+      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+      "@typescript-eslint/no-redundant-type-constituents": "off",
+      // React Router signals redirects by THROWING a Response; that is the
+      // framework's contract, not an error-handling mistake.
+      "@typescript-eslint/only-throw-error": "off",
+      // Kept and made explicit — these are the security-relevant ones.
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-base-to-string": "error",
+    },
+  },
+  {
+    // From eslint-plugin-security, THREE rules only. Most of that plugin assumes
+    // Node — `child_process`, `fs`, `Buffer` — and this runs on Cloudflare Workers,
+    // where those APIs do not exist. Enabling the whole set would add noise that
+    // makes the gate skimmable, which is how the real findings get skimmed too.
+    files: ["**/*.ts", "**/*.tsx", "**/*.mjs", "**/*.js"],
+    plugins: { security },
+    rules: {
+      // ReDoS. Workers Free allows 10 ms of CPU per request, so a catastrophically
+      // backtracking regex is a denial of service rather than a slow path — and the
+      // assistant now reads THIRD-PARTY documents (estimates, CSV) with regexes.
+      "security/detect-unsafe-regex": "error",
+      // `===` on a credential leaks its prefix through timing. The staging gate
+      // hand-rolls a constant-time compare; nothing stopped the next one from not.
+      "security/detect-possible-timing-attacks": "error",
+      // Trojan source: bidirectional unicode that makes the rendered code read
+      // differently from what the compiler sees. Cheap to check, invisible to review.
+      "security/detect-bidi-characters": "error",
+    },
+  },
+  {
+    // `no-restricted-syntax` rather than a plugin: React's escape hatch has exactly
+    // ONE legitimate use here (the theme bootstrap in root.tsx, which must run before
+    // first paint). Anywhere else it is how the model's prose would become markup.
+    files: ["apps/web/app/**/*.tsx"],
+    ignores: ["apps/web/app/root.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message:
+            "dangerouslySetInnerHTML is allowed only in root.tsx (the pre-paint theme script). " +
+            "Rendering anything else as HTML is how untrusted text becomes markup — render it as a text node.",
+        },
+      ],
+    },
+  },
+  {
+    // The build/ops scripts are plain JS and belong to no tsconfig, so type-aware
+    // rules cannot parse them at all. Turning the type-aware set off HERE keeps it on
+    // everywhere it can actually run, rather than disabling it globally to silence a
+    // handful of files.
+    files: ["**/*.mjs", "**/*.js", "**/*.cjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+  },
+  {
+    // Tests cast deliberately (`as never` for a fake binding, a hand-built context)
+    // and 24 of the 30 `any`-flow findings were theirs. Relaxing them HERE keeps the
+    // rules hard errors where untrusted data actually flows, instead of the whole
+    // family being switched off to quieten the test suite.
+    files: ["**/test/**", "**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    rules: {
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+    },
+  },
   {
     files: ["**/*.mjs"],
     languageOptions: {

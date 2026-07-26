@@ -38,6 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The surface gate compares against the base, so it needs history rather
+          # than the default single-commit checkout.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 11.12.0
@@ -49,3 +53,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm types:worker --check
+      # A change that touches a security surface must carry a record that the
+      # surface was reviewed. This cannot judge whether the review was any good — it
+      # makes SKIPPING one a deliberate act instead of a silent omission, which is
+      # the failure it exists to prevent (a checklist that already contained the
+      # missed item was simply never consulted).
+      - name: security surfaces reviewed
+        # The base ref goes through `env:` rather than being interpolated into the
+        # script. These two values are commit SHAs and not attacker-controlled, but
+        # the habit is what matters: an interpolated `${{ }}` inside `run:` is how
+        # workflow injection happens, and a rule with an exception is a rule nobody
+        # applies.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "No base commit to compare against; reporting surfaces without gating."
+            node .github/scripts/security-surfaces.mjs --range "HEAD~1..HEAD" || true
+          else
+            node .github/scripts/security-surfaces.mjs --range "$BASE..HEAD" --require-review
+          fi
