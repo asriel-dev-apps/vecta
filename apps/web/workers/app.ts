@@ -5,7 +5,10 @@ import {
 } from "react-router";
 import { appContext } from "../app/server/context";
 import { handleApiRequest, handleMcpRequest } from "../app/server/api";
-import { withDocumentSecurityHeaders } from "../app/server/document-security.server";
+import {
+  withDocumentSecurityHeaders,
+  withDocumentTransportSecurity,
+} from "../app/server/document-security.server";
 import { withDocumentEdge } from "../app/server/document-edge.server";
 import { stagingGate } from "../app/server/staging-gate.server";
 
@@ -78,7 +81,10 @@ export default {
       // this is the one point every HTML response passes through — including the
       // ones React Router produces from a thrown error, which never reach a
       // middleware's return path (ADR 0013 Decision 6 / Design 0005 §5.3).
-      return withDocumentSecurityHeaders(await reactRouterHandler(correlated, context));
+      return withDocumentTransportSecurity(
+        correlated,
+        withDocumentSecurityHeaders(await reactRouterHandler(correlated, context)),
+      );
     });
   },
 } satisfies ExportedHandler<Env>;
