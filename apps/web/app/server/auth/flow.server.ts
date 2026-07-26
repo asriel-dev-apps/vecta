@@ -91,6 +91,14 @@ const defaultTokenExchanger: TokenExchanger = async ({
       Accept: "application/json",
     },
     body,
+    // ASVS scan L7. This body carries `client_secret`; `fetch` follows redirects
+    // by default and replays the POST body at whatever host the 3xx names. The
+    // token endpoint comes from env, so today there is no way to point it
+    // somewhere hostile — this closes the step where that stops being true
+    // (a compromised or misconfigured issuer answering 302) rather than relying
+    // on the destination staying trustworthy. A redirect is not part of RFC 6749's
+    // token exchange, so refusing to follow one loses nothing.
+    redirect: "manual",
   });
   if (!response.ok) {
     throw new Error(`token endpoint responded ${response.status}`);
