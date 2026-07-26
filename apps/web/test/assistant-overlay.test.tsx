@@ -443,3 +443,37 @@ describe("assistant overlay — CSV import", () => {
     expect(screen.queryByTestId("assistant-csv-mapping")).toBeNull();
   });
 });
+
+describe("assistant overlay — usage is reported, never invented", () => {
+  // The defect: the adapter defaulted an ABSENT count to 0 and the panel rendered
+  // "入力 0 / 出力 0 tokens". That reads as a measurement while being a fabrication —
+  // and the only reason this line is on screen is to replace the design's estimates
+  // with real numbers, so a fake zero defeats its whole purpose.
+  it("says the usage was not reported instead of showing zeros", () => {
+    mount({ result: ok(proposalWith({ usage: null })) });
+    const meta = screen.getByTestId("assistant-usage");
+    expect(meta.textContent).toContain("使用量は未報告です");
+    expect(meta.textContent).not.toMatch(/入力 0|出力 0/u);
+  });
+
+  it("shows the counts the provider did report", () => {
+    mount({ result: ok(proposalWith({ usage: { unit: "tokens", input: 3_612, output: 214 } })) });
+    const meta = screen.getByTestId("assistant-usage");
+    expect(meta.textContent).toContain("入力 3612");
+    expect(meta.textContent).toContain("出力 214");
+    expect(meta.textContent).toContain("tokens");
+  });
+
+  it("shows a real zero as a zero — absent and zero are different things", () => {
+    mount({ result: ok(proposalWith({ usage: { unit: "tokens", input: 0, output: 0 } })) });
+    expect(screen.getByTestId("assistant-usage").textContent).toContain("入力 0 / 出力 0");
+  });
+
+  it("does not pad out a provider that reports only a combined total", () => {
+    mount({ result: ok(proposalWith({ usage: { unit: "tokens", total: 3_826 } })) });
+    const meta = screen.getByTestId("assistant-usage");
+    expect(meta.textContent).toContain("合計 3826");
+    expect(meta.textContent).not.toContain("入力");
+    expect(meta.textContent).not.toContain("出力");
+  });
+});

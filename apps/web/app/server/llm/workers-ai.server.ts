@@ -69,9 +69,37 @@ function toRaw(response: unknown): unknown {
   return response;
 }
 
+/**
+ * The binding's text-generation result. `usage` is OPTIONAL in the generated
+ * runtime types (`worker-configuration.d.ts`, `…Fp8_Fast_Output`), and it is
+ * genuinely absent on some call shapes — this feature saw exactly that, so the
+ * adapter must be able to say "not reported" rather than invent a zero.
+ */
 interface WorkersAiTextResult {
   readonly response?: unknown;
-  readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number };
+  readonly usage?: {
+    readonly prompt_tokens?: number;
+    readonly completion_tokens?: number;
+    readonly total_tokens?: number;
+  };
+}
+
+function readUsage(usage: WorkersAiTextResult["usage"]): ProposalOutput["usage"] {
+  if (usage === undefined || usage === null) return null;
+  const input = usage.prompt_tokens;
+  const output = usage.completion_tokens;
+  const total = usage.total_tokens;
+  // An object with none of the three counts is as uninformative as no object.
+  if (input === undefined && output === undefined && total === undefined) return null;
+  return {
+    // TOKENS, which is what the binding reports. Neurons are Cloudflare's billing
+    // conversion of these and live only on the dashboard, so acceptance A8 measures
+    // them there — reporting these as neurons would be a fabricated number.
+    unit: "tokens",
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+    ...(total === undefined ? {} : { total }),
+  };
 }
 
 /**
@@ -112,18 +140,7 @@ export function workersAiProposalModel(env: { readonly AI: Ai }): ProposalModel 
         throw error instanceof ProposalModelError ? error : classify(error);
       }
 
-      return {
-        raw: toRaw(result.response),
-        // Native unit. Workers AI reports TOKENS on the response; neurons are
-        // derived from them by Cloudflare's billing, and are visible only on the
-        // dashboard — which is why acceptance A8 measures them there rather than
-        // here. Reporting tokens as "neurons" would be a fabricated number.
-        usage: {
-          unit: "tokens",
-          input: result.usage?.prompt_tokens ?? 0,
-          output: result.usage?.completion_tokens ?? 0,
-        },
-      };
+      return { raw: toRaw(result.response), usage: readUsage(result.usage) };
     },
   };
 }

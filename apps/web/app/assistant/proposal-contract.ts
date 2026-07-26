@@ -92,7 +92,17 @@ export interface AssistantProposal {
    */
   readonly csv?: CsvImportSummary;
   readonly model: string;
-  readonly usage: { readonly unit: string; readonly input: number; readonly output: number };
+  /**
+   * `null` when the provider reported no usage. The panel says so rather than
+   * showing zeros — a fabricated 0 reads as a measurement, and the whole point of
+   * surfacing this figure is to replace the design's estimates with real numbers.
+   */
+  readonly usage: {
+    readonly unit: string;
+    readonly input?: number;
+    readonly output?: number;
+    readonly total?: number;
+  } | null;
 }
 
 export type AssistantErrorCode =

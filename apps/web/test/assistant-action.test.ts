@@ -17,6 +17,7 @@ import {
   UnknownProposalProviderError,
   selectProposalModel,
 } from "~/server/llm/select-model.server";
+import { workersAiProposalModel } from "~/server/llm/workers-ai.server";
 import { createDemoProject } from "./fixtures/demo-project";
 
 // The assistant's proposal endpoint. These tests run the whole action with a FAKE
@@ -487,5 +488,62 @@ describe("proposal API — adding a task in CHAT mode (the path that shipped bro
     expect(result.data.ok).toBe(true);
     expect(proposalOf(result).diff.addedTasks).toBe(0);
     expect(proposalOf(result).commands).toHaveLength(0);
+  });
+});
+
+describe("Workers AI adapter — usage that was not reported is not invented", () => {
+  // Exercised through `readUsage`'s observable behaviour via the adapter, driven by
+  // a stubbed binding. The generated runtime types mark `usage` OPTIONAL
+  // (`worker-configuration.d.ts`, `…Fp8_Fast_Output`), and production showed it
+  // genuinely absent for this call shape — which is how "0 tokens" reached the panel.
+  function bindingReturning(result: unknown) {
+    return { AI: { run: async () => result } } as unknown as { AI: Ai };
+  }
+
+  const answer = JSON.stringify({ summary: "", tasks: [] });
+  const prompt = { system: "s", messages: [], schema: {}, maxOutputTokens: 100 };
+
+  it("returns null when the binding reports no usage at all", async () => {
+    const model = workersAiProposalModel(bindingReturning({ response: answer }));
+    expect((await model.propose(prompt)).usage).toBeNull();
+  });
+
+  it("returns null for a usage object carrying none of the counts", async () => {
+    const model = workersAiProposalModel(bindingReturning({ response: answer, usage: {} }));
+    expect((await model.propose(prompt)).usage).toBeNull();
+  });
+
+  it("reads the counts the binding does report", async () => {
+    const model = workersAiProposalModel(
+      bindingReturning({
+        response: answer,
+        usage: { prompt_tokens: 3_612, completion_tokens: 214, total_tokens: 3_826 },
+      }),
+    );
+    expect((await model.propose(prompt)).usage).toEqual({
+      unit: "tokens",
+      input: 3_612,
+      output: 214,
+      total: 3_826,
+    });
+  });
+
+  it("keeps a genuine zero, which is not the same as absent", async () => {
+    const model = workersAiProposalModel(
+      bindingReturning({ response: answer, usage: { prompt_tokens: 0, completion_tokens: 0 } }),
+    );
+    expect((await model.propose(prompt)).usage).toEqual({ unit: "tokens", input: 0, output: 0 });
+  });
+
+  it("passes a partial report through without filling in the gaps", async () => {
+    const model = workersAiProposalModel(bindingReturning({ response: answer, usage: { total_tokens: 42 } }));
+    expect((await model.propose(prompt)).usage).toEqual({ unit: "tokens", total: 42 });
+  });
+
+  it("reports TOKENS, never neurons — those are a billing conversion we cannot see", async () => {
+    const model = workersAiProposalModel(
+      bindingReturning({ response: answer, usage: { prompt_tokens: 1 } }),
+    );
+    expect((await model.propose(prompt)).usage?.unit).toBe("tokens");
   });
 });

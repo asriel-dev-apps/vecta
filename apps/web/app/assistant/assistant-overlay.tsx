@@ -107,6 +107,21 @@ function viewportSize(): { width: number; height: number } {
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
+/**
+ * Render whatever the provider reported, and say plainly when it reported nothing.
+ * Each figure is shown only if it exists, so a provider that gives only a combined
+ * total is not padded out with invented halves.
+ */
+function formatUsage(usage: AssistantProposal["usage"]): string {
+  if (usage === null) return "使用量は未報告です";
+  const parts: string[] = [];
+  if (usage.input !== undefined) parts.push(`入力 ${usage.input}`);
+  if (usage.output !== undefined) parts.push(`出力 ${usage.output}`);
+  if (usage.total !== undefined) parts.push(`合計 ${usage.total}`);
+  if (parts.length === 0) return "使用量は未報告です";
+  return `${parts.join(" / ")} ${usage.unit}`;
+}
+
 export function AssistantOverlay({
   proposeSeam,
   confirmedRevision,
@@ -620,9 +635,11 @@ export function AssistantOverlay({
                   </p>
                 )}
 
-                <p className="assistant-meta">
-                  {proposal.model} · 入力 {proposal.usage.input} / 出力 {proposal.usage.output}{" "}
-                  {proposal.usage.unit}
+                {/* Absence is stated, never rendered as a zero: a fabricated
+                    "0 tokens" reads as a measurement, and the reason this figure is
+                    on screen at all is to replace estimates with real numbers. */}
+                <p className="assistant-meta" data-testid="assistant-usage">
+                  {proposal.model} · {formatUsage(proposal.usage)}
                 </p>
               </section>
             )}

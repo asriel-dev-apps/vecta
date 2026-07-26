@@ -3,7 +3,7 @@ import { expandIr, type AssistantProjectView } from "./expander.js";
 import { parseIr, type AssistantMode } from "./ir.js";
 import type { ProjectCommand } from "../project-state.js";
 import { buildProposalPrompt } from "./prompt.js";
-import type { ProposalModel } from "./model-port.js";
+import type { ProposalModel, ProposalUsage } from "./model-port.js";
 
 /**
  * Golden fixtures (Design 0005 §3.4, ADR 0013 Decision 12, acceptance A13).
@@ -211,8 +211,10 @@ export interface GoldenFixtureOutcome {
   readonly id: string;
   readonly passed: boolean;
   readonly failures: readonly string[];
-  /** Provider-native usage for this run, so a swap can be compared on cost too. */
-  readonly usage: { readonly unit: string; readonly input: number; readonly output: number } | null;
+  /** Provider-native usage for this run, so a swap can be compared on cost too.
+   * `null` when the provider reported none — which is itself a comparison point:
+   * a provider whose cost cannot be read is harder to justify switching to. */
+  readonly usage: ProposalUsage | null;
 }
 
 export interface GoldenFixtureReport {
