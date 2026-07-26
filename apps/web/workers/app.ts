@@ -5,6 +5,7 @@ import {
 } from "react-router";
 import { appContext } from "../app/server/context";
 import { handleApiRequest, handleMcpRequest } from "../app/server/api";
+import { withDocumentSecurityHeaders } from "../app/server/document-security.server";
 
 const reactRouterHandler = createRequestHandler(
   // React Router's generated virtual-build exports type each optional field as
@@ -45,7 +46,7 @@ export function isMcpPath(pathname: string): boolean {
 }
 
 export default {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     if (isApiPath(pathname)) {
       return handleApiRequest(request, env, ctx);
@@ -58,6 +59,10 @@ export default {
     // bindings + execution context for loaders/middleware to read via `appContext`.
     const context = new RouterContextProvider();
     context.set(appContext, { env, ctx });
-    return reactRouterHandler(request, context);
+    // The document CSP is attached HERE rather than in root middleware, because
+    // this is the one point every HTML response passes through — including the
+    // ones React Router produces from a thrown error, which never reach a
+    // middleware's return path (ADR 0013 Decision 6 / Design 0005 §5.3).
+    return withDocumentSecurityHeaders(await reactRouterHandler(request, context));
   },
 } satisfies ExportedHandler<Env>;

@@ -127,6 +127,7 @@ export function AssistantOverlay({
   const [hydrated, setHydrated] = useState(false);
 
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const proposalRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const lastResult = useRef<AssistantActionResult | undefined>(undefined);
 
@@ -173,7 +174,15 @@ export function AssistantOverlay({
       if (result.proposal.mode === "chat") {
         setHistory((turns) => [...turns, { role: "assistant", content: result.proposal.summary }]);
       }
-      if (result.proposal.diff.entries.length > 0) maximise();
+      if (result.proposal.diff.entries.length > 0) {
+        maximise();
+        // Land the reader at the TOP of what they have to read. The panel body
+        // scrolls, and with the input above it the diff can start below the fold;
+        // scrolling to the approve button instead would be the wrong end.
+        requestAnimationFrame(() => {
+          proposalRef.current?.scrollIntoView({ block: "start" });
+        });
+      }
       return;
     }
     if (!result.ok) {
@@ -437,7 +446,11 @@ export function AssistantOverlay({
             )}
 
             {proposal !== null && (
-              <section className="assistant-proposal" data-testid="assistant-proposal">
+              <section
+                className="assistant-proposal"
+                data-testid="assistant-proposal"
+                ref={proposalRef}
+              >
                 {/* The model's explanation, visually separated so it is never
                     mistaken for the diff. ADR 0013 Decision 5: this text is NOT
                     what the user approves. */}

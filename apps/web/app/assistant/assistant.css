@@ -179,6 +179,13 @@
   border-radius: 8px;
   padding: 8px 10px;
   resize: vertical;
+  /* `flex: none` because the body is a column flex container: once a proposal
+     makes its content overflow, the default `flex-shrink: 1` crushed the textarea
+     from its `rows`-based height to a single 18px line and clipped the placeholder.
+     Measured in Chromium — the component tests pass either way, which is exactly
+     the class of defect only a rendered screenshot catches. */
+  flex: none;
+  min-height: 3lh;
 }
 .assistant-input:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--accent); }
 
