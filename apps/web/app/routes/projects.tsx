@@ -3,7 +3,7 @@ import { Link, useNavigation, type LinksFunction } from "react-router";
 import type { Route } from "./+types/projects";
 import { requirePrincipal } from "~/server/auth/require-principal";
 import { loadProjectList } from "~/server/project/project-list.server";
-import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
+import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";
 import styles from "~/wbs/styles.css?url";
 

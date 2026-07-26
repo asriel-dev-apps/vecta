@@ -23,6 +23,11 @@ import { requireProjectMembership, requireProjectWorkspace } from "./project-acc
 import { requirePrincipal } from "../auth/require-principal";
 import { appContext } from "../context";
 import { selectProposalModel, UnknownProposalProviderError } from "../llm/select-model.server";
+import {
+  ASSISTANT_PROPOSAL_KIND,
+  type AssistantErrorCode,
+  type ProposalCommand,
+} from "~/assistant/proposal-contract";
 import { ApiCommandSchema, fromCommand } from "~/wbs/project-command-contract";
 
 /**
@@ -56,17 +61,6 @@ const AssistantRequestSchema = z
     history: z.array(HistoryTurnSchema).max(40).optional(),
   })
   .strict();
-
-export type AssistantErrorCode =
-  | "FORBIDDEN"
-  | "INVALID"
-  | "TOO_LARGE"
-  | "PROJECT_TOO_LARGE"
-  | "MODEL_SCHEMA_UNMET"
-  | "MODEL_QUOTA_EXHAUSTED"
-  | "MODEL_UNAVAILABLE"
-  | "PROVIDER_MISCONFIGURED"
-  | "RATE_LIMITED";
 
 function fail(code: AssistantErrorCode, status: number, message: string) {
   return data({ ok: false as const, code, message }, { status });
@@ -217,7 +211,7 @@ export async function runAssistantAction({ request, context, model }: AssistantA
   // Acceptance A1's boundary half: the expansion is re-validated against the SAME
   // wire contract a hand edit goes through. A failure here is a bug in the
   // expander, not a bad answer, so the proposal is discarded rather than trimmed.
-  const wireCommands = [];
+  const wireCommands: ProposalCommand[] = [];
   for (const command of commands) {
     const validated = ApiCommandSchema.safeParse(fromCommand(command));
     if (!validated.success) {
@@ -236,6 +230,9 @@ export async function runAssistantAction({ request, context, model }: AssistantA
 
   return data({
     ok: true as const,
+    // `shouldRevalidate` keys on this discriminant, never on a bare `{ ok: true }`.
+    // A proposal changed nothing, so the loader must not re-read the workspace.
+    kind: ASSISTANT_PROPOSAL_KIND,
     proposal: {
       mode,
       /** The revision this proposal was built against; the apply POST carries it. */

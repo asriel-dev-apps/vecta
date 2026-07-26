@@ -2,7 +2,7 @@ import { Outlet, type LinksFunction } from "react-router";
 import type { Route } from "./+types/project";
 import { createProjectAccessMiddleware } from "~/middleware/project-access.server";
 import { requirePrincipal } from "~/server/auth/require-principal";
-import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
+import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";
 import appStyles from "~/wbs/styles.css?url";
 

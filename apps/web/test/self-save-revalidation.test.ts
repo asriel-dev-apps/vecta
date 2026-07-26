@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
-import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
+import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 
 // ADR 0012 Step 4d — the `shouldRevalidate` predicate hardening/verification pass.
 // The predicate is the SINGLE mechanism (no fetcher-submit `defaultShouldRevalidate`
@@ -54,6 +54,23 @@ describe("skipRevalidationOnSelfSave — the queue-hardened truth table", () => 
       // so no read is triggered — the client rolls back locally.
       expect(skipRevalidationOnSelfSave(args({ ok: false, code }, false))).toBe(false);
     }
+  });
+
+  it("skips the re-read after a read-only assistant proposal (ADR 0013)", () => {
+    // A proposal never touches the database, so the revision cannot have moved.
+    // Revalidating would spend two Neon round trips to re-read state that is
+    // provably unchanged — once per request, on a path a person uses repeatedly.
+    expect(
+      skipRevalidationOnSelfSave(args({ ok: true, kind: "assistant-proposal", proposal: {} }, true)),
+    ).toBe(false);
+  });
+
+  it("does not let an assistant FAILURE suppress anything on its own", () => {
+    // The failure codes carry no `kind`, so they fall through to RR's default —
+    // the read-only skip must be keyed on the discriminant, never on `ok`.
+    expect(
+      skipRevalidationOnSelfSave(args({ ok: false, code: "MODEL_QUOTA_EXHAUSTED" }, true)),
+    ).toBe(true);
   });
 
   it("returns the default when there is no action result (a navigation revalidation)", () => {

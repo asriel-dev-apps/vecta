@@ -51,6 +51,10 @@ import {
   type OverloadEntry,
 } from "./cross-project-load";
 import { emptyQueue, reduceQueue, type QueueState } from "./save-queue";
+import {
+  AssistantOverlay,
+  type AssistantProposalSeam,
+} from "~/assistant/assistant-overlay";
 
 // ADR 0012 Step 4a — `useLayoutEffect` runs only in the browser; on the server
 // React logs a warning for it. This isomorphic variant falls back to
@@ -607,6 +611,14 @@ export interface WbsAppProps {
    * lets the conflict resync run. Ignored in preview mode.
    */
   readonly saveResult?: SaveActionResult | undefined;
+  /**
+   * ADR 0013 — the assistant's proposal seam, owned by the route exactly as
+   * `onExecute` is. Its PRESENCE mounts the overlay; absent, there is none. Kept
+   * separate from `onExecute` because connected mode does not imply a router (the
+   * queue harness drives connected mode without one), and a proposal needs a
+   * fetcher while an optimistic edit does not.
+   */
+  readonly assistant?: AssistantProposalSeam;
 }
 
 export function App({
@@ -616,6 +628,7 @@ export function App({
   onExecute,
   saveInFlight,
   saveResult,
+  assistant,
 }: WbsAppProps) {
   // Connected mode ⇔ a dispatch seam is wired (the route's fetcher). Preview mode
   // (no `onExecute`) keeps the 4a in-memory behaviour so the SSR/hydration/preview
@@ -1781,7 +1794,23 @@ export function App({
               the UI language and groups with commas, unchanged for the audience. */}
           {project.name ? `${project.name} · ` : ""}基準日 {grid.statusDate} · {rows.length.toLocaleString("ja-JP")} タスク · {planDays.length} 計画日
         </p>
-        <div className={`save-badge save-badge--${saveState}`} data-testid="save-state">{saveState}</div>
+        <div className="app-header__actions">
+          {/* ADR 0013 — the assistant proposes; approving hands the commands to
+              `executeCommands`, the very entry point a typed cell edit uses. Mounted
+              only when the route wired the seam: preview mode has nowhere to post,
+              and a proposal that could never be applied is worse than absent. */}
+          {assistant !== undefined && (
+            <AssistantOverlay
+              proposeSeam={assistant}
+              confirmedRevision={confirmedRevision}
+              // A save in flight, or a grid locked after a rejection, means the
+              // batch would not carry the revision it was reasoned over.
+              canApply={saveState !== "saving" && saveState !== "error"}
+              onApply={executeCommands}
+            />
+          )}
+          <div className={`save-badge save-badge--${saveState}`} data-testid="save-state">{saveState}</div>
+        </div>
       </header>
 
       <section className="rollup" aria-label="プロジェクト集計" data-testid="rollup">

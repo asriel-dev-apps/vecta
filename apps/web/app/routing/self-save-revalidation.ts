@@ -1,6 +1,14 @@
 import type { ShouldRevalidateFunctionArgs } from "react-router";
+import { ASSISTANT_PROPOSAL_KIND } from "~/assistant/proposal-contract";
 
 /**
+ * Lives in `app/routing/` and not `app/server/` because it is CLIENT code:
+ * `shouldRevalidate` runs in the browser, and the bundle proved it — this module
+ * ships as `build/client/assets/self-save-revalidation-*.js`. It sat under
+ * `app/server/` (which the boundary eslint rule exempts from its own check, so
+ * nothing flagged it) until this change touched it, which was the recorded trigger
+ * to move it.
+ *
  * ADR 0012 Step 4b/4c — revalidation economy AND conflict recovery for every
  * project write path (WBS grid + the master/member/template routes).
  *
@@ -54,6 +62,16 @@ const SELF_SAVE_KINDS: ReadonlySet<string> = new Set([
   "templates-save",
 ]);
 
+/**
+ * ADR 0013 — actions that are READ-ONLY by construction. A proposal is generated
+ * without touching the database, so the revision cannot have moved and a re-read
+ * would buy nothing but two Neon round trips per keystroke-sized request. Kept as
+ * a separate set from {@link SELF_SAVE_KINDS} so the reason each kind skips
+ * revalidation stays legible: one skipped because the client already applied the
+ * change, this one because there was no change.
+ */
+const READ_ONLY_KINDS: ReadonlySet<string> = new Set([ASSISTANT_PROPOSAL_KIND]);
+
 export function skipRevalidationOnSelfSave({
   actionResult,
   defaultShouldRevalidate,
@@ -63,6 +81,10 @@ export function skipRevalidationOnSelfSave({
     // Our own successful self-save — the optimistic state is already correct, so
     // skip the re-settle. Keyed on the discriminant SET, never a bare `{ ok: true }`.
     if (result.ok === true && typeof result.kind === "string" && SELF_SAVE_KINDS.has(result.kind)) {
+      return false;
+    }
+    // A read-only action: nothing changed, so nothing needs re-reading.
+    if (result.ok === true && typeof result.kind === "string" && READ_ONLY_KINDS.has(result.kind)) {
       return false;
     }
     // A conflict / partial-commit REQUIRES resync: force the loader to re-run so

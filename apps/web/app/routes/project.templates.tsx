@@ -2,7 +2,7 @@ import type { LinksFunction } from "react-router";
 import type { Route } from "./+types/project.templates";
 import { loadProjectView } from "~/server/project/load-project-view.server";
 import { runCommandAction } from "~/server/project/command-action.server";
-import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
+import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { MasterRoute } from "~/masters/master-route";
 import { TemplateSection } from "~/masters/template-section";
 import masterStyles from "~/wbs/styles.css?url";
