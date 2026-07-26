@@ -8,15 +8,25 @@ import { type ProjectCommand } from "@vecta/application";
 import type { Route } from "./+types/project.wbs";
 import { loadProjectView } from "~/server/project/load-project-view.server";
 import { runCommandAction } from "~/server/project/command-action.server";
-import { skipRevalidationOnSelfSave } from "~/server/project/self-save-revalidation";
+import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { App as WbsApp, type SaveActionResult } from "~/wbs/wbs-app";
+import type {
+  AssistantActionResult,
+  AssistantProposalRequest,
+} from "~/assistant/proposal-contract";
 import { fromCommand } from "~/wbs/project-command-contract";
 import wbsStyles from "~/wbs/styles.css?url";
+import assistantStyles from "~/assistant/assistant.css?url";
 
 // The ported grid's stylesheet is linked from the route (ADR 0012 Step 4a). The
 // `?url` + `links` export puts a real <link> into the first-paint <head> via
 // root's <Links/>, so the grid is styled server-side with no flash-of-unstyled.
-export const links: LinksFunction = () => [{ rel: "stylesheet", href: wbsStyles }];
+// The assistant's sheet follows it and adds no palette of its own: it reads the
+// same :root tokens, so one theme drives both.
+export const links: LinksFunction = () => [
+  { rel: "stylesheet", href: wbsStyles },
+  { rel: "stylesheet", href: assistantStyles },
+];
 
 // SSR loader for `/projects/:id/wbs`. The access gate (parent `/projects/:id`
 // middleware) has already validated the id + membership; the shared
@@ -50,9 +60,15 @@ export async function action(args: Route.ActionArgs) {
 // fresh state. Exported on the ancestors too so one save doesn't fan out.
 export const shouldRevalidate = skipRevalidationOnSelfSave;
 
-export default function ProjectWbs({ loaderData }: Route.ComponentProps) {
+export default function ProjectWbs({ loaderData, params }: Route.ComponentProps) {
   const { revision, stateView, projectionRole } = loaderData;
   const fetcher = useFetcher<typeof action>();
+  // ADR 0013 — a SECOND fetcher, and safely so: it posts to the read-only
+  // `/assistant` action, so it chains no revision and cannot collide with the save
+  // queue's one-in-flight invariant (the reason the write path hand-rolls a queue
+  // rather than using a second fetcher). The route owns it, as it owns the save
+  // fetcher, keeping `WbsApp` and the overlay free of a router dependency.
+  const assistantFetcher = useFetcher<AssistantActionResult>();
 
   // The dispatch seam: encode the domain command batch to the wire shape, mint a
   // client idempotency key per command (mirrors the SPA's per-command
@@ -79,6 +95,17 @@ export default function ProjectWbs({ loaderData }: Route.ComponentProps) {
     [fetcher],
   );
 
+  const onPropose = useCallback(
+    (request: AssistantProposalRequest) => {
+      void assistantFetcher.submit(request as unknown as SubmitTarget, {
+        method: "post",
+        action: `/projects/${params.id}/assistant`,
+        encType: "application/json",
+      });
+    },
+    [assistantFetcher, params.id],
+  );
+
   return (
     <WbsApp
       initialState={stateView}
@@ -87,6 +114,11 @@ export default function ProjectWbs({ loaderData }: Route.ComponentProps) {
       onExecute={onExecute}
       saveInFlight={fetcher.state !== "idle"}
       saveResult={fetcher.data as SaveActionResult | undefined}
+      assistant={{
+        onPropose,
+        inFlight: assistantFetcher.state !== "idle",
+        result: assistantFetcher.data,
+      }}
     />
   );
 }

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 // Faithful backfill test for migration 0006 (Design 0003 §F-1). We apply the
 // journal *up to 0005* (a `tasks` table with no `seq` column), seed pre-existing
@@ -42,15 +42,12 @@ function taskUuid(hex: string): string {
 }
 
 describe("migration 0006 display-No. backfill", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("migration_0006");
+    client = testDatabase.client;
 
     const journal = await orderedJournal();
     // Apply every migration strictly before 0006, leaving the schema at 0005 —
@@ -95,8 +92,7 @@ describe("migration 0006 display-No. backfill", () => {
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   async function seqByTask(projectId: string): Promise<Map<string, number>> {

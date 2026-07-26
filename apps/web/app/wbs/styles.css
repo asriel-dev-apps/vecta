@@ -397,6 +397,14 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+/* The header's right-hand cluster: the assistant launcher beside the save badge. */
+.app-header__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .app-subtitle {
   margin: 0;
   font-size: 12px;

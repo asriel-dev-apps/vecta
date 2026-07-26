@@ -1,5 +1,4 @@
 import { projectWbsGrid } from "@vecta/application";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -13,6 +12,7 @@ import {
   type NeonHttpReadDatabase,
   type PersistenceDatabase,
 } from "../src/index.js";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 /** How many queries each `batch(...)` call carried, in call order. */
 const batchedQueryCounts: number[] = [];
@@ -40,17 +40,14 @@ function batchingReadDatabase(database: PersistenceDatabase): NeonHttpReadDataba
 }
 
 describe("ProjectRepository", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let client: Client;
   let repository: ProjectRepository;
   let workspaceRepository: ProjectWorkspaceRepository;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    client = new Client({ connectionString: started.getConnectionUri() });
-    await client.connect();
+    testDatabase = await startTestDatabase("repository");
+    client = testDatabase.client;
     await migratePersistenceDatabase(client);
     const database = createPersistenceDatabase(client);
     repository = new ProjectRepository(database);
@@ -58,8 +55,7 @@ describe("ProjectRepository", () => {
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   beforeEach(async () => {

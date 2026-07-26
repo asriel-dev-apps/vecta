@@ -9,13 +9,14 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant",
     "verify:bundle": "node .github/scripts/verify-client-bundle.mjs",
     "lint": "eslint .",
     "test": "pnpm --recursive test",
     "test:operations": "node --test .github/scripts/*.test.mjs",
     "typecheck": "pnpm --recursive typecheck",
-    "types:worker": "pnpm --recursive --filter './apps/**' --if-present types:worker"
+    "types:worker": "pnpm --recursive --filter './apps/**' --if-present types:worker",
+    "verify:assistant": "node .github/scripts/verify-assistant-boundary.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

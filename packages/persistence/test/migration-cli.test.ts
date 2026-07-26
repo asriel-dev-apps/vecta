@@ -1,29 +1,25 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startTestDatabase, type TestDatabase } from "./database.js";
 
 const execute = promisify(execFile);
 const script = new URL("../scripts/migrate.mjs", import.meta.url);
 
 describe("production migration CLI", () => {
-  const container = new PostgreSqlContainer("postgres:17.6-alpine");
   let connectionString: string;
   let client: Client;
-  let stopContainer: (() => Promise<void>) | undefined;
+  let testDatabase: TestDatabase;
 
   beforeAll(async () => {
-    const started = await container.start();
-    stopContainer = async () => started.stop().then(() => undefined);
-    connectionString = started.getConnectionUri();
-    client = new Client({ connectionString });
-    await client.connect();
+    testDatabase = await startTestDatabase("migration_cli");
+    connectionString = testDatabase.connectionString;
+    client = testDatabase.client;
   }, 60_000);
 
   afterAll(async () => {
-    await client.end();
-    await stopContainer?.();
+    await testDatabase.dispose();
   });
 
   function environment(overrides: Record<string, string> = {}) {

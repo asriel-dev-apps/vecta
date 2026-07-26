@@ -6,10 +6,28 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel superseded runs on the same ref so a rapid push sequence doesn't queue
-# a backlog of checks — the newest push is the only one that matters.
+# Cancel superseded runs for the same BRANCH, so that a rapid push sequence does
+# not queue a backlog of checks and — the reason this is keyed on the branch name
+# rather than on github.ref — so that the push run and the pull_request run of the
+# same commit collapse into one.
+#
+# While a PR is open, every push fires both events. Their refs differ
+# (refs/heads/<branch> vs refs/pull/<n>/merge), so a github.ref key put them in
+# different groups and both survived: measured on 2026-07-26, every SHA pushed
+# with the PR open had exactly two identical `check` runs. head_ref (set only on
+# pull_request, to the source branch) and ref_name (the plain branch name on push)
+# both yield `<branch>`, so the two now contend for one slot and one is cancelled.
+#
+# Trade-off, accepted deliberately: which of the two survives is a race. The
+# pull_request run tests the MERGE COMMIT (branch + main) while the push run tests
+# the branch tip alone, so the merge-commit check is no longer guaranteed on every
+# push. It still runs whenever the pull_request run wins, `main` itself is fully
+# checked on merge, and nothing here is a required status check (main carries no
+# branch protection). Dropping the push trigger for branches instead would have
+# been deterministic but worse: measured, ~35% of branch pushes happen with no PR
+# open, and those would get no CI at all.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
