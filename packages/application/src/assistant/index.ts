@@ -2,6 +2,7 @@ export * from "./allowlist.js";
 export * from "./csv.js";
 export * from "./diff.js";
 export * from "./expander.js";
+export * from "./golden-fixtures.js";
 export * from "./ir.js";
 export * from "./model-port.js";
 export * from "./prompt.js";

@@ -10,6 +10,7 @@ import {
   buildProposalDiff,
   buildProposalPrompt,
   buildWbsSnapshot,
+  checkOutputFits,
   csvColumnSample,
   csvRowsToIngestTasks,
   expandIr,
@@ -210,6 +211,23 @@ export async function runAssistantAction({ request, context, model }: AssistantA
     }
     prompt = buildCsvMappingPrompt(csvColumnSample(table), budget);
   } else {
+    // A21 — refuse BEFORE generating when the expected IR cannot fit the output
+    // slot. A truncated IR is not a partial success: JSON Mode fails on it every
+    // time, so it is better to say "split the document" than to spend the
+    // account's neurons discovering that. Lines are the proxy for task count in a
+    // pasted document — an over-estimate for prose (which fails safe) and about
+    // right for the list-shaped estimates this mode is for.
+    if (mode === "ingest") {
+      const lines = parsedRequest.data.input.split("\n").filter((line) => line.trim().length > 0).length;
+      const fit = checkOutputFits(lines, budget);
+      if (!fit.fits) {
+        return fail(
+          "TOO_LARGE",
+          422,
+          `この見積書は ${lines} 行あり、一度に扱えるのは約 ${fit.maxRows} 行です。分割してください。`,
+        );
+      }
+    }
     try {
       prompt = buildProposalPrompt({
         mode,

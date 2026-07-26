@@ -407,3 +407,32 @@ describe("proposal API — a CSV costs the model one small answer (ADR 0013 Deci
     expect(result.data.code).toBe("MODEL_SCHEMA_UNMET");
   });
 });
+
+describe("proposal API — refuses before generating when the IR could not fit (A21)", () => {
+  it("rejects a document whose expected IR exceeds the output slot, quoting the limit", async () => {
+    // A truncated IR is not a partial success — JSON Mode fails on it every time —
+    // so discovering that AFTER paying for the generation is the wrong order.
+    const model = fakeModel({ summary: "", tasks: [] });
+    const long = Array.from({ length: 400 }, (_u, i) => `${i + 1}. 作業項目 ${i} 8時間`).join("\n");
+    const result = await run("EDITOR", { mode: "ingest", input: long }, model);
+    expect(result.init?.status).toBe(422);
+    expect(result.data.code).toBe("TOO_LARGE");
+    expect(String(result.data.message)).toMatch(/約 \d+ 行/u);
+    expect(model.prompts).toHaveLength(0);
+  });
+
+  it("lets a realistically sized estimate through", async () => {
+    const model = fakeModel({ summary: "", tasks: [] });
+    const modest = Array.from({ length: 40 }, (_u, i) => `${i + 1}. 作業項目 ${i} 8時間`).join("\n");
+    const result = await run("EDITOR", { mode: "ingest", input: modest }, model);
+    expect(result.data.ok).toBe(true);
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  it("does not apply the row check to chat, where the answer is one line", async () => {
+    const model = fakeModel({ summary: "", tasks: [] });
+    const chatty = Array.from({ length: 300 }, (_u, i) => `${i} 行目の話`).join("\n");
+    const result = await run("EDITOR", { mode: "chat", input: chatty }, model);
+    expect(result.data.ok).toBe(true);
+  });
+});
