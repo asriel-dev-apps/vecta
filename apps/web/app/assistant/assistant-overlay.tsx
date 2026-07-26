@@ -119,7 +119,11 @@ function formatUsage(usage: AssistantProposal["usage"]): string {
   if (usage.output !== undefined) parts.push(`出力 ${usage.output}`);
   if (usage.total !== undefined) parts.push(`合計 ${usage.total}`);
   if (parts.length === 0) return "使用量は未報告です";
-  return `${parts.join(" / ")} ${usage.unit}`;
+  // An estimate is labelled every time it is shown. The provider not reporting
+  // usage is the normal case here, so this suffix is what stops a routine reading
+  // from being mistaken for a measurement.
+  const suffix = usage.estimated === true ? "（概算・AI からの報告なし）" : "";
+  return `${parts.join(" / ")} ${usage.unit}${suffix}`;
 }
 
 export function AssistantOverlay({

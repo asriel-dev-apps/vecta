@@ -102,6 +102,8 @@ export interface AssistantProposal {
     readonly input?: number;
     readonly output?: number;
     readonly total?: number;
+    /** True when these are our own approximation, not the provider's report. */
+    readonly estimated?: boolean;
   } | null;
 }
 

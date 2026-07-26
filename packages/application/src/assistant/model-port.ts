@@ -46,6 +46,17 @@ export interface ProposalUsage {
   readonly output?: number;
   /** Some providers report only the combined figure. */
   readonly total?: number;
+  /**
+   * True when these counts are OUR character-based approximation rather than the
+   * provider's report. Measured 2026-07-26: the Workers AI binding returns no
+   * `usage` for this call shape, so without this the panel could say nothing at
+   * all — and "nothing" is not what the reader needs when the question is "is the
+   * design's 3,600-token assumption anywhere near right?".
+   *
+   * A flag rather than a different unit string, so a consumer cannot render an
+   * estimate as a measurement by forgetting to read a suffix.
+   */
+  readonly estimated?: boolean;
 }
 
 export interface ProposalOutput {

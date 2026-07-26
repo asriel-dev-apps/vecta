@@ -4,7 +4,7 @@ import {
   type CsvColumnSample,
 } from "./csv.js";
 import { irJsonSchema, type AssistantMode } from "./ir.js";
-import type { ProposalPrompt } from "./model-port.js";
+import type { ProposalPrompt, ProposalUsage } from "./model-port.js";
 import { estimateTokens, type AssistantContextBudget } from "./snapshot.js";
 
 /**
@@ -184,5 +184,33 @@ export function buildCsvMappingPrompt(
     // more than needed; cap it low so a rambling model fails fast instead of
     // spending the account's neurons on prose.
     maxOutputTokens: Math.min(budget.outputTokens, 400),
+  };
+}
+
+/**
+ * Approximate what a request cost, from the prompt we built and the answer we got.
+ *
+ * Used ONLY when the provider reported nothing (measured: Workers AI's binding does
+ * not report `usage` for a JSON-mode call). It is flagged `estimated` so it can
+ * never be read as a measurement — the same discipline that keeps the adapter from
+ * calling tokens "neurons".
+ *
+ * The approximation is the one Design 0005 §6 already relies on to enforce the
+ * context budget: Workers AI ships no client-side tokenizer, so character counts
+ * biased high are the honest ceiling available.
+ */
+export function estimateProposalUsage(prompt: ProposalPrompt, raw: unknown): ProposalUsage {
+  const sent = [prompt.system, ...prompt.messages.map((message) => message.content)].join("\n");
+  let received: string;
+  try {
+    received = typeof raw === "string" ? raw : JSON.stringify(raw) ?? "";
+  } catch {
+    received = "";
+  }
+  return {
+    unit: "tokens",
+    input: estimateTokens(sent),
+    output: estimateTokens(received),
+    estimated: true,
   };
 }

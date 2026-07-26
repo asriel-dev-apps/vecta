@@ -13,6 +13,7 @@ import {
   checkOutputFits,
   csvColumnSample,
   csvRowsToIngestTasks,
+  estimateProposalUsage,
   expandIr,
   parseCsv,
   parseCsvMapping,
@@ -384,7 +385,11 @@ export async function runAssistantAction({ request, context, model }: AssistantA
       summary: parsedIr.ir.summary,
       ...(csvSummary === null ? {} : { csv: csvSummary }),
       model: proposalModel.id,
-      usage: output.usage,
+      // Measured 2026-07-26: the Workers AI binding reports no `usage` for this
+      // call shape. Rather than tell the reader nothing, fall back to our own
+      // character-based approximation of what we sent and received — flagged
+      // `estimated` so it can never be read as the provider's measurement.
+      usage: output.usage ?? estimateProposalUsage(prompt, output.raw),
     },
   });
 }
