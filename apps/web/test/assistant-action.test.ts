@@ -436,3 +436,56 @@ describe("proposal API — refuses before generating when the IR could not fit (
     expect(result.data.ok).toBe(true);
   });
 });
+
+describe("proposal API — adding a task in CHAT mode (the path that shipped broken)", () => {
+  // The gap that let it through: ingest-mode adds and chat-mode updates were both
+  // tested, but never a chat-mode ADD. The expander handled it correctly all along
+  // — what was missing was any instruction telling the model it was allowed, so the
+  // model answered that it could only update and returned no tasks. The user saw
+  // "0 件追加 / 0 件更新" and no error, which is the worst kind of failure: silent.
+  it("turns a chat add into a task.add with the stated effort", async () => {
+    const model = fakeModel({
+      summary: "1 件追加します",
+      tasks: [{ op: "add", name: "受入テストの実施", effortHours: 16 }],
+    });
+    const result = await run("EDITOR", { mode: "chat", input: "受入テストのタスクを 16 時間で追加して" }, model);
+    expect(result.data.ok).toBe(true);
+    const proposal = proposalOf(result);
+    expect(proposal.diff.addedTasks).toBe(1);
+    expect(proposal.commands).toHaveLength(1);
+    expect(proposal.commands[0]).toMatchObject({ type: "task.add" });
+  });
+
+  it("places a chat add under an existing task by its display No.", async () => {
+    const model = fakeModel({
+      summary: "",
+      tasks: [{ op: "add", name: "子タスク", parentSeq: firstSeq }],
+    });
+    const result = await run("EDITOR", { mode: "chat", input: `No.${firstSeq} の下に子タスクを追加` }, model);
+    expect(result.data.ok).toBe(true);
+    const entry = proposalOf(result).diff.entries[0];
+    expect(entry?.changes.some((change) => change.field === "親タスク")).toBe(true);
+  });
+
+  it("applies a stored template to an existing task", async () => {
+    const templateName = project.templates[0]?.name;
+    if (templateName === undefined) return;
+    const model = fakeModel({
+      summary: "",
+      tasks: [{ op: "generateSubtasks", seq: firstSeq, template: templateName }],
+    });
+    const result = await run("EDITOR", { mode: "chat", input: "標準の手順に分解して" }, model);
+    expect(result.data.ok).toBe(true);
+    expect(proposalOf(result).commands[0]).toMatchObject({ type: "task.generateSubtasks" });
+  });
+
+  it("still reports an empty answer as zero changes rather than an error", async () => {
+    // A model that legitimately declines (e.g. asked to delete) returns no tasks.
+    // That must remain distinguishable from a failure — it is not one.
+    const model = fakeModel({ summary: "削除は対応していません", tasks: [] });
+    const result = await run("EDITOR", { mode: "chat", input: "全部消して" }, model);
+    expect(result.data.ok).toBe(true);
+    expect(proposalOf(result).diff.addedTasks).toBe(0);
+    expect(proposalOf(result).commands).toHaveLength(0);
+  });
+});
