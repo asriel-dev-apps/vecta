@@ -37,6 +37,7 @@ export const SURFACES = [
     id: "credential",
     label: "資格情報の生成・保管・比較・送出",
     sections: ["Secrets handling", "Transport security"],
+    asvs: ["V11 Cryptography", "V14 Data Protection"],
     questions: [
       "この値はどの経路を通るか。通った先（サーバログ・CDN ログ・アドレスバー・履歴・ブックマーク・Referer・ブラウザ同期・スクショ・コピペ・エラーレポート）を誰が読めるか",
       "URL（クエリ・パス・フラグメント）に載っていないか",
@@ -55,6 +56,7 @@ export const SURFACES = [
     id: "authz",
     label: "認証・認可の判断",
     sections: ["Auth / authorization"],
+    asvs: ["V6 Authentication", "V8 Authorization"],
     questions: [
       "保護された経路すべてで検証されるか。抜け道（dev 用の分岐、既定資格、無効化フラグ）はないか",
       "各ハンドラは呼び出し元がその対象を所有/参照してよいことを確認しているか（リクエストの ID を信用していないか）",
@@ -71,7 +73,8 @@ export const SURFACES = [
   {
     id: "surface",
     label: "外部から到達できる新しい口",
-    sections: ["Auth / authorization", "SSRF & outbound requests"],
+    sections: ["Auth / authorization", "SSRF & outbound requests", "API & web service surface"],
+    asvs: ["V4 API and Web Service", "V8 Authorization"],
     questions: [
       "認証なしで到達できるか。到達できるなら、それは意図か",
       "その口は他の口と同じ認可を通るか（1 つだけ素通しになっていないか）",
@@ -87,6 +90,7 @@ export const SURFACES = [
     id: "cookie-header",
     label: "Cookie・セキュリティヘッダ",
     sections: ["Secrets handling", "Transport security", "XSS / output handling"],
+    asvs: ["V3 Web Frontend Security", "V7 Session Management", "V13 Configuration"],
     questions: [
       "Cookie は HttpOnly / Secure / SameSite か。値は資格情報そのものではなく導出値か",
       "そのレスポンスヘッダは、より厳しい既存のヘッダを上書きしていないか",
@@ -98,6 +102,7 @@ export const SURFACES = [
     id: "deploy-target",
     label: "デプロイ先・環境の追加や変更",
     sections: ["*"], // a new environment adds every surface at once
+    asvs: ["V13 Configuration"],
     questions: [
       "公開されるか。公開されない前提なら、その守りは成果物の中にあるか（外側の設定に依存していないか）",
       "本番の資格情報・データに到達できないか。取り違えを拒否するガードはあるか",
@@ -111,6 +116,7 @@ export const SURFACES = [
     id: "data-boundary",
     label: "データ境界（永続化・マイグレーション）",
     sections: ["SQL / NoSQL / query injection", "Auth / authorization"],
+    asvs: ["V2 Validation and Business Logic", "V14 Data Protection"],
     questions: [
       "クエリは値をパラメータとして渡しているか（文字列連結でないか）",
       "テナント/プロジェクトのスコープはクエリ側で強制されているか",
@@ -118,6 +124,47 @@ export const SURFACES = [
     ],
     paths: ["packages/persistence/", "migration"],
     patterns: [/\bDATABASE_URL\b/, /\bsql`/, /\bdrizzle\b/],
+  },
+  {
+    id: "logging",
+    label: "ログ・エラー出力",
+    sections: ["Logging & error handling"],
+    asvs: ["V16 Security Logging and Error Handling"],
+    // Added because this is where the incident that prompted all of this LANDED: a
+    // key in a query string is a key written verbatim into request logs. The
+    // checklist had no logging class at all, so the question was never asked.
+    questions: [
+      "秘密・トークン・セッション ID・資格情報が、値としてログに届かないか（語ではなく値を追う）",
+      "URL 経由で間接的にログに落ちていないか（サーバ・プロキシ・CDN はリクエスト行をそのまま記録する）",
+      "エラー応答がスタックトレース・内部ホスト名・SQL・ファイルパスを漏らさないか",
+      "認証の判断と認可の拒否は、そもそもログに残っているか（事後に再構成できるか）",
+      "ログや依存が失敗したとき fail-closed か。検査の中の例外が「許可」を意味していないか",
+    ],
+    patterns: [
+      /console\.(log|error|warn|info|debug)\s*\(/,
+      /\b(logger|log)\.(info|warn|error|debug|trace)\s*\(/,
+      /\bwriteHttpRequestLog\b|\bcaptureException\b/,
+    ],
+  },
+  {
+    id: "session-token",
+    label: "セッション・自己完結トークン",
+    sections: ["Session management", "Self-contained tokens / JWT"],
+    asvs: ["V7 Session Management", "V9 Self-contained Tokens", "V10 OAuth and OIDC"],
+    questions: [
+      "識別子は CSPRNG 由来で十分に長いか。Cookie は HttpOnly / Secure / SameSite か",
+      "失効するか（絶対・アイドル）。ログアウト・権限変更で無効化されるか",
+      "ログイン時に新しい識別子を発行するか（固定化攻撃を残さないか）",
+      "JWT を検証するなら、アルゴリズムは検証側が固定するか（トークンのヘッダを信じていないか）。iss / aud / exp / nbf をすべて見るか",
+      "OAuth なら PKCE・state の照合・nonce・redirect_uri の完全一致があるか",
+      "署名鍵のローテートで、既存のセッションやトークンが 1 手で無効になるか",
+    ],
+    patterns: [
+      /\bjwtVerify\b|\bcreateRemoteJWKSet\b|\bSignJWT\b/,
+      /\b(session|Session)(Secret|Cookie|Token)\b/,
+      /\b(code_verifier|code_challenge|redirect_uri|nonce)\b/,
+      /\breadSession\b|\bwriteSession\b/,
+    ],
   },
 ];
 
@@ -230,6 +277,7 @@ function main() {
       id: surface.id,
       label: surface.label,
       sections: surface.sections,
+      asvs: surface.asvs,
       questions: surface.questions,
       evidence: evidence.slice(0, 3),
     })),

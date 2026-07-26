@@ -167,3 +167,36 @@ test("gathers surfaces across several commits in the range", () => {
 test("finds nothing when nothing was recorded — the gate must still be able to fail", () => {
   assert.deepEqual([...parseReviewedSurfaces("feat: no review here\n\nCo-Authored-By: x")], []);
 });
+
+// The two surfaces added after comparing the checklist against ASVS 5.0 chapter by
+// chapter. `logging` is the one that matters most: it is where the incident that
+// prompted this whole exercise LANDED — a key in a query string is a key written
+// verbatim into request logs — and the checklist had no logging class at all.
+test("flags code that writes to a log", () => {
+  const diff = `
++++ b/apps/web/app/server/x.server.ts
+@@
++  console.error("failed for", principal.id);
+`;
+  assert.ok(idsFor(diff).includes("logging"));
+});
+
+test("flags session and token handling", () => {
+  for (const line of [
+    "+  const { payload } = await jwtVerify(token, jwks);",
+    "+  const codeVerifier = makeVerifier(); // code_verifier",
+    "+  await writeSession(response, principal);",
+  ]) {
+    const diff = `\n+++ b/apps/web/app/server/auth/x.server.ts\n@@\n${line}\n`;
+    assert.ok(idsFor(diff).includes("session-token"), line);
+  }
+});
+
+test("every surface names the ASVS chapters it maps to", () => {
+  // Without this the surface tells a reader which questions to ask but not where the
+  // authoritative wording lives, and the two references drift apart.
+  for (const surface of SURFACES) {
+    assert.ok(Array.isArray(surface.asvs) && surface.asvs.length > 0, surface.id);
+    for (const chapter of surface.asvs) assert.match(chapter, /^V\d+ /u, surface.id);
+  }
+});
