@@ -50,7 +50,10 @@ describe("virtualizer renders the first window server-side (initialRect)", () =>
   it("renders without any React warning server-side (layout-effect guard holds)", () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-      errors.push(String(args[0] ?? ""));
+      // React logs a string first; anything else is serialised rather than coerced,
+      // so a failure shows what was actually logged instead of "[object Object]".
+      const [first] = args;
+      errors.push(typeof first === "string" ? first : (JSON.stringify(first) ?? "(unserialisable)"));
     });
     const project = scheduledProject({ parentCount: 2, subtasksPerParent: 3, memberCount: 3 });
     ssr(project, "PRIVILEGED");

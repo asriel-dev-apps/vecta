@@ -46,7 +46,23 @@ const READS_QUERY_STRING = [/\bsearchParams\b/u, /\bnew URLSearchParams\(\s*(?:w
  * deliberately ABSENT: OAuth puts them in a redirect by specification, so listing
  * them would make the rule unusable rather than make the app safer.
  */
-const CREDENTIAL_PARAMETER = /[?&](?:[a-z0-9_-]*(?:secret|token|passwo?rd|passwd|pwd|api[_-]?key|access[_-]?key|apikey|credential|bearer|hmac|signature)[a-z0-9_-]*)=/iu;
+const CREDENTIAL_PARAMETER_NAME = /[?&]([a-z0-9_-]+)=/giu;
+const CREDENTIAL_WORD = /secret|token|passwo?rd|passwd|pwd|api[_-]?key|access[_-]?key|apikey|credential|bearer|hmac|signature/iu;
+
+/**
+ * Two simple patterns rather than one clever one. The original wrapped the keyword
+ * alternation in `[a-z0-9_-]*` on both sides, and those classes overlap the keywords
+ * themselves — ambiguous, so a long non-matching line backtracks. Extract the
+ * parameter name with a single unambiguous class, then test the name.
+ */
+function findCredentialParameter(source) {
+  CREDENTIAL_PARAMETER_NAME.lastIndex = 0;
+  let match;
+  while ((match = CREDENTIAL_PARAMETER_NAME.exec(source)) !== null) {
+    if (CREDENTIAL_WORD.test(match[1])) return match[0];
+  }
+  return null;
+}
 
 /**
  * Two kinds of file are out of scope for BOTH rules:
@@ -76,8 +92,8 @@ export const RULES = [
     id: "no-credential-parameter-literal",
     applies: inScope,
     check(source) {
-      const match = CREDENTIAL_PARAMETER.exec(source);
-      return match === null ? null : `contains a credential-shaped URL parameter: ${match[0]}`;
+      const found = findCredentialParameter(source);
+      return found === null ? null : `contains a credential-shaped URL parameter: ${found}`;
     },
   },
 ];

@@ -401,13 +401,31 @@ function DndRow({
   });
 }
 
+/**
+ * Cell text for a field named by the column table. `keyof WbsGridTaskRow` includes
+ * `dailyPlan` and `dependencies`, so the type cannot prove the value is scalar — and
+ * a blind `String()` would render "[object Object]" into a cell rather than showing
+ * that the column table named a field the grid cannot display. Only scalars render;
+ * anything else is empty, which is at least not a lie.
+ *
+ * The stronger fix is to constrain the column table's `field` to the row's SCALAR
+ * keys, which removes the cast and makes the case unrepresentable. Left for when the
+ * column table is next touched.
+ */
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 function displayValue(column: MetaColumn, row: WbsGridTaskRow): string {
   switch (column.kind) {
     case "index":
       // The immutable display No. (§F-1), not the render-order row position.
       return formatSeq(row.seq);
     case "text":
-      return String(row[column.field as keyof WbsGridTaskRow] ?? "");
+      return cellText(row[column.field as keyof WbsGridTaskRow]);
     case "assignee":
       return row.assigneeName ?? "";
     case "process":
@@ -419,13 +437,13 @@ function displayValue(column: MetaColumn, row: WbsGridTaskRow): string {
     case "progress":
       return row.progress.toFixed(2);
     case "date":
-      return String(row[column.field as keyof WbsGridTaskRow] ?? "");
+      return cellText(row[column.field as keyof WbsGridTaskRow]);
     case "derivedNum":
       return formatNumber(row[column.id as keyof WbsGridTaskRow] as number);
     case "derivedPercent":
       return `${(row.plannedProgress * 100).toFixed(0)}%`;
     case "derivedDate":
-      return String(row[column.id as keyof WbsGridTaskRow] ?? "");
+      return cellText(row[column.id as keyof WbsGridTaskRow]);
     case "status":
       return STATUS_LABEL[row.status];
   }
@@ -444,9 +462,9 @@ function editInitialValue(column: MetaColumn, row: WbsGridTaskRow): string {
     case "product":
       return row.productId ?? "";
     case "date":
-      return String(row[column.field as keyof WbsGridTaskRow] ?? "");
+      return cellText(row[column.field as keyof WbsGridTaskRow]);
     default:
-      return String(row[column.field as keyof WbsGridTaskRow] ?? "");
+      return cellText(row[column.field as keyof WbsGridTaskRow]);
   }
 }
 

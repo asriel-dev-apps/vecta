@@ -184,7 +184,11 @@ export async function stagingGate(
   if (request.method === "POST") {
     let provided: string | null;
     try {
-      provided = String((await request.formData()).get(KEY_FIELD) ?? "");
+      // `FormData.get` returns `string | File | null`. Coercing a File would compare
+      // the literal text "[object File]" — harmless here, but a credential path is
+      // the last place to let a type quietly widen. Only a string is a candidate.
+      const field = (await request.formData()).get(KEY_FIELD);
+      provided = typeof field === "string" ? field : null;
     } catch {
       provided = null; // not a form body; fall through to the refusal
     }

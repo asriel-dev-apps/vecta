@@ -242,9 +242,26 @@ export function sanitiseCsvMapping(
 
 /** Numbers in an estimate arrive as "12", "12.5", "1,200" or "8h"; take the leading number. */
 function toHours(cell: string): number | undefined {
-  const match = /-?\d[\d,]*(\.\d+)?/u.exec(cell);
-  if (match === null) return undefined;
-  const value = Number.parseFloat(match[0].replace(/,/gu, ""));
+  // Scanned by hand rather than matched by a regex. Every regex shape tried here
+  // was flagged as potentially backtracking, and this reads a document SOMEBODY ELSE
+  // wrote while Workers Free allows the whole request 10 ms of CPU — so a slow match
+  // is a denial of service, not a slow import. A linear scan cannot backtrack at all.
+  let start = -1;
+  for (let index = 0; index < cell.length; index += 1) {
+    const code = cell.charCodeAt(index);
+    if (code >= 48 && code <= 57) {
+      start = index;
+      break;
+    }
+  }
+  if (start === -1) return undefined;
+  let end = start;
+  while (end < cell.length) {
+    const char = cell[end]!;
+    if ((char >= "0" && char <= "9") || char === "," || char === ".") end += 1;
+    else break;
+  }
+  const value = Number.parseFloat(cell.slice(start, end).replace(/,/gu, ""));
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 

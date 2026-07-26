@@ -1,0 +1,53 @@
+# CodeQL — dataflow analysis, free for public repositories.
+#
+# Added 2026-07-27 after noticing it was available and unused while this repo was
+# hand-rolling regex checks. The difference is not effort, it is capability: the
+# regex gates answer "does this text appear", CodeQL follows a value from an
+# untrusted SOURCE to a dangerous SINK across files. That is the class of finding
+# the hand-written checks structurally cannot reach.
+#
+# It does not replace them. `verify-client-bundle` inspects a BUILT artifact,
+# `verify-assistant-boundary` and `verify-no-secret-in-url` encode invariants
+# specific to this codebase that no general analyser knows about. CodeQL covers the
+# general classes; those cover the local ones.
+#
+# Actions are pinned to a commit SHA, not a tag. A tag is mutable: whoever controls
+# the upstream repository can repoint it and run arbitrary code here with NO diff
+# visible in this file. (`ci.yml` and `deploy.yml` are still tag-pinned — that is a
+# recorded finding, not an oversight of this file; see the HANDOFF.)
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly-published query finds existing code rather than waiting
+    # for someone to touch it.
+    - cron: "37 4 * * 1"
+
+# The default token is read-only; the analysis needs to write its results.
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          languages: javascript-typescript
+          # `security-extended` over the default: the default set is tuned for a low
+          # false-positive rate on any repository, and this one would rather read a
+          # few extra findings than miss one.
+          queries: security-extended
+      - uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          category: "/language:javascript-typescript"
