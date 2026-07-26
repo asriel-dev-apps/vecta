@@ -145,14 +145,22 @@ describe("document rate limit — applied where the legitimate rate is near zero
   });
 
   it("never calls the limiter for a path outside the set", async () => {
-    const env = envWith(false);
+    // The spy is held directly rather than read back off the binding: reaching
+    // through `env.PRE_AUTH_RATE_LIMIT.limit` detaches a method from its object,
+    // which `@typescript-eslint/unbound-method` rejects under the type-aware
+    // config.
+    const limit = vi.fn(async () => ({ success: false }));
+    const env = fakeEnv({});
+    (env as unknown as { PRE_AUTH_RATE_LIMIT: RateLimit }).PRE_AUTH_RATE_LIMIT = {
+      limit,
+    } as unknown as RateLimit;
+
     const response = await withDocumentEdge(post("/projects/p1/wbs", "{}"), env, () =>
       Promise.resolve(OK.clone()),
     );
 
     expect(response.status).toBe(200);
-    expect((env as unknown as { PRE_AUTH_RATE_LIMIT: RateLimit }).PRE_AUTH_RATE_LIMIT.limit)
-      .not.toHaveBeenCalled();
+    expect(limit).not.toHaveBeenCalled();
   });
 
   it("strips only a trailing .data, not a path that merely contains it", () => {
