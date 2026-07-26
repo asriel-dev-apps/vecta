@@ -178,7 +178,7 @@ describe("assistant overlay — asking for a proposal", () => {
     const harness = mount();
     fireEvent.change(screen.getByTestId("assistant-input"), { target: { value: "先の発話" } });
     fireEvent.click(screen.getByTestId("assistant-submit"));
-    fireEvent.click(screen.getByRole("tab", { name: "見積書の取り込み" }));
+    fireEvent.click(screen.getByRole("tab", { name: "見積書" }));
     fireEvent.change(screen.getByTestId("assistant-input"), { target: { value: "見積書の本文" } });
     fireEvent.click(screen.getByTestId("assistant-submit"));
     expect(harness.onPropose).toHaveBeenLastCalledWith({
@@ -372,5 +372,74 @@ describe("assistant overlay — approving", () => {
     expect(unresolved.textContent).toContain("工程「受入」");
     expect(unresolved.textContent).toContain("見つかりません");
     expect(unresolved.textContent).toContain("メンバー「山田」");
+  });
+});
+
+describe("assistant overlay — CSV import", () => {
+  it("offers a third mode and sends it, with no conversation attached", () => {
+    const harness = mount();
+    fireEvent.click(screen.getByRole("tab", { name: "CSV" }));
+    fireEvent.change(screen.getByTestId("assistant-input"), {
+      target: { value: "作業名,工数\nA,8\n" },
+    });
+    fireEvent.click(screen.getByTestId("assistant-submit"));
+    // The input is trimmed, which a CSV parser does not mind: a missing trailing
+    // newline is not a missing row.
+    expect(harness.onPropose).toHaveBeenCalledWith({
+      mode: "csv",
+      input: "作業名,工数\nA,8",
+    });
+  });
+
+  it("says plainly that only the header and three rows reach the AI", () => {
+    mount();
+    fireEvent.click(screen.getByRole("tab", { name: "CSV" }));
+    const panel = screen.getByTestId("assistant-panel");
+    expect(panel.textContent).toContain("ヘッダ名と先頭 3 行だけ");
+    expect(panel.textContent).toContain("第三者が書いたもの");
+    // JSX collapses a line break inside a sentence into a space, and a space
+    // between two Japanese characters is simply wrong. Invisible in review, plain
+    // in a screenshot — so it gets an assertion.
+    expect(panel.textContent).toContain("既存タスクの変更はこの経路では作れません");
+    expect(panel.textContent).not.toMatch(/[ぁ-んァ-ヶ一-龠] [ぁ-んァ-ヶ一-龠]/u);
+  });
+
+  it("offers a file picker in CSV mode only", () => {
+    mount();
+    expect(screen.queryByTestId("assistant-csv-file")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "CSV" }));
+    expect(screen.getByTestId("assistant-csv-file")).toBeTruthy();
+  });
+
+  it("shows the column mapping — the control that matters more than a 300-row diff", () => {
+    mount({
+      result: ok(
+        proposalWith({
+          mode: "ingest",
+          summary: "CSV の 3 行をタスク案にしました。",
+          csv: {
+            rowCount: 3,
+            mapped: [
+              { columnIndex: 0, columnName: "作業名", field: "タスク名" },
+              { columnIndex: 2, columnName: "工数(h)", field: "工数(時間)" },
+            ],
+            unmappedColumns: ["備考"],
+            issues: [{ field: "担当", reason: "存在しない列を指していたため無視しました" }],
+          },
+        }),
+      ),
+    });
+    const mapping = screen.getByTestId("assistant-csv-mapping");
+    expect(mapping.textContent).toContain("3 行を取り込みます");
+    // 1-indexed for a human reading a spreadsheet, not 0-indexed like the model's answer.
+    expect(mapping.textContent).toContain("1 列目「作業名」");
+    expect(mapping.textContent).toContain("3 列目「工数(h)」");
+    expect(mapping.textContent).toContain("使わなかった列: 備考");
+    expect(mapping.textContent).toContain("担当: 存在しない列");
+  });
+
+  it("shows no mapping block for a non-CSV proposal", () => {
+    mount({ result: ok(proposalWith()) });
+    expect(screen.queryByTestId("assistant-csv-mapping")).toBeNull();
   });
 });

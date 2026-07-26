@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   CsvParseError,
+  assistantContextBudget,
+  buildCsvMappingPrompt,
   csvColumnSample,
+  csvMappingJsonSchema,
   csvRowsToIngestTasks,
   parseCsv,
+  parseCsvMapping,
   sanitiseCsvMapping,
 } from "../src/index.js";
 
@@ -97,5 +101,68 @@ describe("CSV → IR — every row is converted in TypeScript", () => {
     const [task] = csvRowsToIngestTasks(table, { name: 0, process: 1 });
     expect(task?.op).toBe("add");
     expect(Object.keys(task ?? {})).not.toContain("seq");
+  });
+});
+
+describe("CSV mapping schema — the model's whole contribution", () => {
+  it("accepts an answer of column indices", () => {
+    const parsed = parseCsvMapping({ name: 0, effortHours: 2 });
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("rejects a field that is not mappable, so a stray key cannot ride along", () => {
+    expect(parseCsvMapping({ name: 0, dailyPlan: 1 }).ok).toBe(false);
+  });
+
+  it("rejects a non-integer or negative index", () => {
+    expect(parseCsvMapping({ name: 1.5 }).ok).toBe(false);
+    expect(parseCsvMapping({ name: -1 }).ok).toBe(false);
+  });
+
+  it("rejects prose where JSON belongs", () => {
+    expect(parseCsvMapping("A 列がタスク名です").ok).toBe(false);
+  });
+
+  it("derives its JSON Schema from the same schema, and mentions no forbidden field", () => {
+    const schema = JSON.stringify(csvMappingJsonSchema());
+    expect(schema).toContain("effortHours");
+    for (const word of ["seq", "dailyPlan", "parentId", "delete"]) {
+      expect(schema, `schema mentions ${word}`).not.toContain(word);
+    }
+  });
+});
+
+describe("CSV prompt — the file does not go to the model (Design 0005 §4)", () => {
+  const budget = assistantContextBudget("ingest", 24_000);
+
+  it("carries the header and the samples, and nothing else from the file", () => {
+    const body = Array.from({ length: 400 }, (_u, i) => `秘密のタスク${i},8`).join("\n");
+    const table = parseCsv(`作業名,工数\n${body}\n`);
+    const prompt = buildCsvMappingPrompt(csvColumnSample(table), budget);
+    expect(prompt.system).toContain("作業名");
+    expect(prompt.system).toContain("秘密のタスク0");
+    expect(prompt.system).toContain("秘密のタスク2");
+    // Row 4 onwards never leaves the server, which is what makes the cost of an
+    // import independent of its size.
+    expect(prompt.system).not.toContain("秘密のタスク3");
+    expect(prompt.system).not.toContain("秘密のタスク399");
+  });
+
+  it("tells the model the header is a third party's document", () => {
+    const table = parseCsv("a,b\n1,2\n");
+    const prompt = buildCsvMappingPrompt(csvColumnSample(table), budget);
+    expect(prompt.system).toContain("DOCUMENT SOMEBODY ELSE WROTE");
+  });
+
+  it("caps the answer low — it is seven integers, not an essay", () => {
+    const table = parseCsv("a,b\n1,2\n");
+    expect(buildCsvMappingPrompt(csvColumnSample(table), budget).maxOutputTokens).toBeLessThanOrEqual(400);
+  });
+
+  it("prefers omitting a field to guessing it", () => {
+    const table = parseCsv("a,b\n1,2\n");
+    expect(buildCsvMappingPrompt(csvColumnSample(table), budget).system).toContain(
+      "Guessing is worse than omitting",
+    );
   });
 });

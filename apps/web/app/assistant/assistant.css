@@ -359,3 +359,39 @@
 .assistant-inline-link:focus-visible { outline: none; box-shadow: var(--ring); }
 
 .assistant-meta { margin: 0; font-size: 10px; color: var(--faint); font-family: var(--mono); }
+
+/* CSV file picker. The native control is hidden and the label styled, because the
+   default widget is untidy and the accepted type is already stated in the copy. */
+.assistant-file {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  border-radius: 7px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.assistant-file:hover { background: var(--accent-soft); border-color: var(--accent); }
+.assistant-file input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.assistant-file:focus-within { outline: none; box-shadow: var(--ring); }
+
+/* The column mapping. Styled like the diff entries rather than like a hint,
+   because for an import this IS the thing being approved: 300 rows get scrolled,
+   one mapping line gets read. */
+.assistant-mapping {
+  border: 1px solid var(--accent-soft);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.assistant-mapping .assistant-section-title { color: var(--accent-strong); }
+.assistant-mapping .assistant-diff__field dt { color: var(--accent-strong); opacity: 0.75; }
+.assistant-mapping .assistant-diff__field dd { color: var(--ink); font-weight: 600; }
+.assistant-mapping .assistant-hint { color: var(--accent-strong); opacity: 0.85; }

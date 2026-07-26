@@ -114,6 +114,16 @@ interface ProposalPayload {
   };
   readonly summary: string;
   readonly unresolved: readonly unknown[];
+  readonly csv?: {
+    readonly rowCount: number;
+    readonly mapped: readonly {
+      readonly columnIndex: number;
+      readonly columnName: string;
+      readonly field: string;
+    }[];
+    readonly unmappedColumns: readonly string[];
+    readonly issues: readonly { readonly field: string; readonly reason: string }[];
+  };
 }
 
 function proposalOf(result: { data: Record<string, unknown> }): ProposalPayload {
@@ -293,5 +303,107 @@ describe("proposal API — the misconfigured provider surfaces as an error, not 
     })) as unknown as { data: Record<string, unknown>; init?: { status?: number } };
     expect(result.init?.status).toBe(500);
     expect(result.data.code).toBe("PROVIDER_MISCONFIGURED");
+  });
+});
+
+describe("proposal API — a CSV costs the model one small answer (ADR 0013 Decision 10)", () => {
+  const csv = [
+    "作業名,工程,工数(h),備考,担当",
+    "認証基盤の実装,設計,40,,Member 01",
+    "OIDC 疎通試験,設計,8,,",
+    ",,16,小計行なので無視される,",
+    "受入テスト,設計,16,,",
+  ].join("\n");
+
+  function csvModel(answer: unknown) {
+    return fakeModel(answer);
+  }
+
+  it("asks only for a column mapping, and shows the header plus three sample rows", async () => {
+    const model = csvModel({ name: 0, process: 1, effortHours: 2, note: 3, assignee: 4 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    expect(result.data.ok).toBe(true);
+    const prompt = model.prompts[0];
+    expect(prompt?.system).toContain("作業名");
+    // Row 4 is a sample row; there is no fifth in a 3-row sample.
+    expect(prompt?.system).toContain("認証基盤の実装");
+    expect(prompt?.system).not.toContain("受入テスト");
+    // The answer it was asked for is tiny — that is what keeps neuron cost flat.
+    expect(prompt?.maxOutputTokens).toBeLessThanOrEqual(400);
+  });
+
+  it("converts EVERY row in TypeScript, not just the sampled ones", async () => {
+    const model = csvModel({ name: 0, process: 1, effortHours: 2 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    const proposal = proposalOf(result);
+    // Three named rows; the blank-name subtotal row is dropped.
+    expect(proposal.commands).toHaveLength(3);
+    expect(proposal.diff.addedTasks).toBe(3);
+    expect(proposal.csv?.rowCount).toBe(3);
+  });
+
+  it("shows the mapping the human has to check, in their own words", async () => {
+    const model = csvModel({ name: 0, process: 1, effortHours: 2 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    const csvSummary = proposalOf(result).csv;
+    expect(csvSummary?.mapped).toEqual([
+      { columnIndex: 0, columnName: "作業名", field: "タスク名" },
+      { columnIndex: 1, columnName: "工程", field: "工程" },
+      { columnIndex: 2, columnName: "工数(h)", field: "工数(時間)" },
+    ]);
+    expect(csvSummary?.unmappedColumns).toEqual(["備考", "担当"]);
+  });
+
+  it("reports a stray index instead of applying it to every row", async () => {
+    const model = csvModel({ name: 0, effortHours: 99 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    expect(proposalOf(result).csv?.issues).toEqual([
+      { field: "工数(時間)", reason: "存在しない列を指していたため無視しました" },
+    ]);
+  });
+
+  it("refuses when no task-name column could be identified", async () => {
+    // Guessing which column holds the names is precisely the mistake that would be
+    // applied to all rows at once.
+    const model = csvModel({ effortHours: 2 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    expect(result.init?.status).toBe(422);
+    expect(String(result.data.message)).toContain("タスク名の列");
+  });
+
+  it("writes its own summary — there is no model prose in a CSV import at all", async () => {
+    const model = csvModel({ name: 0, effortHours: 2 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    expect(proposalOf(result).summary).toContain("3 行");
+  });
+
+  it("expands under the INGEST vocabulary, so a spreadsheet cannot touch an existing row", async () => {
+    const model = csvModel({ name: 0, effortHours: 2 });
+    const result = await run("EDITOR", { mode: "csv", input: csv }, model);
+    const types = proposalOf(result).commands.map((command) => command.type);
+    expect(new Set(types)).toEqual(new Set(["task.add"]));
+  });
+
+  it("tells an oversized file its own limit rather than failing on shape", async () => {
+    const big = ["name,hours", ...Array.from({ length: 500 }, (_u, i) => `T${i},8`)].join("\n");
+    const model = csvModel({ name: 0, effortHours: 1 });
+    const result = await run("EDITOR", { mode: "csv", input: big }, model);
+    expect(result.init?.status).toBe(422);
+    expect(String(result.data.message)).toContain("400");
+    // It failed before spending anything on the model.
+    expect(model.prompts).toHaveLength(0);
+  });
+
+  it("rejects a header-only file", async () => {
+    const model = csvModel({ name: 0 });
+    const result = await run("EDITOR", { mode: "csv", input: "name,hours\n" }, model);
+    expect(result.init?.status).toBe(422);
+    expect(model.prompts).toHaveLength(0);
+  });
+
+  it("treats an unparseable mapping answer as a normal failure", async () => {
+    const result = await run("EDITOR", { mode: "csv", input: csv }, csvModel("A 列です"));
+    expect(result.init?.status).toBe(502);
+    expect(result.data.code).toBe("MODEL_SCHEMA_UNMET");
   });
 });

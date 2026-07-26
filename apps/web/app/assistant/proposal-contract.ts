@@ -15,7 +15,15 @@ import type { ApiCommandSchema } from "~/wbs/project-command-contract";
 
 export type ProposalCommand = z.infer<typeof ApiCommandSchema>;
 
+/** The IR vocabulary / trust boundary. A CSV runs as `ingest`: add-only. */
 export type AssistantMode = "ingest" | "chat";
+
+/**
+ * What the user asked for. `csv` is a separate REQUEST mode but not a separate
+ * trust boundary — a spreadsheet is a third party's document, so it expands under
+ * the ingest vocabulary and cannot touch an existing row.
+ */
+export type AssistantRequestMode = AssistantMode | "csv";
 
 export interface AssistantHistoryTurn {
   readonly role: "user" | "assistant";
@@ -32,9 +40,30 @@ export interface AssistantHistoryTurn {
  * document's contents are not persisted anywhere either.
  */
 export interface AssistantProposalRequest {
-  readonly mode: AssistantMode;
+  readonly mode: AssistantRequestMode;
+  /** The utterance, the pasted document, or the whole CSV text. */
   readonly input: string;
   readonly history?: readonly AssistantHistoryTurn[];
+}
+
+/**
+ * What the model actually decided about a CSV, shown to the human BEFORE they
+ * approve (Design 0005 §4-5). For an import this is the control that matters more
+ * than the diff: a 300-row diff is scrolled, not read, whereas "B 列 → 工数(時間)"
+ * is one line a person can actually check — and a wrong mapping is wrong in all
+ * 300 rows identically.
+ */
+export interface CsvImportSummary {
+  readonly rowCount: number;
+  readonly mapped: readonly {
+    readonly columnIndex: number;
+    readonly columnName: string;
+    readonly field: string;
+  }[];
+  /** Header names no field claimed. Not an error — often just extra columns. */
+  readonly unmappedColumns: readonly string[];
+  /** Indices the model proposed that were out of range or already taken. */
+  readonly issues: readonly { readonly field: string; readonly reason: string }[];
 }
 
 export interface AssistantProposal {
@@ -56,6 +85,12 @@ export interface AssistantProposal {
    * approve.
    */
   readonly summary: string;
+  /**
+   * Present for a CSV import. Its `summary` is written by TypeScript, not the
+   * model — for a CSV the model's ONLY contribution is the column mapping, so
+   * there is no model prose in the result at all.
+   */
+  readonly csv?: CsvImportSummary;
   readonly model: string;
   readonly usage: { readonly unit: string; readonly input: number; readonly output: number };
 }

@@ -148,8 +148,13 @@ const ChatMasterSchema = z.discriminatedUnion("op", [
     .strict(),
 ]);
 
-/** Caps sized to the context budget (Design 0005 §6), not to the contract's 1,000. */
-const MAX_IR_TASKS = 400;
+/**
+ * Caps sized to the context budget (Design 0005 §6), not to the contract's 1,000.
+ * Exported because the CSV path has to refuse a file BEFORE converting it, with
+ * the number stated — a 5,000-row spreadsheet that failed at the schema boundary
+ * would report a shape error rather than "this file is too big".
+ */
+export const MAX_IR_TASKS = 400;
 const MAX_IR_MASTERS = 100;
 
 export const IngestIrSchema = z

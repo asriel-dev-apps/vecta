@@ -5,9 +5,9 @@ import {
   ASSISTANT_PROPOSAL_KIND,
   type AssistantActionResult,
   type AssistantHistoryTurn,
-  type AssistantMode,
   type AssistantProposal,
   type AssistantProposalRequest,
+  type AssistantRequestMode,
 } from "./proposal-contract";
 import {
   canReview,
@@ -67,7 +67,7 @@ export interface AssistantOverlayProps {
   readonly onApply: (commands: readonly ProjectCommand[]) => boolean;
 }
 
-type Mode = AssistantMode;
+type Mode = AssistantRequestMode;
 
 type HistoryTurn = AssistantHistoryTurn;
 
@@ -77,12 +77,14 @@ type DragState =
 
 const MODE_LABEL: Readonly<Record<Mode, string>> = {
   chat: "指示",
-  ingest: "見積書の取り込み",
+  ingest: "見積書",
+  csv: "CSV",
 };
 
 const MODE_PLACEHOLDER: Readonly<Record<Mode, string>> = {
   chat: "例: No.17 を 50% にして / 「受入」工程を追加して",
   ingest: "見積書のテキストや Markdown をそのまま貼り付けてください",
+  csv: "CSV を貼り付けるか、下のボタンでファイルを選んでください（1 行目をヘッダとして読みます）",
 };
 
 const UNRESOLVED_REASON: Readonly<Record<string, string>> = {
@@ -366,7 +368,7 @@ export function AssistantOverlay({
 
           <div className="assistant-panel__body">
             <div className="assistant-modes" role="tablist" aria-label="モード">
-              {(["chat", "ingest"] as const).map((value) => (
+              {(["chat", "ingest", "csv"] as const).map((value) => (
                 <button
                   key={value}
                   type="button"
@@ -384,10 +386,14 @@ export function AssistantOverlay({
               ))}
             </div>
 
-            {mode === "ingest" && (
+            {mode !== "chat" && (
               <p className="assistant-hint">
-                貼り付けた文書は<b>第三者が書いたもの</b>として扱われます。既存タスクの変更は
-                この経路では作れません（新規追加のみ）。
+                {/* No line break inside the Japanese sentence: JSX collapses it to a
+                    space, and a stray space mid-sentence is wrong in Japanese. */}
+                貼り付けた内容は<b>第三者が書いたもの</b>
+                として扱われます。既存タスクの変更はこの経路では作れません（新規追加のみ）。
+                {mode === "csv" &&
+                  "AI が読むのはヘッダ名と先頭 3 行だけで、全行の変換はプログラムが行います。"}
               </p>
             )}
 
@@ -410,7 +416,7 @@ export function AssistantOverlay({
               data-testid="assistant-input"
               value={input}
               placeholder={MODE_PLACEHOLDER[mode]}
-              rows={mode === "ingest" ? 8 : 3}
+              rows={mode === "chat" ? 3 : 8}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 // Enter sends in chat; a document being pasted needs real newlines,
@@ -421,6 +427,28 @@ export function AssistantOverlay({
                 }
               }}
             />
+
+            {mode === "csv" && (
+              <label className="assistant-file">
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  data-testid="assistant-csv-file"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file === undefined) return;
+                    // Read it in the browser and put the text in the same box the
+                    // user could have pasted into: one request shape, one server
+                    // path, and the file itself never becomes a second upload API.
+                    void file.text().then((text) => {
+                      setInput(text);
+                      setError(null);
+                    });
+                  }}
+                />
+                <span>CSV ファイルを選ぶ</span>
+              </label>
+            )}
 
             <div className="assistant-actions">
               <button
@@ -458,6 +486,38 @@ export function AssistantOverlay({
                   <div className="assistant-summary" data-testid="assistant-summary">
                     <span className="assistant-summary__tag">AI の説明</span>
                     <p className="assistant-summary__text">{proposal.summary}</p>
+                  </div>
+                )}
+
+                {proposal.csv !== undefined && (
+                  <div className="assistant-mapping" data-testid="assistant-csv-mapping">
+                    <h4 className="assistant-section-title">
+                      列の対応（{proposal.csv.rowCount} 行を取り込みます）
+                    </h4>
+                    {/* For an import this is the control that matters more than the
+                        diff: 300 rows are scrolled, not read, and a wrong mapping is
+                        wrong in all of them the same way (Design 0005 §4-5). */}
+                    <dl className="assistant-diff__fields">
+                      {proposal.csv.mapped.map((entry) => (
+                        <div key={entry.field} className="assistant-diff__field">
+                          <dt>{entry.field}</dt>
+                          <dd>
+                            {entry.columnIndex + 1} 列目
+                            {entry.columnName.length > 0 ? `「${entry.columnName}」` : ""}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {proposal.csv.unmappedColumns.length > 0 && (
+                      <p className="assistant-hint">
+                        使わなかった列: {proposal.csv.unmappedColumns.join(" / ")}
+                      </p>
+                    )}
+                    {proposal.csv.issues.map((issue) => (
+                      <p className="assistant-hint" key={issue.field}>
+                        {issue.field}: {issue.reason}
+                      </p>
+                    ))}
                   </div>
                 )}
 

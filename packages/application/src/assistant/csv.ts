@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * RFC 4180 CSV reader (Design 0005 §4, ADR 0013 Decision 10).
  *
@@ -162,6 +164,40 @@ export type CsvMappableField = (typeof CSV_MAPPABLE_FIELDS)[number];
 
 /** Column index per IR field; a field the model could not find is simply absent. */
 export type CsvColumnMapping = Partial<Record<CsvMappableField, number>>;
+
+/**
+ * The model's entire contribution to a CSV import: which column feeds which field.
+ * A fixed-size answer — seven optional integers — no matter how many rows follow,
+ * which is what makes the neuron cost independent of the file (Design 0005 §4).
+ *
+ * Indices, not names, because a name would have to be matched back against the
+ * header anyway and a model paraphrases ("工数(h)" → "工数"). An index either
+ * exists in the header or does not, and {@link sanitiseCsvMapping} decides which.
+ */
+export const CsvMappingSchema = z
+  .object(
+    Object.fromEntries(
+      CSV_MAPPABLE_FIELDS.map((field) => [
+        field,
+        z.number().int().min(0).max(200).nullable().optional(),
+      ]),
+    ) as Record<CsvMappableField, z.ZodOptional<z.ZodNullable<z.ZodNumber>>>,
+  )
+  .strict();
+
+export function csvMappingJsonSchema(): unknown {
+  return z.toJSONSchema(CsvMappingSchema, { target: "draft-7", io: "input" });
+}
+
+export type CsvMappingResponse = z.infer<typeof CsvMappingSchema>;
+
+/** Validate raw model output as a column mapping. Same posture as the IR: a miss is normal. */
+export function parseCsvMapping(
+  raw: unknown,
+): { readonly ok: true; readonly mapping: CsvMappingResponse } | { readonly ok: false } {
+  const parsed = CsvMappingSchema.safeParse(raw);
+  return parsed.success ? { ok: true, mapping: parsed.data } : { ok: false };
+}
 
 export interface CsvMappingIssue {
   readonly field: CsvMappableField;

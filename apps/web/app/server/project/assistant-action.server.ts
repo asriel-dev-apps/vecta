@@ -1,21 +1,32 @@
 import {
+  CSV_MAPPABLE_FIELDS,
+  CsvParseError,
+  MAX_IR_TASKS,
   ProposalModelError,
   PromptTooLargeError,
   SnapshotTooLargeError,
   assistantContextBudget,
+  buildCsvMappingPrompt,
   buildProposalDiff,
   buildProposalPrompt,
   buildWbsSnapshot,
+  csvColumnSample,
+  csvRowsToIngestTasks,
   expandIr,
+  parseCsv,
+  parseCsvMapping,
   parseIr,
   projectWbsGrid,
   projectWorkspaceView,
   projectionRoleForProjectRole,
   renderMasters,
+  sanitiseCsvMapping,
   type AssistantMode,
   type AssistantProjectView,
+  type CsvTable,
   type DiffProjectView,
   type ProposalModel,
+  type ProposalPrompt,
 } from "@vecta/application";
 import { data, type RouterContextProvider } from "react-router";
 import { z } from "zod";
@@ -26,6 +37,7 @@ import { selectProposalModel, UnknownProposalProviderError } from "../llm/select
 import {
   ASSISTANT_PROPOSAL_KIND,
   type AssistantErrorCode,
+  type CsvImportSummary,
   type ProposalCommand,
 } from "~/assistant/proposal-contract";
 import { ApiCommandSchema, fromCommand } from "~/wbs/project-command-contract";
@@ -55,12 +67,34 @@ const HistoryTurnSchema = z
 
 const AssistantRequestSchema = z
   .object({
-    mode: z.enum(["ingest", "chat"]),
+    // `csv` is a request mode, not a trust boundary: a spreadsheet expands under
+    // the ingest vocabulary, so it cannot address an existing row either.
+    mode: z.enum(["ingest", "chat", "csv"]),
     input: z.string().min(1).max(60_000),
-    /** Client-held, never persisted (requirement 8). Ignored in ingest mode. */
+    /** Client-held, never persisted (requirement 8). Ignored outside chat mode. */
     history: z.array(HistoryTurnSchema).max(40).optional(),
   })
   .strict();
+
+/**
+ * Japanese labels for the mapping the human checks. Kept next to the request
+ * schema rather than in the shared core: the core stays language-neutral, and this
+ * is presentation.
+ */
+const CSV_FIELD_LABEL: Readonly<Record<(typeof CSV_MAPPABLE_FIELDS)[number], string>> = {
+  name: "タスク名",
+  parent: "親タスク名",
+  process: "工程",
+  product: "プロダクト",
+  assignee: "担当",
+  effortHours: "工数(時間)",
+  note: "備考",
+};
+
+const CSV_ISSUE_LABEL: Readonly<Record<string, string>> = {
+  "out-of-range": "存在しない列を指していたため無視しました",
+  "duplicate-column": "他の項目と同じ列を指していたため無視しました",
+};
 
 function fail(code: AssistantErrorCode, status: number, message: string) {
   return data({ ok: false as const, code, message }, { status });
@@ -100,7 +134,10 @@ export async function runAssistantAction({ request, context, model }: AssistantA
   if (!parsedRequest.success) {
     return fail("INVALID", 422, "リクエストの内容が不正です");
   }
-  const mode: AssistantMode = parsedRequest.data.mode;
+  const requestMode = parsedRequest.data.mode;
+  // A spreadsheet is a third party's document, so it expands under the INGEST
+  // vocabulary: add-only, no way to address an existing row.
+  const mode: AssistantMode = requestMode === "csv" ? "ingest" : requestMode;
 
   const { env } = context.get(appContext);
 
@@ -151,28 +188,50 @@ export async function runAssistantAction({ request, context, model }: AssistantA
     throw error;
   }
 
-  let prompt;
-  try {
-    prompt = buildProposalPrompt({
-      mode,
-      snapshot: snapshotText,
-      masters: renderMasters({
-        processes: projected.processes.map((entry) => entry.name),
-        products: projected.products.map((entry) => entry.name),
-        members: projected.members.map((entry) => entry.name),
-        templates: projected.templates.map((entry) => entry.name),
-      }),
-      ...(mode === "chat" && parsedRequest.data.history !== undefined
-        ? { history: parsedRequest.data.history }
-        : {}),
-      userInput: parsedRequest.data.input,
-      budget,
-    });
-  } catch (error) {
-    if (error instanceof PromptTooLargeError) {
-      return fail("TOO_LARGE", 422, "入力が長すぎます。分割してください。");
+  // A CSV asks the model a DIFFERENT question — which column feeds which field —
+  // and the file itself never goes to it, so this branch parses first and prompts
+  // with a header plus three sample rows. Neuron cost stops depending on row count
+  // (Design 0005 §4, ADR 0013 Decision 10).
+  let table: CsvTable | null = null;
+  let prompt: ProposalPrompt;
+  if (requestMode === "csv") {
+    try {
+      table = parseCsv(parsedRequest.data.input, { maxRows: MAX_IR_TASKS });
+    } catch (error) {
+      if (error instanceof CsvParseError) {
+        // Includes the row cap, so an oversized file is told its own limit rather
+        // than failing later as an opaque shape error.
+        return fail("INVALID", 422, `CSV を読み取れませんでした: ${error.message}`);
+      }
+      throw error;
     }
-    throw error;
+    if (table.rows.length === 0) {
+      return fail("INVALID", 422, "CSV にデータ行がありません（1 行目はヘッダとして読みます）。");
+    }
+    prompt = buildCsvMappingPrompt(csvColumnSample(table), budget);
+  } else {
+    try {
+      prompt = buildProposalPrompt({
+        mode,
+        snapshot: snapshotText,
+        masters: renderMasters({
+          processes: projected.processes.map((entry) => entry.name),
+          products: projected.products.map((entry) => entry.name),
+          members: projected.members.map((entry) => entry.name),
+          templates: projected.templates.map((entry) => entry.name),
+        }),
+        ...(mode === "chat" && parsedRequest.data.history !== undefined
+          ? { history: parsedRequest.data.history }
+          : {}),
+        userInput: parsedRequest.data.input,
+        budget,
+      });
+    } catch (error) {
+      if (error instanceof PromptTooLargeError) {
+        return fail("TOO_LARGE", 422, "入力が長すぎます。分割してください。");
+      }
+      throw error;
+    }
   }
 
   let output;
@@ -191,11 +250,67 @@ export async function runAssistantAction({ request, context, model }: AssistantA
     throw error;
   }
 
+  // A CSV's IR is built by TYPESCRIPT from the parsed rows, using nothing from the
+  // model but the column mapping. So a 300-row import has no model-authored prose
+  // in it at all — including its `summary`, which this branch writes.
+  let csvSummary: CsvImportSummary | null = null;
+  let irCandidate: unknown = output.raw;
+  if (requestMode === "csv" && table !== null) {
+    const parsedMapping = parseCsvMapping(output.raw);
+    if (!parsedMapping.ok) {
+      return fail("MODEL_SCHEMA_UNMET", 502, "AI の応答を解釈できませんでした");
+    }
+    const { mapping, issues } = sanitiseCsvMapping(
+      parsedMapping.mapping as Readonly<Record<string, unknown>>,
+      table.header,
+    );
+    if (mapping.name === undefined) {
+      // Without a task-name column there is nothing to create, and guessing which
+      // column holds the names is exactly the mistake that would be applied to
+      // every row at once.
+      return fail(
+        "INVALID",
+        422,
+        "タスク名の列を特定できませんでした。1 行目のヘッダにタスク名の列があるか確認してください。",
+      );
+    }
+    const tasks = csvRowsToIngestTasks(table, mapping);
+    if (tasks.length === 0) {
+      return fail("INVALID", 422, "タスク名が入っている行がありませんでした。");
+    }
+    const claimed = new Set(Object.values(mapping));
+    csvSummary = {
+      rowCount: tasks.length,
+      mapped: CSV_MAPPABLE_FIELDS.filter((field) => mapping[field] !== undefined).map((field) => ({
+        columnIndex: mapping[field] as number,
+        columnName: table.header[mapping[field] as number] ?? "",
+        field: CSV_FIELD_LABEL[field],
+      })),
+      unmappedColumns: table.header.filter((_name, index) => !claimed.has(index)),
+      issues: issues.map((issue) => ({
+        field: CSV_FIELD_LABEL[issue.field],
+        reason: CSV_ISSUE_LABEL[issue.reason] ?? issue.reason,
+      })),
+    };
+    irCandidate = {
+      summary: `CSV の ${tasks.length} 行をタスク案にしました。列の対応は下に表示しています。`,
+      tasks,
+    };
+  }
+
   // Documented as possible, so treated as a normal outcome: no proposal, and no
-  // attempt to salvage part of a malformed IR (ADR 0013 Consequences).
-  const parsedIr = parseIr(mode, output.raw);
+  // attempt to salvage part of a malformed IR (ADR 0013 Consequences). The CSV
+  // branch goes through the SAME schema, which is what bounds a 1 MB spreadsheet
+  // cell before it becomes a task name.
+  const parsedIr = parseIr(mode, irCandidate);
   if (!parsedIr.ok) {
-    return fail("MODEL_SCHEMA_UNMET", 502, "AI の応答を解釈できませんでした");
+    return fail(
+      "MODEL_SCHEMA_UNMET",
+      502,
+      requestMode === "csv"
+        ? "CSV の内容が取り込める形になっていませんでした。"
+        : "AI の応答を解釈できませんでした",
+    );
   }
 
   const expanderView: AssistantProjectView = {
@@ -249,6 +364,7 @@ export async function runAssistantAction({ request, context, model }: AssistantA
        * fires on render, long before anyone decides whether to approve.
        */
       summary: parsedIr.ir.summary,
+      ...(csvSummary === null ? {} : { csv: csvSummary }),
       model: proposalModel.id,
       usage: output.usage,
     },
