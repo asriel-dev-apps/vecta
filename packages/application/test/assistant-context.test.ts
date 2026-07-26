@@ -6,6 +6,7 @@ import {
   buildProposalPrompt,
   buildWbsSnapshot,
   checkOutputFits,
+  estimateProposalUsage,
   estimateTokens,
   renderMasters,
   type SnapshotTaskRow,
@@ -255,5 +256,42 @@ describe("prompt — every operation the schema allows is stated in the prompt",
     });
     expect(prompt.system).toContain("only ADD");
     expect(prompt.system).not.toContain("parentSeq");
+  });
+});
+
+describe("usage estimate — our own approximation, never dressed as a measurement", () => {
+  const budget = assistantContextBudget("chat", LLAMA_70B_CONTEXT);
+  const prompt = buildProposalPrompt({
+    mode: "chat",
+    snapshot: "1\t既存タスク\t設計\t\t\t40\t0",
+    masters: "工程: 設計",
+    userInput: "No.1 を 50% にして",
+    budget,
+  });
+
+  it("is always flagged as an estimate", () => {
+    expect(estimateProposalUsage(prompt, { summary: "", tasks: [] }).estimated).toBe(true);
+  });
+
+  it("counts what we actually sent and what we actually received", () => {
+    const small = estimateProposalUsage(prompt, { summary: "短い", tasks: [] });
+    const large = estimateProposalUsage(prompt, {
+      summary: "長い説明".repeat(50),
+      tasks: Array.from({ length: 20 }, (_u, i) => ({ op: "add", name: `作業 ${i}` })),
+    });
+    expect(large.output).toBeGreaterThan(small.output ?? 0);
+    // The input is the same prompt both times, so it must not move with the answer.
+    expect(large.input).toBe(small.input);
+    expect(small.input).toBeGreaterThan(0);
+  });
+
+  it("survives an answer that cannot be serialised", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => estimateProposalUsage(prompt, cyclic)).not.toThrow();
+  });
+
+  it("reports the same unit the provider would, so the two are comparable", () => {
+    expect(estimateProposalUsage(prompt, {}).unit).toBe("tokens");
   });
 });

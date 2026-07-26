@@ -477,3 +477,26 @@ describe("assistant overlay — usage is reported, never invented", () => {
     expect(meta.textContent).not.toContain("出力");
   });
 });
+
+describe("assistant overlay — an estimate is labelled every time", () => {
+  // Workers AI reports no usage for this call shape (measured in production), so
+  // the estimate is the NORMAL reading here, not an edge case. That is precisely
+  // why the label cannot be optional: an unlabelled routine number would be read
+  // as a measurement every time.
+  it("marks a fallback estimate as one, and says the AI did not report it", () => {
+    mount({
+      result: ok(
+        proposalWith({ usage: { unit: "tokens", input: 3_612, output: 214, estimated: true } }),
+      ),
+    });
+    const meta = screen.getByTestId("assistant-usage");
+    expect(meta.textContent).toContain("入力 3612");
+    expect(meta.textContent).toContain("概算");
+    expect(meta.textContent).toContain("AI からの報告なし");
+  });
+
+  it("does not label a figure the provider actually reported", () => {
+    mount({ result: ok(proposalWith({ usage: { unit: "tokens", input: 10, output: 2 } })) });
+    expect(screen.getByTestId("assistant-usage").textContent).not.toContain("概算");
+  });
+});
