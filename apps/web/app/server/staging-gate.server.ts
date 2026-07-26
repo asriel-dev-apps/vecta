@@ -28,8 +28,13 @@ export interface StagingGateBindings {
 }
 
 const COOKIE_NAME = "vecta_stg";
-/** Query parameter that mints the cookie, so a browser needs the key exactly once. */
-const KEY_PARAM = "__stg";
+/**
+ * Form FIELD, not a query parameter. A key in a query string is the weakest place
+ * to put one: it is written verbatim into Cloudflare's request logs, appears in the
+ * address bar, survives in history, and travels in a `Referer`. Stripping it with a
+ * redirect fixes only the last two. A POST body is in none of those places.
+ */
+const KEY_FIELD = "__stg";
 const HEADER_NAME = "x-staging-key";
 /** Bound into the cookie token so a key reused elsewhere cannot produce this cookie. */
 const COOKIE_CONTEXT = "vecta-staging-cookie-v1";
@@ -91,17 +96,52 @@ function allowedIps(raw: string | undefined): readonly string[] {
     .filter((entry) => entry.length > 0);
 }
 
-/** Body kept deliberately uninformative: a rejected request learns nothing about the app. */
-function refuse(): Response {
-  return new Response("Not available.\n", {
+const REFUSAL_HEADERS = {
+  "cache-control": "no-store",
+  // Nothing here should ever be indexed, even if the gate is later relaxed.
+  "x-robots-tag": "noindex, nofollow",
+  // The form is the only markup this page has; nothing else may load or connect.
+  "content-security-policy":
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+} as const;
+
+/**
+ * The refusal. Deliberately uninformative about what is behind it — but for a
+ * browser it carries the one thing a person needs: somewhere to put the key that
+ * is not a URL.
+ *
+ * `type="password"` with `autocomplete="current-password"` so a password manager
+ * can hold it; otherwise the key gets copied out of Keychain by hand every time,
+ * and a key that is inconvenient gets pasted somewhere it should not be.
+ */
+function refuse(wantsHtml: boolean): Response {
+  if (!wantsHtml) {
+    return new Response("Not available.\n", {
+      status: 403,
+      headers: { ...REFUSAL_HEADERS, "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+  const page = [
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
+    "<title>Restricted</title>",
+    "<style>body{font:14px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#f5f6f8;color:#3d434d}",
+    "form{display:flex;gap:8px}input,button{font:inherit;padding:8px 10px;border:1px solid #dce0e6;border-radius:8px}",
+    "button{background:#5b57d6;color:#fff;border-color:#5b57d6;cursor:pointer}</style></head><body>",
+    "<form method=\"post\">",
+    `<input type="password" name="${KEY_FIELD}" autocomplete="current-password" aria-label="Access key" autofocus>`,
+    "<button type=\"submit\">Enter</button>",
+    "</form></body></html>",
+  ].join("");
+  return new Response(page, {
     status: 403,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "cache-control": "no-store",
-      // Nothing here should ever be indexed, even if the gate is later relaxed.
-      "x-robots-tag": "noindex, nofollow",
-    },
+    headers: { ...REFUSAL_HEADERS, "content-type": "text/html; charset=utf-8" },
   });
+}
+
+/** Did the caller ask for a page, or is it an agent / a script? */
+function acceptsHtml(request: Request): boolean {
+  return (request.headers.get("accept") ?? "").includes("text/html");
 }
 
 export interface StagingGateResult {
@@ -123,12 +163,11 @@ export async function stagingGate(
 
   const key = env.STAGING_ACCESS_KEY?.trim();
   if (key === undefined || key.length === 0) {
-    // Armed but unkeyed: refuse everything. A staging deploy that forgot the secret
-    // must be unusable, not open.
-    return { response: refuse() };
+    // Armed but unkeyed: refuse everything, and offer no form — there is no key
+    // that would work. A staging deploy that forgot the secret must be unusable,
+    // not open, and must not invite someone to guess.
+    return { response: refuse(false) };
   }
-
-  const url = new URL(request.url);
 
   // 1. The agent path: one header, no browser, no cookie jar.
   const header = request.headers.get(HEADER_NAME);
@@ -139,29 +178,35 @@ export async function stagingGate(
   const cookie = readCookie(request.headers.get("cookie"), COOKIE_NAME);
   if (cookie !== null && equalsConstantTime(cookie, expectedCookie)) return { response: null };
 
-  // 3. The human path, first visit: `?__stg=<key>` sets the cookie and redirects to
-  //    the same URL without it, so the key does not linger in the address bar, in
-  //    history, or in a `Referer`.
-  const provided = url.searchParams.get(KEY_PARAM);
-  if (provided !== null && equalsConstantTime(provided, key)) {
-    url.searchParams.delete(KEY_PARAM);
-    return {
-      response: new Response(null, {
-        status: 302,
-        headers: {
-          location: url.pathname + (url.search === "" ? "" : url.search),
-          "cache-control": "no-store",
-          "set-cookie": [
-            `${COOKIE_NAME}=${expectedCookie}`,
-            "Path=/",
-            "HttpOnly",
-            "Secure",
-            "SameSite=Lax",
-            "Max-Age=2592000",
-          ].join("; "),
-        },
-      }),
-    };
+  // 3. The human path, first visit: the key arrives in a POST BODY from the form on
+  //    the refusal page. A 303 sends the browser back to the same address with GET,
+  //    so the person lands where they were going and the key was never in a URL.
+  if (request.method === "POST") {
+    let provided: string | null;
+    try {
+      provided = String((await request.formData()).get(KEY_FIELD) ?? "");
+    } catch {
+      provided = null; // not a form body; fall through to the refusal
+    }
+    if (provided !== null && provided.length > 0 && equalsConstantTime(provided, key)) {
+      return {
+        response: new Response(null, {
+          status: 303,
+          headers: {
+            location: new URL(request.url).pathname,
+            "cache-control": "no-store",
+            "set-cookie": [
+              `${COOKIE_NAME}=${expectedCookie}`,
+              "Path=/",
+              "HttpOnly",
+              "Secure",
+              "SameSite=Lax",
+              "Max-Age=2592000",
+            ].join("; "),
+          },
+        }),
+      };
+    }
   }
 
   // 4. Optional convenience, never the primary control: a residential IP moves, so
@@ -170,13 +215,13 @@ export async function stagingGate(
   const clientIp = request.headers.get("cf-connecting-ip");
   if (clientIp !== null && ips.includes(clientIp)) return { response: null };
 
-  return { response: refuse() };
+  return { response: refuse(acceptsHtml(request)) };
 }
 
 /** Exported for the deploy guard and the tests; not part of the request path. */
 export const STAGING_GATE_INTERNALS = {
   COOKIE_NAME,
-  KEY_PARAM,
+  KEY_FIELD,
   HEADER_NAME,
   cookieTokenFor,
 } as const;

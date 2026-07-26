@@ -20,11 +20,23 @@ function bindings(overrides: Partial<StagingGateBindings> = {}): StagingGateBind
   return { DEPLOY_ENV: "staging", STAGING_ACCESS_KEY: KEY, ...overrides };
 }
 
-function get(
-  path = "/",
-  headers: Record<string, string> = {},
-): Request {
+function get(path = "/", headers: Record<string, string> = {}): Request {
   return new Request(`https://vecta-staging.example.invalid${path}`, { headers });
+}
+
+/** A browser asking for a page, so the refusal carries the form. */
+function browserGet(path = "/", headers: Record<string, string> = {}): Request {
+  return get(path, { accept: "text/html,application/xhtml+xml", ...headers });
+}
+
+/** The form submission that mints the cookie — the key is in the BODY. */
+function submit(path: string, value: string): Request {
+  const body = new URLSearchParams({ __stg: value });
+  return new Request(`https://vecta-staging.example.invalid${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html" },
+    body,
+  });
 }
 
 async function decide(request: Request, env: StagingGateBindings) {
@@ -98,42 +110,86 @@ describe("staging gate — the agent path", () => {
   });
 });
 
-describe("staging gate — the human path", () => {
-  it("mints a cookie from `?__stg=<key>` and redirects without the key", async () => {
-    const response = await decide(get(`/projects?__stg=${KEY}`), bindings());
-    expect(response?.status).toBe(302);
-    // The key must not survive in the address bar, the history, or a Referer.
+describe("staging gate — the human path never puts the key in a URL", () => {
+  // The reason this is a POST and not `?key=…`: a query string is written verbatim
+  // into Cloudflare's request logs, shows in the address bar, persists in history,
+  // and travels in a `Referer`. Stripping it with a redirect fixes only the last two.
+  it("offers a form on the refusal page, and the form posts", async () => {
+    const response = await decide(browserGet("/projects"), bindings());
+    expect(response?.status).toBe(403);
+    const html = (await response?.text()) ?? "";
+    expect(html).toContain('method="post"');
+    expect(html).toContain('name="__stg"');
+    expect(html).toContain('type="password"');
+    // A password manager should be able to hold it; a key that is awkward to fetch
+    // gets pasted somewhere it should not be.
+    expect(html).toContain('autocomplete="current-password"');
+  });
+
+  it("still says nothing about what the application is", async () => {
+    const html = (await (await decide(browserGet(), bindings()))?.text()) ?? "";
+    expect(html).not.toMatch(/vecta|wbs|project|earned/iu);
+  });
+
+  it("gives an agent plain text, not a login form", async () => {
+    const response = await decide(get(), bindings());
+    expect(response?.headers.get("content-type")).toContain("text/plain");
+    expect(await response?.text()).not.toContain("<form");
+  });
+
+  it("mints the cookie from the POST body and sends the browser back with GET", async () => {
+    const response = await decide(submit("/projects", KEY), bindings());
+    // 303 so the browser re-requests with GET rather than re-POSTing.
+    expect(response?.status).toBe(303);
     expect(response?.headers.get("location")).toBe("/projects");
     const cookie = response?.headers.get("set-cookie") ?? "";
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
     expect(cookie).toContain("SameSite=Lax");
-    // The cookie carries an HMAC, never the key itself.
     expect(cookie).not.toContain(KEY);
   });
 
-  it("keeps the rest of the query string when it strips the key", async () => {
-    const response = await decide(get(`/projects?tab=wbs&__stg=${KEY}`), bindings());
-    expect(response?.headers.get("location")).toBe("/projects?tab=wbs");
-  });
-
-  it("admits the cookie it minted on the next request", async () => {
-    const minted = await decide(get(`/?__stg=${KEY}`), bindings());
+  it("admits the cookie it minted", async () => {
+    const minted = await decide(submit("/", KEY), bindings());
     const cookie = (minted?.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     expect(await decide(get("/", { cookie }), bindings())).toBeNull();
   });
 
+  it("refuses a wrong key in the form", async () => {
+    expect((await decide(submit("/", "nope"), bindings()))?.status).toBe(403);
+    expect((await decide(submit("/", ""), bindings()))?.status).toBe(403);
+    expect((await decide(submit("/", KEY.slice(0, -1)), bindings()))?.status).toBe(403);
+  });
+
+  it("no longer accepts the key in a query string at all", async () => {
+    // The old `?__stg=<key>` path is GONE, not merely discouraged: leaving it in
+    // would leave its exposure in place for anyone who used it.
+    expect((await decide(get(`/?__stg=${KEY}`), bindings()))?.status).toBe(403);
+    expect((await decide(browserGet(`/projects?__stg=${KEY}`), bindings()))?.status).toBe(403);
+  });
+
+  it("ignores a POST that is not a form", async () => {
+    const request = new Request("https://vecta-staging.example.invalid/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ __stg: KEY }),
+    });
+    // Reading it as form data fails; the request falls through to the refusal rather
+    // than crashing the Worker.
+    expect((await decide(request, bindings()))?.status).toBe(403);
+  });
+
   it("invalidates every existing cookie when the key is rotated", async () => {
-    // Rotation has to be one command with immediate effect, so the cookie must be
-    // derived from the key rather than stored anywhere.
-    const minted = await decide(get(`/?__stg=${KEY}`), bindings());
+    const minted = await decide(submit("/", KEY), bindings());
     const cookie = (minted?.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const rotated = bindings({ STAGING_ACCESS_KEY: "a-new-key-entirely" });
     expect((await decide(get("/", { cookie }), rotated))?.status).toBe(403);
   });
 
-  it("refuses a wrong key in the query parameter", async () => {
-    expect((await decide(get("/?__stg=nope"), bindings()))?.status).toBe(403);
+  it("offers NO form when the deploy has no key — there is nothing to guess at", async () => {
+    const response = await decide(browserGet(), { DEPLOY_ENV: "staging" });
+    expect(response?.status).toBe(403);
+    expect(await response?.text()).not.toContain("<form");
   });
 });
 

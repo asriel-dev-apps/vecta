@@ -12,7 +12,10 @@
 //
 //   security find-generic-password -w -s vecta-staging-access-key
 //
-// then visit  https://vecta-staging.tt-dev.workers.dev/?__stg=<that value>  once.
+// Then open https://vecta-staging.tt-dev.workers.dev/ and paste it into the form on
+// the refusal page — ONCE, after which a cookie carries it. The key deliberately has
+// no URL form: a query string is written verbatim into Cloudflare's request logs,
+// shows in the address bar, persists in history, and travels in a Referer.
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
