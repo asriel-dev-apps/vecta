@@ -6,6 +6,7 @@ import {
 import { appContext } from "../app/server/context";
 import { handleApiRequest, handleMcpRequest } from "../app/server/api";
 import { withDocumentSecurityHeaders } from "../app/server/document-security.server";
+import { withDocumentEdge } from "../app/server/document-edge.server";
 import { stagingGate } from "../app/server/staging-gate.server";
 
 const reactRouterHandler = createRequestHandler(
@@ -61,15 +62,21 @@ export default {
     if (isMcpPath(pathname)) {
       return handleMcpRequest(request, env, ctx);
     }
-    // React Router v8 requires the load context to be a `RouterContextProvider`
-    // (a plain object no longer type-checks or works). Seed it with the Worker
-    // bindings + execution context for loaders/middleware to read via `appContext`.
-    const context = new RouterContextProvider();
-    context.set(appContext, { env, ctx });
-    // The document CSP is attached HERE rather than in root middleware, because
-    // this is the one point every HTML response passes through — including the
-    // ones React Router produces from a thrown error, which never reach a
-    // middleware's return path (ADR 0013 Decision 6 / Design 0005 §5.3).
-    return withDocumentSecurityHeaders(await reactRouterHandler(request, context));
+    // The document surface gets the same class of edge protection `/api` has had
+    // since Step 5a — a bounded body, a rate limit on the unauthenticated routes,
+    // and a request id — with limits measured for THIS surface rather than copied
+    // (ASVS scan M1; the numbers and their reasons are in `document-edge.server`).
+    return withDocumentEdge(request, env, async (correlated) => {
+      // React Router v8 requires the load context to be a `RouterContextProvider`
+      // (a plain object no longer type-checks or works). Seed it with the Worker
+      // bindings + execution context for loaders/middleware to read via `appContext`.
+      const context = new RouterContextProvider();
+      context.set(appContext, { env, ctx });
+      // The document CSP is attached HERE rather than in root middleware, because
+      // this is the one point every HTML response passes through — including the
+      // ones React Router produces from a thrown error, which never reach a
+      // middleware's return path (ADR 0013 Decision 6 / Design 0005 §5.3).
+      return withDocumentSecurityHeaders(await reactRouterHandler(correlated, context));
+    });
   },
 } satisfies ExportedHandler<Env>;
