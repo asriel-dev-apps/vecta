@@ -9,6 +9,7 @@ import { oidcConfigFromEnv } from "~/server/auth/oidc-config";
 import { clearOidcTx } from "~/server/auth/oidc-tx.server";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
 import { appContext, dbSessionContext } from "~/server/context";
+import { writeSecurityEvent } from "~/server/security-log.server";
 import { NoticeScreen } from "~/shell/notice-screen";
 
 // Module-scoped so the remote JWKS is fetched and cached per isolate across
@@ -39,16 +40,43 @@ export async function loader({ request, context }: Route.LoaderArgs) {
       headers.append("Set-Cookie", cookie);
     }
     if (result.type === "redirect") {
+      // The one line that says a sign-in SUCCEEDED. Without it there is no
+      // baseline to read a spike of failures against (ASVS scan M3).
+      writeSecurityEvent({
+        kind: "login_succeeded",
+        reason: "session_issued",
+        status: 302,
+        request,
+        principalId: result.principalId,
+      });
       return redirect(result.location, { headers });
     }
+    // `forbidden` is its own event: the person IS who they say they are — Google
+    // verified them — and VECTA has no principal for them. That is a different
+    // operational fact from a failed sign-in, and the only one carrying a
+    // subject digest.
+    writeSecurityEvent({
+      kind: result.screen === "forbidden" ? "unknown_principal" : "login_failed",
+      reason: result.reason,
+      status: SCREEN_STATUS[result.screen],
+      request,
+      ...(result.subjectDigest === undefined ? {} : { subjectDigest: result.subjectDigest }),
+    });
     return data(
       { screen: result.screen },
       { headers, status: SCREEN_STATUS[result.screen] },
     );
-  } catch {
+  } catch (error) {
     // Last-resort backstop: directory construction (e.g. a missing DATABASE_URL)
     // or any unexpected throw must still clear `oidc_tx` and render a clean
     // screen, never a 500 with a stale transaction cookie left behind.
+    writeSecurityEvent({
+      kind: "login_failed",
+      reason: "unexpected_error",
+      status: SCREEN_STATUS.unavailable,
+      request,
+      error,
+    });
     const headers = new Headers();
     headers.append("Set-Cookie", await clearOidcTx(env));
     return data(

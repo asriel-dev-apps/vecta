@@ -1,7 +1,11 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { documentRoute, handleError } from "~/entry.server";
+import { handleError } from "~/entry.server";
+// `documentRoute` moved to the security-log module when the auth middleware and
+// the project gate started needing it too (ASVS M3). Its tests stay here, next
+// to the handler whose log line it shapes.
+import { documentRoute } from "~/server/security-log.server";
 
 /**
  * H1 of the 2026-07-27 ASVS L2 scan: the document surface had no `handleError`,
@@ -167,6 +171,21 @@ describe("documentRoute — the log carries the route, not the identifiers", () 
     expect(documentRoute("/projects/p-1/wbs", { id: "p-1", rest: undefined, blank: "" })).toBe(
       "/projects/:id/wbs",
     );
+  });
+
+  it("matches a param whose value the path had to percent-encode", () => {
+    // React Router hands over DECODED params; `URL.pathname` keeps the encoded
+    // bytes. Without decoding, this segment does not match its own param value
+    // and the attacker's string is echoed into the log — which is exactly the
+    // shape the malformed-project-id denial produces.
+    expect(
+      documentRoute("/projects/not-a-uuid-%3Cscript%3E/wbs", { id: "not-a-uuid-<script>" }),
+    ).toBe("/projects/:id/wbs");
+  });
+
+  it("survives a malformed escape rather than throwing on it", () => {
+    // `decodeURIComponent("%")` throws, and a request path can contain one.
+    expect(documentRoute("/projects/%/wbs", { id: "x" })).toBe("/projects/%/wbs");
   });
 
   it("caps an unmatched (therefore attacker-chosen) path", () => {

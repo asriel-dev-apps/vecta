@@ -3,6 +3,7 @@ import {
   SESSION_TTL_SECONDS,
   commitNewSession,
   readSession,
+  readSessionResult,
 } from "~/server/auth/session.server";
 import {
   clearOidcTx,
@@ -74,6 +75,83 @@ describe("session cookie {principalId, exp}", () => {
     expect(setCookie).toMatch(/HttpOnly/i);
     expect(setCookie).toMatch(/Secure/i);
     expect(setCookie).toMatch(/SameSite=Lax/i);
+  });
+});
+
+/**
+ * ASVS scan M3. `readSession` collapses three different situations into one
+ * `null`, which is right for the CALLER (they must behave identically) and wrong
+ * for the LOG: "no cookie" is a crawler, "expired" is Monday morning, and
+ * "invalid" is a cookie bearing this name that does not verify — which does not
+ * happen in ordinary use.
+ */
+describe("readSessionResult — why the session was refused", () => {
+  it("accepts a fresh session and reports it as ok", async () => {
+    const setCookie = await commitNewSession(env, "principal-1");
+    const result = await readSessionResult(env, requestWithCookie(setCookie));
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.session.principalId).toBe("principal-1");
+  });
+
+  it("says `cookie_absent` when nothing was sent", async () => {
+    const result = await readSessionResult(env, new Request("https://app.example.invalid/"));
+    expect(result).toEqual({ ok: false, reason: "cookie_absent" });
+  });
+
+  it("says `cookie_absent` when some OTHER cookie was sent", async () => {
+    const request = new Request("https://app.example.invalid/", {
+      headers: { Cookie: "ga_something=1; other=2" },
+    });
+    expect(await readSessionResult(env, request)).toEqual({ ok: false, reason: "cookie_absent" });
+  });
+
+  it("says `cookie_invalid` for a tampered signature — the one that is not routine", async () => {
+    const setCookie = await commitNewSession(env, "principal-1");
+    const tampered = cookiePair(setCookie).slice(0, -3) + "zzz";
+    const request = new Request("https://app.example.invalid/", {
+      headers: { Cookie: tampered },
+    });
+    expect(await readSessionResult(env, request)).toEqual({ ok: false, reason: "cookie_invalid" });
+  });
+
+  it("says `cookie_invalid` for a cookie signed with a different secret", async () => {
+    const setCookie = await commitNewSession(
+      fakeEnv({ SESSION_SECRET: "some-other-secret-entirely-0000000000" }),
+      "principal-1",
+    );
+    expect(await readSessionResult(env, requestWithCookie(setCookie))).toEqual({
+      ok: false,
+      reason: "cookie_invalid",
+    });
+  });
+
+  it("says `session_expired` for a valid signature past its in-payload exp", async () => {
+    const t0 = 1_000_000_000_000;
+    const setCookie = await commitNewSession(env, "principal-1", () => t0);
+    const laterMs = t0 + (SESSION_TTL_SECONDS + 60) * 1000;
+    expect(
+      await readSessionResult(env, requestWithCookie(setCookie), () => laterMs),
+    ).toEqual({ ok: false, reason: "session_expired" });
+  });
+
+  it("finds the cookie even when it is not first in the header", async () => {
+    // The reason is derived from the raw `Cookie` header, so the parse has to
+    // survive a browser that sends analytics cookies ahead of ours. Without
+    // this, a tampered session would be misreported as absent.
+    const setCookie = await commitNewSession(env, "principal-1");
+    const tampered = cookiePair(setCookie).slice(0, -3) + "zzz";
+    const request = new Request("https://app.example.invalid/", {
+      headers: { Cookie: `first=1; ${tampered}; last=2` },
+    });
+    expect(await readSessionResult(env, request)).toEqual({ ok: false, reason: "cookie_invalid" });
+  });
+
+  it("is not fooled by a cookie whose NAME merely ends with ours", async () => {
+    const request = new Request("https://app.example.invalid/", {
+      headers: { Cookie: "not__Host-vecta_session=forged" },
+    });
+    expect(await readSessionResult(env, request)).toEqual({ ok: false, reason: "cookie_absent" });
   });
 });
 

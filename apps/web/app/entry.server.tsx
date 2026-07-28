@@ -3,6 +3,7 @@ import { ServerRouter } from "react-router";
 import { isbot } from "isbot";
 import { renderToReadableStream } from "react-dom/server";
 import { errorName } from "~/server/api/edge-security";
+import { documentRoute } from "~/server/security-log.server";
 
 /**
  * Server entry for the DOCUMENT surface (the 2026-07-27 ASVS L2 scan, finding H1).
@@ -43,28 +44,6 @@ import { errorName } from "~/server/api/edge-security";
  */
 
 export const streamTimeout = 5_000;
-
-/**
- * Template the path so the log carries the ROUTE, not the identifiers on it.
- * Every matched param value is replaced by `:name`, which needs no guessing about
- * what an id looks like — React Router already told us. An unmatched path (a 404,
- * therefore attacker-chosen) is passed through but capped, and it is emitted
- * inside `JSON.stringify`, so it cannot break out into a forged log line.
- */
-export function documentRoute(
-  pathname: string,
-  params: Readonly<Record<string, string | undefined>>,
-): string {
-  const byValue = new Map<string, string>();
-  for (const [name, value] of Object.entries(params)) {
-    if (typeof value === "string" && value.length > 0) byValue.set(value, `:${name}`);
-  }
-  const templated = pathname
-    .split("/")
-    .map((segment) => byValue.get(segment) ?? segment)
-    .join("/");
-  return templated.length > 128 ? `${templated.slice(0, 128)}…` : templated;
-}
 
 /**
  * Emit the one line the document surface is allowed to emit about a failure:

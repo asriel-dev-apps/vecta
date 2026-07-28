@@ -168,6 +168,44 @@ describe("document rate limit — applied where the legitimate rate is near zero
     expect(documentPathname("/login")).toBe("/login");
     expect(documentPathname("/.data/login")).toBe("/.data/login");
   });
+
+  it("records reaching the limit as a security event, not as an error (ASVS M3)", async () => {
+    // It used to go out as `document_edge_error`, which put "someone is
+    // hammering /auth/callback" in the same bucket as a failing database.
+    const warns: string[] = [];
+    const errors: string[] = [];
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+
+    const response = await withDocumentEdge(
+      new Request("https://app.test/auth/callback?code=x"),
+      envWith(false),
+      () => Promise.resolve(OK.clone()),
+    );
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+
+    expect(response.status).toBe(429);
+    expect(errors).toEqual([]);
+    expect(warns).toHaveLength(1);
+    const record = JSON.parse(warns[0] ?? "") as Record<string, unknown>;
+    expect(record).toMatchObject({
+      event: "security_event",
+      kind: "rate_limited",
+      reason: "pre_auth_rate_limit",
+      method: "GET",
+      route: "/auth/callback",
+      status: 429,
+    });
+    // The id is minted by this layer (nothing has stamped a header yet), and it
+    // is the same one the response carries — so the log line and the user's
+    // screenshot join up.
+    expect(record.requestId).toBe(response.headers.get("X-Request-Id"));
+  });
 });
 
 describe("document edge — correlation and failure", () => {

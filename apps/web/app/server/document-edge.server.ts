@@ -7,6 +7,7 @@ import {
   RequestRateLimitedError,
   withRequestId,
 } from "./api/edge-security";
+import { writeSecurityEvent } from "./security-log.server";
 
 /**
  * The edge layer for the DOCUMENT surface — the 2026-07-27 ASVS L2 scan, finding
@@ -162,19 +163,33 @@ export async function withDocumentEdge(
     // for the same reason `handleError` does: an exception's message is where a
     // library puts the thing it was given, and this one is given a connection
     // string.
-    response =
-      error instanceof RequestRateLimitedError
-        ? documentRateLimitedResponse()
-        : documentErrorResponse();
-    console.error(
-      JSON.stringify({
-        event: "document_edge_error",
-        requestId: id,
-        method: request.method,
+    if (error instanceof RequestRateLimitedError) {
+      // A rate-limit hit is not an error, it is a security event the ASVS scan
+      // asked for by name (M3). It went out as `document_edge_error` before,
+      // which put "someone is hammering /auth/callback" in the same bucket as a
+      // failing database.
+      response = documentRateLimitedResponse();
+      writeSecurityEvent({
+        kind: "rate_limited",
+        reason: "pre_auth_rate_limit",
         status: response.status,
-        errorName: errorName(error),
-      }),
-    );
+        request,
+        // The request has not been stamped yet — the id exists only here — so it
+        // is passed in rather than read back off a header that is not there.
+        requestId: id,
+      });
+    } else {
+      response = documentErrorResponse();
+      console.error(
+        JSON.stringify({
+          event: "document_edge_error",
+          requestId: id,
+          method: request.method,
+          status: response.status,
+          errorName: errorName(error),
+        }),
+      );
+    }
   }
   const headers = new Headers(response.headers);
   headers.set("X-Request-Id", id);

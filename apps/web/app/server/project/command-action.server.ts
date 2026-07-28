@@ -3,6 +3,7 @@ import { applyCommands } from "./apply-commands.server";
 import { requireProjectMembership } from "./project-access";
 import { requirePrincipal } from "../auth/require-principal";
 import { dbSessionContext } from "../context";
+import { writeSecurityEvent } from "../security-log.server";
 import { CommandBatchSchema, toCommand } from "~/wbs/project-command-contract";
 
 /**
@@ -97,6 +98,21 @@ export async function runCommandAction<K extends SaveKind>(
     );
   }
   if (result.code === "FORBIDDEN") {
+    // ASVS scan M3: the one 403 on the browser surface. Recorded with the role
+    // the principal actually held, because the interesting case is a VIEWER
+    // whose client is issuing writes — a UI defect and an attempted bypass look
+    // identical from the response alone.
+    writeSecurityEvent({
+      kind: "write_denied",
+      reason: "insufficient_role",
+      status: 403,
+      request,
+      params: { id: membership.projectId },
+      principalId: principal.principal.id,
+      tenantId: membership.tenantId,
+      projectId: membership.projectId,
+      projectRole: membership.projectRole,
+    });
     return data({ ok: false as const, code: "FORBIDDEN" as const }, { status: 403 });
   }
   if (result.code === "NOT_FOUND") {

@@ -118,6 +118,116 @@ describe("auth middleware", () => {
   });
 });
 
+/**
+ * ASVS scan M3. This middleware answers denial with a 302 to `/login`, so the
+ * "changes in 401/403" signal `operations/monitoring-and-alerts.md` requires
+ * cannot be counted from the status — an ordinary redirect and a refused session
+ * are the same number. These records are what makes it countable.
+ */
+describe("auth middleware — security events", () => {
+  function captureWarn(): { readonly lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((value) => String(value)).join(" "));
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  const denyingDirectory = () =>
+    ({
+      findByIssuerSubject: async () => null,
+      loadPrincipal: async () => null,
+    }) satisfies PrincipalDirectory;
+
+  it("records `session_rejected` with the reason, and nothing identifying", async () => {
+    const middleware = createAuthMiddleware({ directoryFor: denyingDirectory });
+    const request = new Request("https://app.example.invalid/projects/42/wbs?tab=1", {
+      headers: { "x-request-id": "req-1" },
+    });
+
+    const captured = captureWarn();
+    await expect(
+      middleware(middlewareArgs(request, baseContext()), noopNext),
+    ).rejects.toBeInstanceOf(Response);
+    captured.restore();
+
+    expect(captured.lines).toHaveLength(1);
+    expect(JSON.parse(captured.lines[0] ?? "")).toEqual({
+      event: "security_event",
+      kind: "session_rejected",
+      reason: "cookie_absent",
+      requestId: "req-1",
+      method: "GET",
+      route: "/projects/42/wbs",
+      status: 302,
+    });
+  });
+
+  it("distinguishes a tampered cookie from an absent one", async () => {
+    const middleware = createAuthMiddleware({ directoryFor: denyingDirectory });
+    const setCookie = await commitNewSession(env, "principal-1");
+    const request = new Request("https://app.example.invalid/projects", {
+      headers: { Cookie: cookiePair(setCookie).slice(0, -3) + "zzz" },
+    });
+
+    const captured = captureWarn();
+    await expect(
+      middleware(middlewareArgs(request, baseContext()), noopNext),
+    ).rejects.toBeInstanceOf(Response);
+    captured.restore();
+
+    const record = JSON.parse(captured.lines[0] ?? "") as Record<string, unknown>;
+    expect(record.reason).toBe("cookie_invalid");
+  });
+
+  it("records `principal_revoked` when a valid session names a principal that is gone", async () => {
+    const middleware = createAuthMiddleware({ directoryFor: denyingDirectory });
+    const setCookie = await commitNewSession(env, "principal-1");
+    const request = new Request("https://app.example.invalid/projects/42/wbs", {
+      headers: { Cookie: cookiePair(setCookie) },
+    });
+    const context = baseContext();
+
+    // The session itself passes — nothing is logged yet.
+    const captured = captureWarn();
+    await middleware(middlewareArgs(request, context), noopNext);
+    expect(captured.lines).toEqual([]);
+
+    // The event fires when the memoised load resolves to nothing.
+    await expect(requirePrincipal(context)).rejects.toBeInstanceOf(Response);
+    captured.restore();
+
+    expect(captured.lines).toHaveLength(1);
+    expect(JSON.parse(captured.lines[0] ?? "")).toMatchObject({
+      kind: "principal_revoked",
+      reason: "principal_missing",
+      principalId: "principal-1",
+      status: 302,
+    });
+  });
+
+  it("stays silent on the path that succeeds", async () => {
+    const middleware = createAuthMiddleware({
+      directoryFor: () => ({
+        findByIssuerSubject: async () => null,
+        loadPrincipal: async () => PRINCIPAL,
+      }),
+    });
+    const setCookie = await commitNewSession(env, "principal-1");
+    const request = new Request("https://app.example.invalid/projects", {
+      headers: { Cookie: cookiePair(setCookie) },
+    });
+    const context = baseContext();
+
+    const captured = captureWarn();
+    await middleware(middlewareArgs(request, context), noopNext);
+    await requirePrincipal(context);
+    captured.restore();
+
+    expect(captured.lines).toEqual([]);
+  });
+});
+
 describe("requirePrincipal", () => {
   it("returns the memoised principal", async () => {
     const context = baseContext();

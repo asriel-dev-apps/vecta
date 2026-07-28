@@ -14,7 +14,8 @@ import type {
 } from "~/server/auth/principal-directory";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
 import { safeReturnTo } from "~/server/auth/redirect";
-import { readSession } from "~/server/auth/session.server";
+import { readSessionResult } from "~/server/auth/session.server";
+import { writeSecurityEvent } from "~/server/security-log.server";
 
 /**
  * Authentication middleware for the protected route subtree (ADR 0012
@@ -52,19 +53,51 @@ export function createAuthMiddleware(
   options: AuthMiddlewareOptions = {},
 ): MiddlewareFunction<Response> {
   const directoryFor = options.directoryFor ?? directoryFromContext;
-  return async ({ request, context }) => {
+  return async ({ request, context, params }) => {
     const { env } = context.get(appContext);
-    const session = await readSession(env, request);
-    if (session === null) {
+    const result = await readSessionResult(env, request);
+    if (!result.ok) {
+      // ASVS scan M3. This denial answers 302, not 401, so the operational
+      // signal `monitoring-and-alerts.md` asks for cannot be derived from the
+      // status — every unauthenticated visit to a protected path looks like an
+      // ordinary redirect. The record is what makes it countable, and the
+      // reason is what separates a crawler from a forged cookie.
+      writeSecurityEvent({
+        kind: "session_rejected",
+        reason: result.reason,
+        status: 302,
+        request,
+        params,
+      });
       const url = new URL(request.url);
       const returnTo = safeReturnTo(url.pathname + url.search);
       throw redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`);
     }
+    const { session } = result;
     let cached: Promise<AuthenticatedPrincipal | null> | undefined;
     context.set(
       principalContext,
       () =>
-        (cached ??= directoryFor(context).loadPrincipal(session.principalId)),
+        (cached ??= directoryFor(context)
+          .loadPrincipal(session.principalId)
+          .then((principal) => {
+            // A signed, unexpired session whose principal has been deleted or
+            // disabled — a revocation taking effect, or a stale session against
+            // a wiped directory. `requirePrincipal` turns this into a redirect;
+            // it is logged HERE because this is where the request (and so the
+            // route and request id) is in scope.
+            if (principal === null) {
+              writeSecurityEvent({
+                kind: "principal_revoked",
+                reason: "principal_missing",
+                status: 302,
+                request,
+                params,
+                principalId: session.principalId,
+              });
+            }
+            return principal;
+          })),
     );
   };
 }
