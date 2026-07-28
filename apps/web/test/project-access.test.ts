@@ -290,6 +290,98 @@ describe("project access gate (middleware)", () => {
   });
 });
 
+/**
+ * ASVS scan M3. The gate's RESPONSE deliberately cannot distinguish "not a
+ * member" from "no such project" — that is the property being protected. The LOG
+ * must distinguish them, because someone walking project ids and someone who
+ * just lost access are different operational facts, and the 404 is the same
+ * number an ordinary missing page produces.
+ */
+describe("project access gate — security events", () => {
+  function captureWarn(): { readonly lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((value) => String(value)).join(" "));
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  it("records `malformed_project_id` without echoing the rejected value", async () => {
+    const captured = captureWarn();
+    const run = await runGate(principalWith("OWNER"), { id: "not-a-uuid-<script>" });
+    captured.restore();
+
+    expect(run.denied).toBe(true);
+    expect(captured.lines).toHaveLength(1);
+    const record = JSON.parse(captured.lines[0] ?? "") as Record<string, unknown>;
+    expect(record).toMatchObject({
+      event: "security_event",
+      kind: "project_access_denied",
+      reason: "malformed_project_id",
+      status: 404,
+    });
+    // React Router already matched it as `:id`, so the templated route carries
+    // the NAME, not the attacker's string — and no principal was loaded, so
+    // there is no id to record either.
+    //
+    // This case is why `documentRoute` decodes: the param React Router hands
+    // over is `not-a-uuid-<script>` while the path carries
+    // `not-a-uuid-%3Cscript%3E`, so a raw value comparison misses and the
+    // attacker's string lands in the log. Measured — it did, before the decode.
+    expect(record.route).toBe("/projects/:id/wbs");
+    expect(captured.lines.join("\n")).not.toContain("<script>");
+    expect(captured.lines.join("\n")).not.toContain("%3Cscript%3E");
+    expect(record.principalId).toBeUndefined();
+    expect(run.loadPrincipal).not.toHaveBeenCalled();
+  });
+
+  it("records `not_a_member` with the principal and the project", async () => {
+    const captured = captureWarn();
+    const run = await runGate(principalWith(null), { id: UNKNOWN_PROJECT_ID });
+    captured.restore();
+
+    expect(run.denied).toBe(true);
+    expect(JSON.parse(captured.lines[0] ?? "")).toMatchObject({
+      kind: "project_access_denied",
+      reason: "not_a_member",
+      status: 404,
+      principalId: "principal-1",
+      projectId: UNKNOWN_PROJECT_ID,
+    });
+  });
+
+  it("records `project_missing` when the row is gone under a real membership", async () => {
+    const context = new RouterContextProvider();
+    context.set(appContext, { env: fakeEnv(), ctx });
+    context.set(principalContext, vi.fn(async () => principalWith("OWNER")));
+    const gate = createProjectAccessMiddleware({
+      workspaceLoaderFor: () => ({ load: async () => null }),
+    });
+
+    const captured = captureWarn();
+    await gate(middlewareArgs(context, { id: PROJECT_ID }), async () => new Response(null));
+    await expect(requireProjectAccess(context)).rejects.toMatchObject({ init: { status: 404 } });
+    captured.restore();
+
+    expect(JSON.parse(captured.lines[0] ?? "")).toMatchObject({
+      kind: "project_access_denied",
+      reason: "project_missing",
+      tenantId: TENANT_ID,
+      projectId: PROJECT_ID,
+    });
+  });
+
+  it("stays silent when access is granted", async () => {
+    const captured = captureWarn();
+    const run = await runGate(principalWith("EDITOR"), { id: PROJECT_ID });
+    await requireProjectAccess(run.context);
+    captured.restore();
+
+    expect(run.denied).toBe(false);
+    expect(captured.lines).toEqual([]);
+  });
+});
+
 describe("project list loader", () => {
   it("returns exactly the principal's membership projects from an injected source", async () => {
     const principal = principalWith("VIEWER");

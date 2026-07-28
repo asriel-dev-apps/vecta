@@ -16,6 +16,7 @@ import {
   type ProjectWorkspaceLoader,
   type ProjectWorkspaceRecord,
 } from "~/server/project/project-access";
+import { writeSecurityEvent } from "~/server/security-log.server";
 
 /**
  * The `/projects/:id` access gate (ADR 0012 §Decision 2), enforced as MIDDLEWARE
@@ -64,14 +65,37 @@ export function createProjectAccessMiddleware(
 ): MiddlewareFunction<Response> {
   const workspaceLoaderFor =
     options.workspaceLoaderFor ?? workspaceLoaderFromContext;
-  return async ({ context, params }) => {
+  return async ({ context, params, request }) => {
     const projectId = params.id;
     if (!isProjectId(projectId)) {
+      // No principal has been loaded yet (deliberately — a malformed id must not
+      // cost a DB round trip), so there is no id to record. The rejected value is
+      // attacker-chosen and is NOT echoed: `documentRoute` templates it away
+      // because React Router already matched it as `:id`.
+      writeSecurityEvent({
+        kind: "project_access_denied",
+        reason: "malformed_project_id",
+        status: 404,
+        request,
+        params,
+      });
       throw data(null, { status: 404 });
     }
     const principal = await requirePrincipal(context);
     const membership = findProjectMembership(principal, projectId);
     if (membership === null) {
+      // The response cannot distinguish "not a member" from "no such project" —
+      // that is the gate's design. The LOG can, and must: the two have different
+      // operational meanings (someone probing ids vs. someone who lost access).
+      writeSecurityEvent({
+        kind: "project_access_denied",
+        reason: "not_a_member",
+        status: 404,
+        request,
+        params,
+        principalId: principal.principal.id,
+        projectId,
+      });
       throw data(null, { status: 404 });
     }
     const tenantRole = principal.tenantMemberships.find(
@@ -99,6 +123,16 @@ export function createProjectAccessMiddleware(
             if (workspace === null) {
               // Membership exists but the project row is gone: fail closed, with
               // the gate's own opaque 404 rather than a 500.
+              writeSecurityEvent({
+                kind: "project_access_denied",
+                reason: "project_missing",
+                status: 404,
+                request,
+                params,
+                principalId: principal.principal.id,
+                tenantId: membership.tenantId,
+                projectId,
+              });
               throw data(null, { status: 404 });
             }
             return workspace;

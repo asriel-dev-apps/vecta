@@ -1,0 +1,19 @@
+# Headers for the STATIC ASSET responses (2026-07-27 ASVS L2 scan, M5).
+#
+# These never reach `workers/app.ts`: Cloudflare's ASSETS binding answers a
+# matching path before the Worker runs, so every header the Worker adds — CSP
+# included — is absent from `/assets/*`. Measured in production: those responses
+# carried none of the six.
+#
+# `_headers` is the supported way to attach headers to asset responses. Vite
+# copies this file from `public/` into `build/client/`, which is the directory
+# `wrangler.jsonc` declares as `assets.directory`.
+#
+# Scoped to `/assets/*` deliberately, rather than `/*`: everything else on this
+# host is answered by the Worker, which sets its own headers, and a blanket rule
+# here would be a second place those values live.
+
+/assets/*
+  X-Content-Type-Options: nosniff
+  Cross-Origin-Resource-Policy: same-origin
+  Referrer-Policy: no-referrer

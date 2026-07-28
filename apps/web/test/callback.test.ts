@@ -9,6 +9,7 @@ import { createIdTokenVerifier } from "~/server/auth/id-token";
 import type { PrincipalDirectory } from "~/server/auth/principal-directory";
 import { serializeOidcTx } from "~/server/auth/oidc-tx.server";
 import { readSession } from "~/server/auth/session.server";
+import { subjectDigest } from "~/server/security-log.server";
 import {
   type TestKeys,
   TEST_ISSUER,
@@ -197,5 +198,118 @@ describe("runCallback branches", () => {
     const result = await run(request, idToken, failingDirectory);
     expect(result).toMatchObject({ type: "screen", screen: "unavailable" });
     expect(clearsOidcTx(result.setCookies)).toBe(true);
+  });
+});
+
+/**
+ * ASVS scan M3. Four screens are what a PERSON sees; the reason is what the
+ * security log records, and the scan named these failures separately — a design
+ * that folds "token exchange failed" and "nonce mismatch" into one value does
+ * not answer the finding.
+ */
+describe("runCallback failure reasons", () => {
+  it("distinguishes every failure the scan named", async () => {
+    const idToken = await signIdToken(keys.privateKey, validIdTokenClaims());
+    const valid = await signIdToken(keys.privateKey, validIdTokenClaims());
+
+    const cases: readonly (readonly [string, CallbackResult])[] = [
+      ["provider_reported_error", await run(await callbackRequest("?error=access_denied"), idToken)],
+      [
+        "no_transaction",
+        await run(
+          await callbackRequest("?code=auth-code&state=state-xyz", { withTx: false }),
+          idToken,
+        ),
+      ],
+      ["state_mismatch", await run(await callbackRequest("?code=auth-code&state=WRONG"), idToken)],
+      [
+        "id_token_rejected",
+        await run(
+          await callbackRequest("?code=auth-code&state=state-xyz"),
+          await signIdToken(keys.privateKey, validIdTokenClaims({ nonce: "not-the-tx-nonce" })),
+        ),
+      ],
+      [
+        "principal_not_found",
+        await run(
+          await callbackRequest("?code=auth-code&state=state-xyz"),
+          await signIdToken(keys.privateKey, validIdTokenClaims({ sub: "unknown-subject" })),
+        ),
+      ],
+      [
+        "directory_unavailable",
+        await run(await callbackRequest("?code=auth-code&state=state-xyz"), valid, {
+          async findByIssuerSubject() {
+            throw new Error("neon unreachable");
+          },
+          async loadPrincipal() {
+            return null;
+          },
+        }),
+      ],
+    ];
+
+    for (const [expected, result] of cases) {
+      expect(result.type).toBe("screen");
+      if (result.type !== "screen") continue;
+      expect(result.reason).toBe(expected);
+    }
+    // The reasons must be DISTINCT, not merely present — that is the whole point.
+    expect(new Set(cases.map(([reason]) => reason)).size).toBe(cases.length);
+  });
+
+  it("reports a failed token exchange separately from a rejected ID token", async () => {
+    // These two shared one `catch` before M3, so both surfaced as the same
+    // `provider_error` with nothing to tell them apart.
+    const result = await runCallback({
+      env,
+      config,
+      request: await callbackRequest("?code=auth-code&state=state-xyz"),
+      verifier: verifier(),
+      directory,
+      exchangeCode: async () => {
+        throw new Error("token endpoint responded 502");
+      },
+    });
+    expect(result).toMatchObject({ type: "screen", reason: "token_exchange_failed" });
+    // The error NAME rides along; the message (which is where a library puts
+    // whatever it was handed) does not.
+    if (result.type !== "screen") return;
+    expect(result.errorName).toBe("Error");
+    expect(JSON.stringify(result)).not.toContain("502");
+  });
+
+  it("carries the principal id on success, so the log can say WHO signed in", async () => {
+    const idToken = await signIdToken(keys.privateKey, validIdTokenClaims());
+    const result = await run(await callbackRequest("?code=auth-code&state=state-xyz"), idToken);
+    expect(result).toMatchObject({ type: "redirect", principalId: "principal-1" });
+  });
+
+  it("identifies an unknown account by a keyed digest — never its email or subject", async () => {
+    // CONTROL: the ID token genuinely carries a verified email and a subject, so
+    // a result that leaked either WOULD be caught here.
+    const claims = validIdTokenClaims({ sub: "unknown-subject", email: "leaker@example.com" });
+    expect(claims.email).toBe("leaker@example.com");
+
+    const result = await run(
+      await callbackRequest("?code=auth-code&state=state-xyz"),
+      await signIdToken(keys.privateKey, claims),
+    );
+
+    expect(result.type).toBe("screen");
+    if (result.type !== "screen") return;
+    // Present, and exactly the independently-computed HMAC — so "no leak" cannot
+    // be satisfied by carrying no identifier at all.
+    expect(result.subjectDigest).toBe(await subjectDigest(env, TEST_ISSUER, "unknown-subject"));
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("leaker@example.com");
+    expect(serialized).not.toContain("unknown-subject");
+  });
+
+  it("attaches no digest to any other failure", async () => {
+    const result = await run(await callbackRequest("?error=access_denied"), await signIdToken(keys.privateKey, validIdTokenClaims()));
+    expect(result.type).toBe("screen");
+    if (result.type !== "screen") return;
+    expect(result.subjectDigest).toBeUndefined();
   });
 });
