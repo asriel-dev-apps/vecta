@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant && pnpm verify:no-secret-in-url && pnpm verify:workflow-pins",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant && pnpm verify:no-secret-in-url && pnpm verify:workflow-pins && pnpm verify:release-age",
     "verify:bundle": "node .github/scripts/verify-client-bundle.mjs",
     "lint": "pnpm --recursive --if-present typegen && eslint .",
     "test": "pnpm --recursive test",
@@ -21,6 +21,7 @@
     "staging:secrets": "node .github/scripts/set-staging-secrets.mjs",
     "verify:no-secret-in-url": "node .github/scripts/verify-no-secret-in-url.mjs",
     "verify:workflow-pins": "node .github/scripts/verify-workflow-pins.mjs",
+    "verify:release-age": "node .github/scripts/verify-release-age-policy.mjs",
     "audit:deps": "pnpm audit --prod --audit-level high",
     "security:surfaces": "node .github/scripts/security-surfaces.mjs"
   },
