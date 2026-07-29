@@ -75,6 +75,34 @@ export function findUnpinnedUses(file, source) {
 }
 
 /**
+ * Is the mapping key at `index` nested inside a step (a `- ` list item)?
+ *
+ * A step is a list item, and YAML indents an item's keys two columns past its
+ * `- ` marker — so the owning marker sits at `indent - 2`. Walk back over this
+ * mapping's sibling keys (same indent) and any nested content (deeper), then look
+ * at the first shallower line: a `- ` there means we are inside a step.
+ *
+ * Getting this wrong is a FALSE POSITIVE on the very fix this gate protects,
+ * which is worse than useless — a gate that flags correct workflows teaches
+ * people to bypass it. Both directions are tested; the first version of this
+ * function failed exactly here, twice.
+ */
+function isStepScoped(lines, index, indent) {
+  for (let back = index - 1; back >= 0; back -= 1) {
+    const previous = lines[back];
+    if (previous === undefined || previous.trim() === "") continue;
+    const previousIndent = indentOf(previous);
+    if (previousIndent > indent) continue;
+    if (previousIndent === indent) {
+      if (previous.trimStart().startsWith("- ")) return true;
+      continue;
+    }
+    return previousIndent === indent - 2 && previous.trimStart().startsWith("- ");
+  }
+  return false;
+}
+
+/**
  * Find `secrets.*` inside a JOB-level `env:` block.
  *
  * Parsed by indentation rather than with a YAML library, deliberately: adding a
@@ -108,35 +136,28 @@ export function findSecretsInJobEnv(file, source) {
       }
     }
 
-    // A job-level `env:` is a mapping key, not a list item.
-    if (/^env:\s*$/u.test(line.trim()) && !line.trimStart().startsWith("-")) {
-      // Distinguish job-level from step-level. A step is a list item, and YAML
-      // indents an item's keys two columns past its `- ` marker — so the owning
-      // marker sits at `indent - 2`. Walk back over this mapping's sibling keys
-      // (same indent) and any nested content (deeper), then look at the first
-      // shallower line: a `- ` there means we are inside a step.
-      //
-      // Getting this wrong is a FALSE POSITIVE on the very fix this gate exists to
-      // protect, which is worse than useless — a gate that flags correct workflows
-      // teaches people to bypass it.
-      let stepScoped = false;
-      for (let back = index - 1; back >= 0; back -= 1) {
-        const previous = lines[back];
-        if (previous === undefined || previous.trim() === "") continue;
-        const previousIndent = indentOf(previous);
-        if (previousIndent > indent) continue;
-        if (previousIndent === indent) {
-          // A sibling key, unless the step's FIRST key is this one (`- env:`),
-          // which the caller already excluded.
-          if (previous.trimStart().startsWith("- ")) stepScoped = true;
-          continue;
-        }
-        if (previousIndent === indent - 2 && previous.trimStart().startsWith("- ")) {
-          stepScoped = true;
-        }
-        break;
+    // An `env:` mapping key — block style (`env:`) or flow style (`env: {…}`).
+    // A list item (`- env:`) is always step-scoped, so it is excluded outright.
+    const trimmed = line.trim();
+    const isEnvKey = /^env:/u.test(trimmed) && !trimmed.startsWith("- ");
+    if (isEnvKey && !isStepScoped(lines, index, indent)) {
+      if (/^env:\s*\S/u.test(trimmed)) {
+        // FLOW STYLE is a blind spot, so it is made loud instead of tolerated.
+        // `env: { TOKEN: "${{ secrets.X }}" }` is valid YAML that this
+        // indentation-based reader cannot see into — it would report clean. A
+        // scanner that silently cannot read part of its own input is the exact
+        // failure this repo has shipped before, so it is a finding regardless of
+        // whether a secret is actually in there.
+        findings.push({
+          rule: "no-secret-in-job-env",
+          file,
+          line: index + 1,
+          detail:
+            "flow-style `env:` cannot be analysed by this gate; write it as an indented block",
+        });
+      } else {
+        envIndent = indent;
       }
-      if (!stepScoped) envIndent = indent;
     }
   }
   return findings;

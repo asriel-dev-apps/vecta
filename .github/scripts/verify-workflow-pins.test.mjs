@@ -107,6 +107,34 @@ test("no-secret-in-job-env: the block ends where indentation returns, so a later
   assert.deepEqual(findSecretsInJobEnv("w.yml", source), []);
 });
 
+test("no-secret-in-job-env: flow-style env is REFUSED rather than silently skipped", () => {
+  // The blind spot made loud: this reader cannot see inside a one-line mapping, so
+  // it must not report clean on one. Note the secret is not even present here —
+  // being unanalysable is itself the finding.
+  const source = [
+    "jobs:",
+    "  deploy:",
+    '    env: { TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" }',
+    "    steps:",
+    "      - run: echo hi",
+  ].join("\n");
+  const findings = findSecretsInJobEnv("w.yml", source);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].detail, /flow-style/u);
+});
+
+test("no-secret-in-job-env: a step-level flow-style env is left alone", () => {
+  const source = [
+    "jobs:",
+    "  deploy:",
+    "    steps:",
+    "      - name: Deploy",
+    '        env: { TOKEN: "${{ secrets.X }}" }',
+    "        run: wrangler deploy",
+  ].join("\n");
+  assert.deepEqual(findSecretsInJobEnv("w.yml", source), []);
+});
+
 test("the real workflows pass BOTH rules", async () => {
   const { readdir, readFile } = await import("node:fs/promises");
   const directory = new URL("../workflows/", import.meta.url);
