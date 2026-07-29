@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant && pnpm verify:no-secret-in-url",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:operations && pnpm build && pnpm verify:bundle && pnpm verify:assistant && pnpm verify:no-secret-in-url && pnpm verify:workflow-pins",
     "verify:bundle": "node .github/scripts/verify-client-bundle.mjs",
     "lint": "pnpm --recursive --if-present typegen && eslint .",
     "test": "pnpm --recursive test",
@@ -20,6 +20,7 @@
     "deploy:staging": "node .github/scripts/deploy-staging.mjs",
     "staging:secrets": "node .github/scripts/set-staging-secrets.mjs",
     "verify:no-secret-in-url": "node .github/scripts/verify-no-secret-in-url.mjs",
+    "verify:workflow-pins": "node .github/scripts/verify-workflow-pins.mjs",
     "security:surfaces": "node .github/scripts/security-surfaces.mjs"
   },
   "devDependencies": {
