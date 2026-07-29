@@ -30,12 +30,47 @@ overrides:
   # and an allowlist entry would encode that as a standing fact. Whether we process
   # foreign CSS is a decision a future change could quietly reverse, and nothing
   # would re-open the file. Raising the floor needs no one to remember anything.
+  #
+  # This is a FLOOR, not a pin, and the maturity policy below decides the ceiling:
+  # a re-resolution takes the newest version that satisfies this range AND has been
+  # public for seven days. So the lockfile legitimately sits a release or two behind
+  # the newest postcss (8.5.22 at the time of writing, against 8.5.25 published) —
+  # that is the policy working, not a stale lockfile. Do not "catch it up" by hand.
   postcss: '>=8.5.18'
 
-minimumReleaseAgeExclude:
-  - hono@4.12.30
-  - '@hono/zod-openapi@1.5.0'
-  - '@cloudflare/codemode@0.4.3'
-  - agents@0.17.4
-  - '@modelcontextprotocol/sdk@1.29.0'
-  - '@cloudflare/workers-types@5.20260716.1'
+# Dependency maturity. A package published minutes ago is the shape a compromised
+# release takes — the window between an attacker publishing and the registry
+# pulling it is measured in hours — so nothing enters this tree until it has been
+# public for seven days. 10080 minutes; the unit is MINUTES, and pnpm's built-in
+# default is 1440 (one day), so before this line the posture was a default nobody
+# chose rather than an absence of protection.
+minimumReleaseAge: 10080
+
+# The second lock, and the one that is easy to leave off. Measured with pnpm
+# 11.12.0 on 2026-07-29, in an isolated workspace, both directions:
+#
+#   * with `minimumReleaseAge` set, an under-age dependency fails the install
+#     (ERR_PNPM_NO_MATURE_MATCHING_VERSION, exit 1) and nothing is written;
+#   * with it ABSENT, pnpm enforces its 1440-minute default by APPENDING the
+#     offending versions to `minimumReleaseAgeExclude` and exiting 0. That is how
+#     an 18-hour-old @tanstack/react-virtual exempted itself here on 2026-07-29.
+#
+# `minimumReleaseAgeStrict: true` turns that append back into a hard failure even
+# if the value above is ever deleted. So the policy can be weakened, but it cannot
+# go quiet — which is the property worth having.
+minimumReleaseAgeStrict: true
+
+# `minimumReleaseAgeExclude` is deliberately ABSENT, not empty. Its six previous
+# entries were all self-appended by pnpm under the default, and every one of them
+# was inert by the time this policy landed: each locked version is now older than
+# seven days (measured against the registry's publish times), so removing them
+# changed no resolution at all — `pnpm install --frozen-lockfile` exits 0 without
+# them. Two of the six did not even match the lockfile any more
+# (@hono/zod-openapi@1.5.0 vs the locked 1.5.1, @cloudflare/workers-types
+# 5.20260716.1 vs 5.20260714.1), which is what a list nobody wrote looks like.
+#
+# If an entry ever becomes genuinely necessary, `.github/scripts/verify-release-age-policy.mjs`
+# requires it to name an exact version and to carry a comment saying why. Note the
+# entries are version-specific in practice despite the docs' wording: measured,
+# @cloudflare/codemode@0.4.3 sat in this list while 0.4.4 was still refused. An
+# entry added to get past a red install is the policy being defeated, not applied.
