@@ -20,6 +20,17 @@ peerDependencyRules:
 overrides:
   # drizzle-kit still reaches an obsolete esbuild through its deprecated loader.
   '@esbuild-kit/core-utils>esbuild': 0.25.12
+  # GHSA (high): postcss <=8.5.17 auto-loads the file named by a `sourceMappingURL`
+  # comment, so a CSS file can make it read an arbitrary `.map`. It reaches us only
+  # transitively (`agents` → `vite` → postcss), so there is nothing of ours to bump —
+  # hence an override rather than a version change.
+  #
+  # An override, NOT an entry in an "assessed, not reachable" allowlist: the
+  # exposure requires processing CSS somebody else wrote, which is not true today,
+  # and an allowlist entry would encode that as a standing fact. Whether we process
+  # foreign CSS is a decision a future change could quietly reverse, and nothing
+  # would re-open the file. Raising the floor needs no one to remember anything.
+  postcss: '>=8.5.18'
 
 minimumReleaseAgeExclude:
   - hono@4.12.30

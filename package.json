@@ -21,6 +21,7 @@
     "staging:secrets": "node .github/scripts/set-staging-secrets.mjs",
     "verify:no-secret-in-url": "node .github/scripts/verify-no-secret-in-url.mjs",
     "verify:workflow-pins": "node .github/scripts/verify-workflow-pins.mjs",
+    "audit:deps": "pnpm audit --prod --audit-level high",
     "security:surfaces": "node .github/scripts/security-surfaces.mjs"
   },
   "devDependencies": {
