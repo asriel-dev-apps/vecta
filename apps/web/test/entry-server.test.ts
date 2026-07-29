@@ -21,7 +21,7 @@ import { documentRoute } from "~/server/security-log.server";
 const PASSWORD = "npg_TESTONLYnotarealsecret";
 
 /**
- * The exact message `@neondatabase/serverless@0.10.4` throws, reproduced from the
+ * The exact message `@neondatabase/serverless@1.1.0` throws, reproduced from the
  * library itself rather than paraphrased: `neon()` parses with its own URL
  * routine and, on failure, throws
  * `"Database connection string provided to \`neon()\` is not a valid URL. Connection string: " + String(input)`.
@@ -31,6 +31,11 @@ const PASSWORD = "npg_TESTONLYnotarealsecret";
  * leading-whitespace — throw, and ALL THREE put the password in the message.
  * (The scan report's table says a leading space is tolerated; that is true of
  * `new URL`, but `neon()` does not use `new URL`. Corrected here.)
+ *
+ * **The string is byte-identical in 1.1.0 and in 0.10.4** — checked against the
+ * published 1.1.0 tarball during the 0.x → 1.x bump, not assumed from the
+ * changelog. So the disclosure this file exists to prevent survived the major
+ * version, and so does the fixture.
  */
 function neonUrlParseError(): Error {
   return new Error(
