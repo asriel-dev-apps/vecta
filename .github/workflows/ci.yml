@@ -67,6 +67,27 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm types:worker --check
+
+      # ASVS scan L9: nothing was watching the advisory feed. Now something is.
+      #
+      # `--prod` because the tree that ships is the tree that matters: `sharp` (via
+      # the vite plugin) and `brace-expansion` (via eslint) are build- and lint-time
+      # only, and gating on them would spend the alarm on things that cannot reach a
+      # user. `--audit-level high` for the same reason — a moderate that nobody will
+      # act on this week trains people to ignore the step.
+      #
+      # DELIBERATELY NOT in `pnpm check`, unlike the four `verify:*` gates. Those are
+      # offline and deterministic: the same tree gives the same answer forever. This
+      # one asks an external service whose answer changes daily, so putting it in
+      # `check` would make the DEPLOY gate depend on registry availability and make a
+      # green check expire without the code changing. Here it runs on every PR and on
+      # every push to a branch, which is where "somebody should look at this" belongs.
+      #
+      # A network failure and a real finding both exit non-zero here. That is
+      # fail-closed on purpose, but it does mean a red step is worth reading before
+      # assuming a new advisory.
+      - name: dependency advisories (production tree, high and above)
+        run: pnpm audit:deps
       # A change that touches a security surface must carry a record that the
       # surface was reviewed. This cannot judge whether the review was any good — it
       # makes SKIPPING one a deliberate act instead of a silent omission, which is
