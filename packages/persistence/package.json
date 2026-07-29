@@ -16,7 +16,7 @@
   "dependencies": {
     "@vecta/application": "workspace:*",
     "@vecta/domain": "workspace:*",
-    "@neondatabase/serverless": "0.10.4",
+    "@neondatabase/serverless": "1.1.0",
     "drizzle-orm": "0.45.2",
     "pg": "8.22.0"
   },
