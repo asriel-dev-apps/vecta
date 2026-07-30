@@ -1,0 +1,372 @@
+import { useMemo, useState, type ReactNode } from "react";
+import type { EffortRatio } from "@vecta/domain";
+import {
+  projectEvmDashboard,
+  type EvmDashboardProjection,
+  type EvmDashboardRow,
+  type ProjectionRole,
+  type ProjectState,
+} from "@vecta/application";
+
+/**
+ * The EVM dashboard (design 0007 — Step 4). One table whose rows mean either the
+ * first-level parent tasks or the members, switched in place; ten effort columns
+ * and a mini S-curve; one as-of date at the top that every column follows.
+ *
+ * Derived isomorphically from the project state, exactly as the WBS grid is: the
+ * route sends the role-scoped state view and both sides call
+ * `projectEvmDashboard` on it, so the table is server-rendered and the payload
+ * carries no second copy of it. Changing the as-of date is therefore local state,
+ * not a round trip.
+ */
+
+/** Rows are never sorted here. Design 0007 §2: the WBS projection owns row order. */
+export type EvmSegment = "task" | "member";
+
+export interface EvmDashboardProps {
+  /** The role-scoped project view the route loaded. */
+  readonly project: ProjectState;
+  readonly projectionRole: ProjectionRole;
+  /** Today, resolved server-side (see `as-of-date.ts`) — the initial as-of date. */
+  readonly today: string;
+}
+
+/**
+ * CPI/SPI below this get the row's quiet risk marker (design 0007 §5 C-10). A
+ * threshold has to be some number; 0.9 is the conventional EVM watch line, and it
+ * is deliberately not 1.0 — nearly every row sits a little under 1.0, and a
+ * marker that fires on nearly every row is what buries the rows that matter.
+ */
+const RISK_INDEX_THRESHOLD = 0.9;
+
+/** How far from 1.0 the CPI/SPI deviation bar runs before it clamps (§5 B-4). */
+const INDEX_BAR_RANGE = 0.5;
+
+const SPARKLINE_WIDTH = 88;
+const SPARKLINE_HEIGHT = 22;
+
+const MS_PER_DAY = 86_400_000;
+
+function dayIndex(date: string): number {
+  return Math.round(Date.parse(`${date}T00:00:00.000Z`) / MS_PER_DAY);
+}
+
+/**
+ * Person-days, always to one decimal so the decimal points line up down the
+ * column (§5 A-1). Rounded BEFORE the sign is read, so a value that displays as
+ * zero can never come out as "-0.0" wearing a ▼.
+ */
+function formatDays(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return (Object.is(rounded, -0) ? 0 : rounded).toFixed(1);
+}
+
+/**
+ * EAC/ETC — person-days, but undefined whenever CPI is. `"-"` renders as an em
+ * dash, matching the WBS totals strip.
+ */
+function formatDayForecast(value: EffortRatio): string {
+  return value === "-" ? "—" : formatDays(value);
+}
+
+/** −1 / 0 / +1 of the DISPLAYED value, so the marker agrees with the digits. */
+function displayedSign(value: number): number {
+  return Math.sign(Math.round(value * 10) / 10);
+}
+
+/**
+ * A variance cell: sign carried by BOTH a symbol and a colour (§5 B-5), so it
+ * survives a colour-blind reader and a black-and-white print. Positive is good
+ * for SV and CV alike (ahead of plan / under budget).
+ */
+function VarianceCell({
+  value,
+  group = false,
+}: {
+  readonly value: number;
+  /** Starts the variance group — draws the hairline that separates it. */
+  readonly group?: boolean;
+}): ReactNode {
+  const sign = displayedSign(value);
+  const tone = sign > 0 ? "ok" : sign < 0 ? "risk" : "flat";
+  return (
+    <td
+      className={`evm-cell evm-cell--num evm-cell--${tone}${group ? " evm-cell--group" : ""}`}
+    >
+      <span className="evm-variance__mark" aria-hidden="true">
+        {sign > 0 ? "▲" : sign < 0 ? "▼" : ""}
+      </span>
+      <span className="evm-variance__value">
+        {sign > 0 ? "+" : ""}
+        {formatDays(value)}
+      </span>
+    </td>
+  );
+}
+
+/**
+ * A CPI/SPI cell: the number, with a deviation bar behind it whose centre is 1.0
+ * (§5 B-4). The number is what is read; the bar only makes "above or below 1.0"
+ * visible without reading, which is the whole meaning of these two columns.
+ */
+function IndexCell({ value }: { readonly value: EffortRatio }): ReactNode {
+  if (value === "-") {
+    return <td className="evm-cell evm-cell--num evm-cell--muted">—</td>;
+  }
+  const deviation = Math.max(-INDEX_BAR_RANGE, Math.min(INDEX_BAR_RANGE, value - 1));
+  const width = (Math.abs(deviation) / INDEX_BAR_RANGE) * 50;
+  const tone = deviation >= 0 ? "ok" : "risk";
+  return (
+    <td className="evm-cell evm-cell--num evm-cell--index">
+      <span
+        className={`evm-index__bar evm-index__bar--${tone}`}
+        style={{ width: `${width}%`, left: deviation >= 0 ? "50%" : `${50 - width}%` }}
+        aria-hidden="true"
+      />
+      <span className="evm-index__tick" aria-hidden="true" />
+      <span className="evm-index__value">{value.toFixed(2)}</span>
+    </td>
+  );
+}
+
+/**
+ * The mini S-curve (§5 B-6): cumulative PV over the plan, a marker at the as-of
+ * date, and a dot at the EV level reached by then. The vertical gap between the
+ * dot and the curve IS the schedule variance; the horizontal gap to where the
+ * curve last held that value is the slip in time, which no single index shows.
+ *
+ * There is no EV LINE, and there cannot be one: an EV history needs a progress
+ * history, and the model stores one current progress figure per task. Drawing a
+ * fabricated EV curve would look like measurement, so the EV appears as the one
+ * point that is actually known.
+ *
+ * Every row is drawn on the projection-wide date axis, not its own, so two rows'
+ * curves can be compared; the y axis is per-row (0…BAC), because rows differ in
+ * size by orders of magnitude and a shared y axis would flatten the small ones
+ * into the baseline.
+ */
+function Sparkline({
+  row,
+  projection,
+}: {
+  readonly row: EvmDashboardRow;
+  readonly projection: EvmDashboardProjection;
+}): ReactNode {
+  const { planStart, planEnd, statusDate } = projection;
+  if (planStart === null || planEnd === null || row.curve.length === 0 || row.bac <= 0) {
+    return <td className="evm-cell evm-cell--curve" />;
+  }
+
+  const firstDay = dayIndex(planStart);
+  const span = Math.max(1, dayIndex(planEnd) - firstDay);
+  const x = (day: number): number =>
+    (Math.max(0, Math.min(span, day - firstDay)) / span) * SPARKLINE_WIDTH;
+  const y = (days: number): number =>
+    SPARKLINE_HEIGHT - (Math.max(0, Math.min(row.bac, days)) / row.bac) * SPARKLINE_HEIGHT;
+
+  // The curve starts on the day BEFORE the row's first planned day, at zero, so
+  // the first step reads as a rise rather than as a value that was always there.
+  const points = [
+    `${x(dayIndex(row.curve[0]!.date) - 1)},${y(0)}`,
+    ...row.curve.map((point) => `${x(dayIndex(point.date))},${y(point.pv)}`),
+  ].join(" ");
+  const asOfX = x(dayIndex(statusDate));
+
+  return (
+    <td className="evm-cell evm-cell--curve">
+      <svg
+        className="evm-curve"
+        width={SPARKLINE_WIDTH}
+        height={SPARKLINE_HEIGHT}
+        viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+        // Redundant with the numeric columns beside it: everything this draws is
+        // already read out as PV, EV and SV. Announcing it again would only make
+        // the row longer to listen to.
+        aria-hidden="true"
+      >
+        <line className="evm-curve__asof" x1={asOfX} y1={0} x2={asOfX} y2={SPARKLINE_HEIGHT} />
+        <polyline className="evm-curve__pv" points={points} />
+        <circle
+          className={`evm-curve__ev evm-curve__ev--${displayedSign(row.sv) < 0 ? "risk" : "ok"}`}
+          cx={asOfX}
+          cy={y(row.ev)}
+          r={2.5}
+        />
+      </svg>
+    </td>
+  );
+}
+
+const DAY_COLUMNS = [
+  { key: "bac", label: "BAC", band: "bac" },
+  { key: "pv", label: "PV", band: "pv" },
+  { key: "ev", label: "EV", band: "ev" },
+  { key: "ac", label: "AC", band: "ac" },
+] as const;
+
+function MetricRow({
+  row,
+  projection,
+  caption,
+}: {
+  readonly row: EvmDashboardRow;
+  readonly projection: EvmDashboardProjection;
+  readonly caption: string;
+}): ReactNode {
+  const atRisk =
+    (row.cpi !== "-" && row.cpi < RISK_INDEX_THRESHOLD) ||
+    (row.spi !== "-" && row.spi < RISK_INDEX_THRESHOLD);
+  return (
+    <tr
+      className={`evm-row evm-row--${row.kind}${atRisk ? " evm-row--risk" : ""}`}
+      data-testid={`evm-row-${row.key}`}
+    >
+      <th scope="row" className="evm-cell evm-cell--name">
+        {caption}
+      </th>
+      {DAY_COLUMNS.map((column) => (
+        <td key={column.key} className="evm-cell evm-cell--num">
+          {formatDays(row[column.key])}
+        </td>
+      ))}
+      <VarianceCell value={row.sv} group />
+      <VarianceCell value={row.cv} />
+      <IndexCell value={row.cpi} />
+      <IndexCell value={row.spi} />
+      <td className="evm-cell evm-cell--num evm-cell--group">{formatDayForecast(row.eac)}</td>
+      <td className="evm-cell evm-cell--num">{formatDayForecast(row.etc)}</td>
+      <Sparkline row={row} projection={projection} />
+    </tr>
+  );
+}
+
+export function EvmDashboard({
+  project,
+  projectionRole,
+  today,
+}: EvmDashboardProps): ReactNode {
+  const [asOf, setAsOf] = useState(today);
+  const [segment, setSegment] = useState<EvmSegment>("task");
+
+  const projection = useMemo(
+    () => projectEvmDashboard(project, { statusDate: asOf, role: projectionRole }),
+    [project, asOf, projectionRole],
+  );
+  const rows = segment === "task" ? projection.byParentTask : projection.byMember;
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <p className="app-subtitle">
+          {project.name ? `${project.name} · ` : ""}EVM · 基準日 {asOf} ·{" "}
+          {segment === "task" ? "親タスク" : "メンバー"} {rows.length} 行
+        </p>
+        <div className="app-header__actions">
+          <label className="evm-asof">
+            <span className="evm-asof__label">基準日</span>
+            <input
+              className="evm-asof__input"
+              type="date"
+              value={asOf}
+              data-testid="evm-as-of"
+              // An empty value is the browser's "cleared" state, not a date. Keeping
+              // the last real one means the table never blanks out mid-edit.
+              onChange={(event) => {
+                if (event.target.value !== "") setAsOf(event.target.value);
+              }}
+            />
+          </label>
+          {/* §5 C-7 — a segmented control, not tabs: the same table with the same
+              columns, only the meaning of a row changes, so nothing should suggest
+              a move to another page. */}
+          <div className="evm-segment" role="group" aria-label="集計の単位">
+            <button
+              type="button"
+              className={`evm-segment__option${segment === "task" ? " evm-segment__option--on" : ""}`}
+              aria-pressed={segment === "task"}
+              data-testid="evm-segment-task"
+              onClick={() => setSegment("task")}
+            >
+              親タスク別
+            </button>
+            <button
+              type="button"
+              className={`evm-segment__option${segment === "member" ? " evm-segment__option--on" : ""}`}
+              aria-pressed={segment === "member"}
+              data-testid="evm-segment-member"
+              onClick={() => setSegment("member")}
+            >
+              人別
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Says plainly what the as-of date does. Without it an earlier date reads
+          as a historical snapshot, and it is not one: only PV is recomputed. */}
+      <p className="evm-note">
+        基準日で変わるのは PV（と、そこから出る SV・SPI）だけです。EV と AC
+        は現在の進捗・実績をそのまま使います（タスクごとに保持しているのは現在の進捗 1
+        つで、履歴ではないため）。数値はすべて工数（人日）です。
+      </p>
+
+      <div className="evm-scroll">
+        <table className="evm-table" aria-label="EVM 集計">
+          <thead>
+            <tr>
+              <th scope="col" className="evm-head evm-head--name">
+                {segment === "task" ? "親タスク" : "メンバー"}
+              </th>
+              {/* §5 A-3 — the unit is written once, here, and never in a cell:
+                  a unit inside a cell breaks the digit alignment A-1 buys. */}
+              {DAY_COLUMNS.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={`evm-head evm-head--num evm-head--band-${column.band}`}
+                >
+                  {column.label}
+                  <span className="evm-head__unit">人日</span>
+                </th>
+              ))}
+              <th scope="col" className="evm-head evm-head--num evm-head--group">
+                SV<span className="evm-head__unit">人日</span>
+              </th>
+              <th scope="col" className="evm-head evm-head--num">
+                CV<span className="evm-head__unit">人日</span>
+              </th>
+              <th scope="col" className="evm-head evm-head--num">
+                CPI
+              </th>
+              <th scope="col" className="evm-head evm-head--num">
+                SPI
+              </th>
+              <th scope="col" className="evm-head evm-head--num evm-head--group">
+                EAC<span className="evm-head__unit">人日</span>
+              </th>
+              <th scope="col" className="evm-head evm-head--num">
+                ETC<span className="evm-head__unit">人日</span>
+              </th>
+              <th scope="col" className="evm-head evm-head--curve">
+                推移
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* §5 A-2 — the project total stays pinned under the header, so a row
+                far down the table can always be read against the whole. */}
+            <MetricRow row={projection.total} projection={projection} caption="プロジェクト合計" />
+            {rows.map((row) => (
+              <MetricRow
+                key={row.key}
+                row={row}
+                projection={projection}
+                caption={row.kind === "unassigned" ? "未割当" : row.label}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

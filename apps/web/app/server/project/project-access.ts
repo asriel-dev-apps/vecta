@@ -15,13 +15,6 @@ import { projectMembershipContext, projectWorkspaceContext } from "../context";
  * wired in by the gate middleware; tests pass a fake.
  */
 
-/** The project row a loader/component reads (minimal shell fields). */
-export interface ProjectRow {
-  readonly id: string;
-  readonly tenantId: string;
-  readonly name: string;
-}
-
 /**
  * The principal's membership as surfaced to loaders. `projectRole` drives the
  * Step-4 read/command projection; `tenantRole` is carried when the memoised
@@ -33,12 +26,6 @@ export interface ProjectMembershipView {
   readonly projectId: string;
   readonly projectRole: ProjectMembership["role"];
   readonly tenantRole?: TenantMembership["role"];
-}
-
-/** The resolved access grant a loader/component reads for the current project. */
-export interface ResolvedProjectAccess {
-  readonly project: ProjectRow;
-  readonly membership: ProjectMembershipView;
 }
 
 /** The workspace snapshot a project route reads: current state + its revision. */
@@ -98,25 +85,11 @@ export function requireProjectWorkspace(
   return context.get(projectWorkspaceContext)();
 }
 
-/**
- * Read the resolved project access for a `/projects/:id` loader/component. The
- * layout's access middleware guarantees the membership check has already passed;
- * the project row itself comes out of the shared workspace read rather than a
- * query of its own, so asking for it costs no round trip beyond the one the
- * route was going to make anyway (the header the workspace batch already
- * fetches IS the project row).
- */
-export async function requireProjectAccess(
-  context: Readonly<RouterContextProvider>,
-): Promise<ResolvedProjectAccess> {
-  const membership = requireProjectMembership(context);
-  const workspace = await requireProjectWorkspace(context);
-  return {
-    project: {
-      id: workspace.current.id,
-      tenantId: membership.tenantId,
-      name: workspace.current.name,
-    },
-    membership,
-  };
-}
+// `requireProjectAccess` used to sit here, returning `{ project, membership }`
+// with the project row taken out of the workspace batch. Its last production
+// caller was the dashboard STUB, which read the whole workspace to print one
+// project name; the real dashboard (design 0007) reads the workspace for the
+// workspace, through the shared `loadProjectView` choke point like every other
+// project screen. A convenience wrapper with no callers is a second way to read
+// the same thing that no longer earns its keep — screens that want the project
+// name take it from their own view payload.

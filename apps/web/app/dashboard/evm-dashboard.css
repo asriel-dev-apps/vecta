@@ -1,0 +1,282 @@
+/*
+ * VECTA EVM dashboard (design 0007 §5).
+ *
+ * Adds no palette of its own: every colour resolves from the :root tokens the WBS
+ * stylesheet defines, so one theme drives both screens in light and dark. The
+ * register is the same too — hairlines, tabular numerals, restrained colour — on
+ * purpose: this table and the grid show the same numbers, and a second visual
+ * language would suggest they came from somewhere else.
+ */
+
+.evm-note {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 20px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ── As-of date (§5 C-8) ────────────────────────────────────────────── */
+/* One control for the whole table; there is deliberately no per-column date. */
+.evm-asof {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.evm-asof__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.evm-asof__input {
+  font: inherit;
+  font-size: 12px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 3px 8px;
+}
+.evm-asof__input:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--accent); }
+
+/* ── Segmented control (§5 C-7) ─────────────────────────────────────── */
+/* Two options sharing one track, so switching reads as the same table changing
+   what a row means — not as a move to another page, which is what tabs say. */
+.evm-segment {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  background: var(--header-bg);
+  border: 1px solid var(--line);
+}
+
+.evm-segment__option {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.evm-segment__option:hover { color: var(--ink); }
+.evm-segment__option:focus-visible { outline: none; box-shadow: var(--ring); }
+.evm-segment__option--on {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* ── Table ──────────────────────────────────────────────────────────── */
+.evm-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.evm-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.evm-head {
+  position: sticky;
+  top: 0;
+  /* Stacking, lowest to highest: a body row's sticky name cell (1), the pinned
+     total row (2, its own name cell 3), the header (4, its name cell 5). Without
+     the total row sitting ABOVE the name column, a body row's name cell — later
+     in DOM order at the same z — paints over the pinned total as it scrolls. */
+  z-index: 4;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+/* §5 A-3 — the unit lives in the header exactly once. Quieter than the metric
+   name so the column still reads as "PV" at a glance. */
+.evm-head__unit {
+  margin-left: 4px;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.evm-head__unit::before { content: "("; }
+.evm-head__unit::after { content: ")"; }
+
+/* The four measured quantities keep the WBS grid's band tints, so a column means
+   the same thing on both screens. The derived six stay neutral: colouring ten of
+   ten columns is the same as colouring none. */
+.evm-head--band-bac { background: var(--band-bac-bg); color: var(--band-bac-ink); }
+.evm-head--band-pv { background: var(--band-pv-bg); color: var(--band-pv-ink); }
+.evm-head--band-ev { background: var(--band-ev-bg); color: var(--band-ev-ink); }
+.evm-head--band-ac { background: var(--band-ac-bg); color: var(--band-ac-ink); }
+.evm-head--band-bac .evm-head__unit,
+.evm-head--band-pv .evm-head__unit,
+.evm-head--band-ev .evm-head__unit,
+.evm-head--band-ac .evm-head__unit { color: inherit; opacity: 0.75; }
+
+/* A hairline before the variance group and before the forecast group — enough to
+   read the table as measured · variance · forecast without adding a colour. */
+.evm-head--group, .evm-cell--group { border-left: 1px solid var(--line-strong); }
+
+.evm-head--name,
+.evm-cell--name {
+  position: sticky;
+  left: 0;
+  text-align: left;
+  min-width: 200px;
+  max-width: 320px;
+  /* Room for the risk marker in EVERY name cell, marked or not. Widening only
+     the marked ones indents their text by 3px and leaves the column's left edge
+     ragged — the alignment A-1 buys, given away by the next rule. Seen on a real
+     render; no test noticed. */
+  padding-left: 13px;
+}
+.evm-head--name { z-index: 5; }
+
+.evm-head--curve { text-align: center; padding: 0 8px; }
+
+.evm-cell {
+  height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.evm-cell--num {
+  text-align: right;
+  font-family: var(--mono);
+  /* §5 A-1 — the single highest-value line in this file: equal-width digits mean
+     the column can be compared without reading any of it. */
+  font-variant-numeric: tabular-nums;
+}
+
+.evm-cell--name {
+  z-index: 1;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--line-strong);
+}
+
+.evm-cell--muted { color: var(--faint); }
+.evm-cell--ok .evm-variance__value { color: var(--ok); }
+.evm-cell--risk .evm-variance__value { color: var(--risk); }
+.evm-cell--ok .evm-variance__mark { color: var(--ok); }
+.evm-cell--risk .evm-variance__mark { color: var(--risk); }
+.evm-cell--flat { color: var(--muted); }
+
+/* §5 B-5 — the marker sits in a fixed-width slot so the digits beside it stay in
+   one column whether the row is ahead, behind, or exactly on plan. */
+.evm-variance__mark {
+  display: inline-block;
+  width: 11px;
+  margin-right: 3px;
+  font-size: 9px;
+  text-align: center;
+}
+
+/* ── CPI / SPI deviation bar (§5 B-4) ───────────────────────────────── */
+.evm-cell--index { position: relative; }
+
+/* A strip along the BOTTOM of the cell, not a fill behind the digits. A
+   full-height bar sits under the number for every value above 1.0 and in empty
+   space for every value below it — so it both obscures the figure and reads as
+   two different treatments for one column. Seen on a real render; no test
+   noticed, because "is the number legible behind the bar" is not a thing a DOM
+   assertion can ask. */
+.evm-index__bar {
+  position: absolute;
+  bottom: 3px;
+  height: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.evm-index__bar--ok { background: var(--ok); }
+.evm-index__bar--risk { background: var(--risk); }
+
+/* The 1.0 centre line — without it the bar has no zero and means nothing. */
+.evm-index__tick {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  height: 5px;
+  width: 1px;
+  background: var(--line-strong);
+  pointer-events: none;
+}
+
+.evm-index__value { position: relative; }
+
+/* ── Rows ───────────────────────────────────────────────────────────── */
+/* §5 C-9 — a horizontal hover band. With twelve columns, losing your row is the
+   most common way to misread this table. */
+.evm-row:hover .evm-cell { background: var(--accent-soft); }
+
+/* §5 A-2 — the project total pinned directly under the header, so any row can be
+   read against the whole without scrolling back. */
+.evm-row--total .evm-cell {
+  position: sticky;
+  top: 30px;
+  z-index: 2;
+  height: 30px;
+  font-weight: 650;
+  background: var(--parent-bg);
+  color: var(--parent-ink);
+  border-bottom: 1px solid var(--line-strong);
+}
+.evm-row--total .evm-cell--name { z-index: 3; }
+.evm-row--total:hover .evm-cell { background: var(--parent-bg); }
+
+.evm-row--unassigned .evm-cell--name { color: var(--muted); font-style: italic; }
+
+/* §5 C-10 — the threshold marker is a 3px rule at the row's left edge, not a fill.
+   A filled row shouts as loudly as ten filled rows say nothing. */
+.evm-row--risk .evm-cell--name { box-shadow: inset 3px 0 0 var(--risk); }
+
+/* ── Mini S-curve (§5 B-6) ──────────────────────────────────────────── */
+.evm-cell--curve { padding: 0 8px; line-height: 0; }
+
+.evm-curve { display: block; overflow: visible; }
+
+.evm-curve__pv {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.evm-curve__asof {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.evm-curve__ev--ok { fill: var(--ok); }
+.evm-curve__ev--risk { fill: var(--risk); }

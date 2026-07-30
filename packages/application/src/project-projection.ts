@@ -106,6 +106,20 @@ export interface WbsGridTaskRow {
   readonly costVarianceHours: number;
 }
 
+/**
+ * The WBS row order, and the ONE definition of it. The grid sorts its flat rows
+ * with this and nests them by `parentId` afterwards, so a root task's position
+ * here is its position on screen. The EVM dashboard reuses it rather than sorting
+ * for itself: design 0007 §2 makes the WBS projection the authority on row order,
+ * so the two screens cannot drift.
+ */
+export function compareTaskOrder(
+  left: { readonly sortOrder: number; readonly id: string },
+  right: { readonly sortOrder: number; readonly id: string },
+): number {
+  return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id);
+}
+
 export interface WbsGridProjection {
   readonly projectId: string;
   readonly statusDate: string;
@@ -208,7 +222,7 @@ export function projectWbsGrid(
         costVarianceHours: metrics.costVarianceHours,
       };
     })
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    .sort(compareTaskOrder);
 
   return {
     projectId: project.id,

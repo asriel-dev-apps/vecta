@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   calculateEffortEvm,
   calculateTaskEffort,
+  effortForecast,
+  effortHoursToDays,
   taskStatus,
   type EffortTaskInput,
 } from "../src/index.js";
@@ -190,5 +192,52 @@ describe("calculateEffortEvm", () => {
       spi: "-",
       cpi: "-",
     });
+  });
+});
+
+describe("effortForecast", () => {
+  it("HEADLINE: EAC is BAC divided by CPI, and the row's own columns prove it", () => {
+    // BAC 20, EV 8, AC 10 → CPI = 0.8, so EAC = 20 / 0.8 = 25 and ETC = 25 − 10.
+    // The point of this formula choice: a reader can verify it from three numbers
+    // the same table row already shows.
+    const forecast = effortForecast(20, 8, 10);
+
+    expect(forecast.eac).toBe(25);
+    expect(forecast.etc).toBe(15);
+  });
+
+  it("forecasts under budget when CPI is above 1", () => {
+    // BAC 20, EV 12, AC 10 → CPI = 1.2 → EAC = 20 / 1.2.
+    const forecast = effortForecast(20, 12, 10);
+
+    expect(forecast.eac).toBeCloseTo(16.666_666_7, 6);
+    expect(forecast.etc).toBeCloseTo(6.666_666_7, 6);
+  });
+
+  it("is '-' when nothing has been expended, exactly where CPI is", () => {
+    // AC = 0 makes CPI itself "-", so a forecast built on it has no value either.
+    expect(effortForecast(20, 5, 0)).toEqual({ eac: "-", etc: "-" });
+  });
+
+  it("is '-' rather than Infinity when effort was spent but nothing earned", () => {
+    // CPI = 0 / 10 = 0, and BAC / 0 is a division by zero. The column must never
+    // show an infinity — the arithmetic is undefined, not "infinitely expensive".
+    const forecast = effortForecast(20, 0, 10);
+
+    expect(forecast.eac).toBe("-");
+    expect(forecast.etc).toBe("-");
+    expect(Number.isFinite(forecast.eac as number)).toBe(false);
+  });
+
+  it("forecasts exactly BAC when performance is exactly on plan", () => {
+    expect(effortForecast(20, 10, 10)).toEqual({ eac: 20, etc: 10 });
+  });
+});
+
+describe("effortHoursToDays", () => {
+  it("is the one 8-hour person-day conversion the rollups use", () => {
+    expect(effortHoursToDays(8)).toBe(1);
+    expect(effortHoursToDays(0)).toBe(0);
+    expect(effortHoursToDays(4)).toBe(0.5);
   });
 });

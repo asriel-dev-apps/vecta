@@ -7,9 +7,8 @@ import {
   type ProjectListSource,
 } from "~/server/project/project-list.server";
 import {
-  requireProjectAccess,
   requireProjectMembership,
-  type ProjectRow,
+  requireProjectWorkspace,
   type ProjectWorkspaceLoader,
   type ProjectWorkspaceRecord,
 } from "~/server/project/project-access";
@@ -29,21 +28,17 @@ const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
 // belongs to someone else, or does not exist — the gate cannot tell them apart).
 const UNKNOWN_PROJECT_ID = "33333333-3333-4333-8333-333333333333";
 
-const PROJECT_ROW: ProjectRow = {
-  id: PROJECT_ID,
-  tenantId: TENANT_ID,
-  name: "Project 1",
-};
+const PROJECT_NAME = "Project 1";
 
 // The gate no longer fetches the project row on its own: the workspace batch's
-// header IS that row, so the fake workspace carries the identity the resolved
-// `project` must be derived from.
+// header IS that row, so the fake workspace carries the identity every screen
+// reads the project's name and id from.
 const WORKSPACE: ProjectWorkspaceRecord = {
   revision: 5n,
   current: {
     ...createDemoProject({ parentCount: 1, subtasksPerParent: 1, memberCount: 1 }),
     id: PROJECT_ID,
-    name: "Project 1",
+    name: PROJECT_NAME,
   },
 };
 
@@ -149,8 +144,11 @@ describe("project access gate (middleware)", () => {
       expect(run.denied).toBe(false);
       expect(run.childLoader).toHaveBeenCalledTimes(1);
 
-      const { project, membership } = await requireProjectAccess(run.context);
-      expect(project).toEqual(PROJECT_ROW);
+      const workspace = await requireProjectWorkspace(run.context);
+      const membership = requireProjectMembership(run.context);
+      // The workspace header IS the project row every screen reads.
+      expect(workspace.current.id).toBe(PROJECT_ID);
+      expect(workspace.current.name).toBe(PROJECT_NAME);
       expect(membership.projectRole).toBe(role);
       expect(membership.tenantId).toBe(TENANT_ID);
       expect(membership.projectId).toBe(PROJECT_ID);
@@ -212,17 +210,19 @@ describe("project access gate (middleware)", () => {
     expect(run.loadPrincipal).toHaveBeenCalledTimes(0);
   });
 
-  it("resolves ONE workspace read under two parallel requireProjectAccess awaits", async () => {
+  it("resolves ONE workspace read under two parallel view loads", async () => {
+    // React Router runs the layout loader and the child route's loader in
+    // parallel; both go through the same memoised thunk.
     const run = await runGate(principalWith("EDITOR"), { id: PROJECT_ID });
     expect(run.denied).toBe(false);
 
     const [a, b] = await Promise.all([
-      requireProjectAccess(run.context),
-      requireProjectAccess(run.context),
+      loadProjectView(run.context),
+      loadProjectView(run.context),
     ]);
 
-    expect(a.project).toEqual(PROJECT_ROW);
-    expect(b.project).toEqual(PROJECT_ROW);
+    expect(a.stateView.id).toBe(PROJECT_ID);
+    expect(b.stateView.id).toBe(PROJECT_ID);
     // Memoised thunk: parallel loaders share a single round trip.
     expect(run.loadWorkspace).toHaveBeenCalledTimes(1);
   });
@@ -244,20 +244,18 @@ describe("project access gate (middleware)", () => {
     expect(run.loadWorkspace).toHaveBeenCalledTimes(0);
   });
 
-  it("HEADLINE: the resolved project row and the route's view share ONE read", async () => {
+  it("HEADLINE: the project name and the route's view come out of ONE read", async () => {
     // The round-trip reduction itself. Before the fold the project row was a
     // query of its own, awaited before the workspace could even be requested, so
     // a document request cost three SEQUENTIAL Neon round trips: principal, then
     // project row, then workspace. Now the row comes out of the workspace
-    // header, so both consumers resolve a single read and the request costs two.
+    // header, so a screen that shows the name and a screen that shows the data
+    // are the same read and the request costs two.
     const run = await runGate(principalWith("OWNER"), { id: PROJECT_ID });
 
-    const [access, view] = await Promise.all([
-      requireProjectAccess(run.context),
-      loadProjectView(run.context),
-    ]);
+    const view = await loadProjectView(run.context);
 
-    expect(access.project).toEqual(PROJECT_ROW);
+    expect(view.stateView.name).toBe(PROJECT_NAME);
     expect(view.revision).toBe("5");
     expect(run.loadWorkspace).toHaveBeenCalledTimes(1);
   });
@@ -265,7 +263,7 @@ describe("project access gate (middleware)", () => {
   it("scopes the workspace read to the membership's tenant, never the id alone", async () => {
     const run = await runGate(principalWith("OWNER"), { id: PROJECT_ID });
 
-    await requireProjectAccess(run.context);
+    await requireProjectWorkspace(run.context);
 
     expect(run.loadWorkspace).toHaveBeenCalledWith(TENANT_ID, PROJECT_ID);
   });
@@ -283,7 +281,7 @@ describe("project access gate (middleware)", () => {
 
     await gate(middlewareArgs(context, { id: PROJECT_ID }), async () => new Response(null));
 
-    await expect(requireProjectAccess(context)).rejects.toMatchObject({
+    await expect(requireProjectWorkspace(context)).rejects.toMatchObject({
       init: { status: 404 },
       data: null,
     });
@@ -360,7 +358,7 @@ describe("project access gate — security events", () => {
 
     const captured = captureWarn();
     await gate(middlewareArgs(context, { id: PROJECT_ID }), async () => new Response(null));
-    await expect(requireProjectAccess(context)).rejects.toMatchObject({ init: { status: 404 } });
+    await expect(requireProjectWorkspace(context)).rejects.toMatchObject({ init: { status: 404 } });
     captured.restore();
 
     expect(JSON.parse(captured.lines[0] ?? "")).toMatchObject({
@@ -374,7 +372,7 @@ describe("project access gate — security events", () => {
   it("stays silent when access is granted", async () => {
     const captured = captureWarn();
     const run = await runGate(principalWith("EDITOR"), { id: PROJECT_ID });
-    await requireProjectAccess(run.context);
+    await requireProjectWorkspace(run.context);
     captured.restore();
 
     expect(run.denied).toBe(false);
