@@ -84,12 +84,49 @@ export interface EffortResult {
   readonly rollup: EffortRollup;
 }
 
+/**
+ * Forecast at the current cost performance — the EVM "typical" case, in effort.
+ * EAC = BAC / CPI and ETC = EAC − AC, both person-days.
+ *
+ * Expressed as BAC × AC / EV rather than BAC / CPI so the caller need not carry a
+ * ratio that may be `"-"`; the two are the same quantity. It is deliberately the
+ * BAC/CPI variant and not `AC + (BAC − EV)`: every input is a column the same row
+ * already shows, so a reader can verify the forecast against the row itself.
+ *
+ * Undefined — `"-"` — in exactly the two cases where the division has no value:
+ * `ac === 0` is where CPI itself is `"-"`, and `ev === 0` with effort already
+ * spent makes CPI zero, so BAC / CPI is a division by zero. Returning `"-"` for
+ * both keeps an infinity out of the column.
+ */
+export interface EffortForecast {
+  /** EAC — estimate at completion, person-days. */
+  readonly eac: EffortRatio;
+  /** ETC — estimate to complete, person-days = EAC − AC. */
+  readonly etc: EffortRatio;
+}
+
+export function effortForecast(bac: number, ev: number, ac: number): EffortForecast {
+  if (ac === 0 || ev === 0) return { eac: "-", etc: "-" };
+  const eac = (bac * ac) / ev;
+  return { eac, etc: eac - ac };
+}
+
 function minutesToHours(minutes: number): number {
   return minutes / MINUTES_PER_HOUR;
 }
 
 function hoursToDays(hours: number): number {
   return hours / HOURS_PER_DAY;
+}
+
+/**
+ * Person-hours → person-days, the one conversion the aggregates use. Exported so
+ * a caller that rolls up {@link EffortTaskMetrics} itself (the EVM dashboard sums
+ * leaf metrics per parent task and per member) reaches the same person-day scale
+ * through this module rather than repeating the 8.
+ */
+export function effortHoursToDays(hours: number): number {
+  return hoursToDays(hours);
 }
 
 /** U — status derived from T (basis points). */
