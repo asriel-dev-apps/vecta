@@ -20,7 +20,7 @@
     "@vecta/application": "workspace:*",
     "@vecta/domain": "workspace:*",
     "@vecta/persistence": "workspace:*",
-    "agents": "0.17.4",
+    "agents": "0.19.0",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.32",
     "isbot": "5.2.1",
