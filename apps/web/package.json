@@ -22,7 +22,7 @@
     "@vecta/persistence": "workspace:*",
     "agents": "0.17.4",
     "drizzle-orm": "0.45.2",
-    "hono": "4.12.30",
+    "hono": "4.12.32",
     "isbot": "5.2.1",
     "jose": "6.2.4",
     "react": "19.2.8",
