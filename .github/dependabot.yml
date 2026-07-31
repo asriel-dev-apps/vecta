@@ -11,20 +11,21 @@ updates:
         dependency-type: development
     open-pull-requests-limit: 5
 
-  - package-ecosystem: pip
-    directory: /services/staffing-solver
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: pip
-    directory: /services/forecast-simulator
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    ignore:
+      # pnpm/action-setup 6.0.9 is MEASURED broken for this repo, not merely
+      # untried: it bootstraps with its own bundled pnpm v11.7.0, then dies
+      # self-installing the requested version inside pnpm's own code
+      # ("Cannot use 'in' operator to search for 'integrity' in undefined",
+      # CI run 30462615351). Dropping the `version:` input does not help — the
+      # failure is in the switch, whatever names the target. Without this entry
+      # Dependabot reopens the same known-broken PR every week (#14, then #54).
+      # Pinned to the one version, NOT to the package: 6.0.10 or 7.x must still
+      # come through, because an upstream fix is exactly what unblocks the pin
+      # held at v4.3.0 in ci.yml.
+      - dependency-name: pnpm/action-setup
+        versions: ["6.0.9"]
