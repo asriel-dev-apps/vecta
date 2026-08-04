@@ -123,6 +123,21 @@ test("rejects a client asset built from a .server module, whatever its contents"
   assert.match(result.stderr, /server-module-shipped/u);
 });
 
+test("reports WHERE a secret leaked without reprinting the secret", async () => {
+  // This gate fires precisely when a credential has reached the bundle, and it
+  // runs in CI on a public repo. Echoing the offending line — the obvious way to
+  // make the failure easier to read — would copy the leaked value into a log
+  // anybody can fetch. Location and rule id only.
+  const value = "SUPERSECRETVALUE-abc123-donotprint";
+  const result = await run(
+    bundleWith({ "leak-16.js": `const k=env.SESSION_SECRET;const v="${value}";\n` }),
+  );
+  assert.equal(result.ok, false);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /leak-16\.js:1 — secret-name/u); // control: it did report
+  assert.ok(!output.includes(value), "the gate reprinted the matched content");
+});
+
 test("refuses to pass when there is no bundle to scan", async () => {
   // The failure mode this whole script exists to prevent: a scan that read
   // nothing reports the same "no hits" as a scan of a clean bundle.

@@ -282,6 +282,13 @@ function main() {
   if (findings.length > 0) {
     for (const finding of findings) {
       const rule = RULES.find((candidate) => candidate.id === finding.rule);
+      // LOCATION AND RULE ONLY — never the matched text. This gate fires exactly
+      // when a secret has reached the bundle, and it runs in CI on a PUBLIC repo,
+      // so echoing the offending line to make the failure "easier to read" would
+      // copy the leaked value into a log anybody can fetch. The file and line are
+      // enough to find it locally, where the value is already visible. A test
+      // pins this: adding `${lines[finding.line - 1]}` here is the obvious
+      // improvement, and it is the one thing this must not do.
       console.error(
         `${finding.file}:${finding.line} — ${finding.rule}${rule === undefined ? "" : ` (${rule.why})`}`,
       );
