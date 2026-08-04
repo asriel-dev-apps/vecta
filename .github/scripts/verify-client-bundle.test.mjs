@@ -58,6 +58,48 @@ test("rejects a secret name, a connection string, a driver, and a server identif
   }
 });
 
+test("rejects the two credentials the hand-written secret list used to miss", async () => {
+  // Both were declared in `Env` and absent from the old four-name pattern
+  // (measured 2026-08-04). `SESSION_SECRET_PREVIOUS` is the instructive one:
+  // `\bSESSION_SECRET\b` does not match it, because `_` is a word character — so
+  // the list looked like it covered a name it did not. The names are DERIVED from
+  // `env.d.ts` now, and these assertions are what makes a broken derivation loud.
+  for (const [name, contents] of [
+    ["leak-6.js", "const k=env.STAGING_ACCESS_KEY;\n"],
+    ["leak-7.js", "const k=env.SESSION_SECRET_PREVIOUS;\n"],
+  ]) {
+    const result = await run(bundleWith({ [name]: contents }));
+    assert.equal(result.ok, false, `${name} should have been rejected`);
+    assert.match(result.stderr, /secret-name/u);
+  }
+});
+
+test("rejects the server-only dependencies the rule named but did not match", async () => {
+  // The rule's own prose said "hono … and the MCP SDK", and its pattern contained
+  // neither. `agents/mcp` builds the `/mcp` surface and was likewise unmatched.
+  for (const [name, contents] of [
+    ["leak-8.js", 'import{Hono}from"hono";\n'],
+    ["leak-9.js", 'import{cors}from"hono/cors";\n'],
+    ["leak-10.js", 'import{createMcpHandler}from"agents/mcp";\n'],
+    ["leak-11.js", 'import * as jose from "jose";\n'],
+  ]) {
+    const result = await run(bundleWith({ [name]: contents }));
+    assert.equal(result.ok, false, `${name} should have been rejected`);
+    assert.match(result.stderr, /server-only-dependency/u);
+  }
+});
+
+test("passes browser code whose text merely resembles a server dependency", async () => {
+  // The other direction. A gate that flags correct bundles teaches people to
+  // bypass it, so the alternation must not fire on ordinary client text.
+  const result = await run(
+    bundleWith({
+      "ok-1.js": 'const ua=navigator.userAgent;const s="phonon";const t="josephine";\n',
+    }),
+  );
+  assert.equal(result.ok, true, result.stderr);
+});
+
 test("rejects a client asset built from a .server module, whatever its contents", async () => {
   // The filename alone is the finding: a `.server` module that got a client chunk
   // is a leak by construction, even if this particular chunk looks harmless.

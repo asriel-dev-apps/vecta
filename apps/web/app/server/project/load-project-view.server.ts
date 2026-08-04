@@ -8,7 +8,7 @@ import {
 import {
   requireProjectMembership,
   requireProjectWorkspace,
-} from "./project-access";
+} from "./project-access.server";
 
 /**
  * ADR 0012 Step 4c — the ONE role-scoped project-view loader, shared by the WBS

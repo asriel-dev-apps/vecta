@@ -1,7 +1,7 @@
 import { RouterContextProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { createProjectAccessMiddleware } from "~/middleware/project-access.server";
-import type { AuthenticatedPrincipal } from "~/server/auth/principal-directory";
+import type { AuthenticatedPrincipal } from "~/server/auth/principal-directory.server";
 import {
   loadProjectList,
   type ProjectListSource,
@@ -11,10 +11,10 @@ import {
   requireProjectWorkspace,
   type ProjectWorkspaceLoader,
   type ProjectWorkspaceRecord,
-} from "~/server/project/project-access";
+} from "~/server/project/project-access.server";
 import { createDemoProject } from "./fixtures/demo-project";
 import { loadProjectView } from "~/server/project/load-project-view.server";
-import { appContext, principalContext } from "~/server/context";
+import { appContext, principalContext } from "~/server/context.server";
 import { fakeEnv } from "./helpers";
 
 const ctx = {

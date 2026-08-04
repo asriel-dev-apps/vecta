@@ -3,8 +3,8 @@ import {
   RouterContextProvider,
   type ServerBuild,
 } from "react-router";
-import { appContext } from "../app/server/context";
-import { handleApiRequest, handleMcpRequest } from "../app/server/api";
+import { appContext } from "../app/server/context.server";
+import { handleApiRequest, handleMcpRequest } from "../app/server/api/index.server";
 import {
   withDocumentSecurityHeaders,
   withDocumentTransportSecurity,

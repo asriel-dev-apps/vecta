@@ -1,20 +1,11 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import security from "eslint-plugin-security";
-
-/**
- * Packages that exist only on the Worker. A value import of any of these from
- * client-reachable code puts the driver — and, as a build probe on 2026-07-26
- * showed, a literal `postgresql://` connection string — into the browser bundle,
- * with the build, the types, and the tests all still green.
- */
-const SERVER_ONLY_PACKAGES = [
-  "@vecta/persistence",
-  "drizzle-orm",
-  "@neondatabase/serverless",
-  "jose",
-  "hono",
-];
+// Shared with `.github/scripts/verify-client-bundle.mjs`. It used to be a second
+// copy of the same list, and the copies drifted: this one had `hono`, the bundle
+// scanner named hono in its rule's prose and left it out of the pattern (measured
+// 2026-08-04). One list can still be wrong; two lists go wrong separately.
+import { SERVER_ONLY_PACKAGES } from "./.github/scripts/server-only-surface.mjs";
 
 function serverOnlyPackages(message) {
   return SERVER_ONLY_PACKAGES.map((name) => ({ name, allowTypeImports: true, message }));

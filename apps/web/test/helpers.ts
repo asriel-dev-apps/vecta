@@ -1,5 +1,5 @@
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import type { OidcConfig } from "~/server/auth/oidc-config";
+import type { OidcConfig } from "~/server/auth/oidc-config.server";
 
 /**
  * Test scaffolding: a fake `Env` (only the fields auth touches), an in-memory

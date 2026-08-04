@@ -1,6 +1,6 @@
 import { createLocalJWKSet } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createIdTokenVerifier } from "~/server/auth/id-token";
+import { createIdTokenVerifier } from "~/server/auth/id-token.server";
 import {
   type TestKeys,
   TEST_CLIENT_ID,

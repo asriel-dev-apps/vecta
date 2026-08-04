@@ -7,7 +7,7 @@ import {
   RequestRateLimitedError,
   routeKey,
   secureResponse,
-} from "~/server/api/edge-security";
+} from "~/server/api/edge-security.server";
 
 /**
  * The framework-free edge-security posture for the Hono `/api` branch (ADR 0012

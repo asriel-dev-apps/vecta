@@ -7,13 +7,13 @@ import {
   appContext,
   dbSessionContext,
   principalContext,
-} from "~/server/context";
+} from "~/server/context.server";
 import type {
   AuthenticatedPrincipal,
   PrincipalDirectory,
-} from "~/server/auth/principal-directory";
+} from "~/server/auth/principal-directory.server";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
-import { safeReturnTo } from "~/server/auth/redirect";
+import { safeReturnTo } from "~/server/auth/redirect.server";
 import { readSessionResult } from "~/server/auth/session.server";
 import { writeSecurityEvent } from "~/server/security-log.server";
 

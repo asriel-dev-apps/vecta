@@ -6,7 +6,7 @@ import {
   requestId,
   RequestRateLimitedError,
   withRequestId,
-} from "./api/edge-security";
+} from "./api/edge-security.server";
 import { writeSecurityEvent } from "./security-log.server";
 
 /**

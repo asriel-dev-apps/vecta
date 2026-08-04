@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 import type { Route } from "./+types/logout";
 import { destroySession } from "~/server/auth/session.server";
-import { appContext } from "~/server/context";
+import { appContext } from "~/server/context.server";
 
 // Public route. Logout is a POST action (state-changing); a stray GET just
 // bounces to the login screen.

@@ -1,7 +1,7 @@
 import { RouterContextProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { middleware } from "~/root";
-import { appContext, dbSessionContext } from "~/server/context";
+import { appContext, dbSessionContext } from "~/server/context.server";
 import type { DbSession } from "~/server/db-session.server";
 import { fakeEnv } from "./helpers";
 

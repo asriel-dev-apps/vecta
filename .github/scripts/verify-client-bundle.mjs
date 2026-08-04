@@ -1,5 +1,12 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import {
+  declaredSecretNames,
+  ENV_DECLARATION,
+  SERVER_ONLY_DIRECTORIES,
+  SERVER_ONLY_PACKAGES,
+  suffixViolations,
+} from "./server-only-surface.mjs";
 
 /**
  * The client/server boundary, checked against what users actually RECEIVE.
@@ -26,13 +33,35 @@ import path from "node:path";
  * pattern is ever broken by an edit, the self-check fails loudly instead of the
  * scan quietly passing everything.
  */
+const REPO_ROOT = path.join(import.meta.dirname, "..", "..");
+
+/**
+ * The secret names are DERIVED from the `Env` declaration, not copied next to it.
+ *
+ * Measured 2026-08-04: the hand-written list held four names while `Env` declared
+ * eight, and the two it was missing were `STAGING_ACCESS_KEY` and
+ * `SESSION_SECRET_PREVIOUS`. The second is the more instructive miss —
+ * `\bSESSION_SECRET\b` does NOT match `SESSION_SECRET_PREVIOUS`, because `_` is a
+ * word character, so the list looked like it covered a name it did not.
+ * `CLOUDFLARE_API_TOKEN` is appended by hand because it is a CI credential and
+ * never appears in `Env`.
+ */
+const CI_ONLY_SECRETS = ["CLOUDFLARE_API_TOKEN"];
+const ENV_SOURCE = readFileSync(path.join(REPO_ROOT, ENV_DECLARATION), "utf8");
+const SECRET_NAMES = [...declaredSecretNames(ENV_SOURCE), ...CI_ONLY_SECRETS];
+
+function alternation(names) {
+  return names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|");
+}
+
 const RULES = [
   {
     id: "secret-name",
     why: "A secret's NAME in the bundle means the code that reads it was shipped.",
-    pattern:
-      /\b(DATABASE_URL|SESSION_SECRET|OIDC_CLIENT_SECRET|CLOUDFLARE_API_TOKEN)\b/u,
-    sample: 'env.DATABASE_URL',
+    pattern: new RegExp(`\\b(${alternation(SECRET_NAMES)})\\b`, "u"),
+    // The sample is the LAST declared secret rather than a literal, so a name
+    // that stops being derived breaks the self-check instead of passing quietly.
+    sample: `env.${SECRET_NAMES[SECRET_NAMES.length - 1]}`,
   },
   {
     id: "connection-string",
@@ -48,15 +77,25 @@ const RULES = [
   },
   {
     id: "server-only-dependency",
-    why: "jose (token verification), hono (the /api + /mcp surfaces) and the MCP SDK run only on the Worker.",
-    pattern: /\b(jose\/|@modelcontextprotocol|jwtVerify|createRemoteJWKSet)\b/u,
-    sample: "await jwtVerify(token, jwks)",
+    why: "jose (token verification), hono (the /api + /mcp surfaces), the Agents SDK and the MCP SDK run only on the Worker.",
+    // Derived from the shared list, because this rule USED to name hono in the
+    // prose above and then not match it. Measured 2026-08-04, all NOT caught by
+    // the old pattern: `hono`, `hono/cors`, `import * as jose from "jose"`,
+    // `agents/mcp`. eslint had hono all along — the hole was in the gate that
+    // reads what users actually receive, which is the one that is authoritative.
+    pattern: new RegExp(
+      `\\b(${alternation(SERVER_ONLY_PACKAGES.filter((name) => !name.startsWith("@vecta/")))})(\\b|/)|\\b(jwtVerify|createRemoteJWKSet)\\b`,
+      "u",
+    ),
+    sample: 'import { Hono } from "hono"',
   },
   {
     id: "server-identifier",
     why:
-      "Identifiers from the modules under app/server/ that carry NO .server suffix — " +
-      "the ones reachable only by convention today, so the ones a refactor can leak.",
+      "A backstop for server identifiers appearing in the bundle by some route other " +
+      "than an import — a copy-paste, say. Since 2026-08-04 every module under " +
+      "app/server/ carries the .server suffix, so the import route is a build error " +
+      "(see the suffix invariant below) and this list is no longer load-bearing.",
     pattern:
       /\b(createDbSession|NeonHttpProjectWorkspaceReader|PostgresProject[A-Za-z]*|createNeonPrincipalDirectory|createProjectAccessMiddleware|requirePrincipal|requireProjectWorkspace|loadProjectView|runCommandAction|applyCommands|findProjectMembership|projectWorkspaceContext|dbSessionContext)\b/u,
     sample: "const session = createDbSession(env)",
@@ -65,6 +104,44 @@ const RULES = [
 
 /** A client asset built from a `.server` module is a leak by construction. */
 const SERVER_SUFFIX_IN_FILENAME = /\.server[.-]/u;
+
+/**
+ * The SOURCE-side invariant, checked before the bundle is even read.
+ *
+ * The bundle rules above can only recognise patterns somebody thought of. The
+ * suffix is different in kind: React Router's build REFUSES a client reference to
+ * a `.server` module, so a module that carries it cannot leak by import at all,
+ * whatever it contains and whether or not anybody added it to a list.
+ *
+ * Measured 2026-08-04, both directions, on this repo:
+ *   * suffix-less module used in a route COMPONENT → build exit 0, the
+ *     implementation present in `build/client`, this scanner exit 0. Nothing stopped it.
+ *   * `.server.ts` module, identical usage → build exit 1,
+ *     "Server-only module referenced by client".
+ *
+ * So this check is what keeps that difference from quietly reverting. A file
+ * added to `app/server/` without the suffix fails here, at the name, rather than
+ * years later at whatever it happened to be carrying.
+ */
+function serverSuffixInvariant() {
+  const offenders = [];
+  for (const directory of SERVER_ONLY_DIRECTORIES) {
+    const absolute = path.join(REPO_ROOT, directory);
+    let files;
+    try {
+      files = collectFiles(absolute);
+    } catch {
+      throw new Error(`server-only directory missing: ${directory} — refusing to report a pass`);
+    }
+    if (files.length === 0) {
+      throw new Error(`server-only directory ${directory} is empty — refusing to report a pass`);
+    }
+    offenders.push(
+      ...suffixViolations(files).map((file) => path.relative(REPO_ROOT, file)),
+    );
+  }
+  return offenders;
+}
 
 function selfCheck() {
   const broken = RULES.filter((rule) => !rule.pattern.test(rule.sample));
@@ -75,6 +152,29 @@ function selfCheck() {
   }
   if (!SERVER_SUFFIX_IN_FILENAME.test("self-save-revalidation.server-a1b2.js")) {
     throw new Error("scanner is broken: the .server filename rule matches nothing");
+  }
+  // The secret rule is derived, so its failure mode is an EMPTY derivation rather
+  // than a stale literal. Naming the credentials that must survive derivation
+  // turns that into a loud failure — including the one whose mishandling is why
+  // this defence exists (`STAGING_ACCESS_KEY`) and the one the old hand-written
+  // pattern silently failed to match (`SESSION_SECRET_PREVIOUS`).
+  for (const required of ["SESSION_SECRET", "SESSION_SECRET_PREVIOUS", "STAGING_ACCESS_KEY", "DATABASE_URL"]) {
+    if (!SECRET_NAMES.includes(required)) {
+      throw new Error(
+        `scanner is broken: ${required} is no longer derived from ${ENV_DECLARATION} — ` +
+          "the secret-name rule would pass on a bundle containing it",
+      );
+    }
+    if (!RULES[0].pattern.test(`env.${required}`)) {
+      throw new Error(`scanner is broken: the secret-name rule does not match ${required}`);
+    }
+  }
+  // The suffix violation detector must be able to see a violation.
+  if (suffixViolations(["a/b/leaky.ts"]).length !== 1) {
+    throw new Error("scanner is broken: the suffix invariant matches nothing");
+  }
+  if (suffixViolations(["a/b/safe.server.ts", "a/b/types.d.ts"]).length !== 0) {
+    throw new Error("scanner is broken: the suffix invariant flags correct files");
   }
 }
 
@@ -99,6 +199,19 @@ const MINIMUM_BYTES = 50_000;
 
 function main() {
   selfCheck();
+
+  const unsuffixed = serverSuffixInvariant();
+  if (unsuffixed.length > 0) {
+    for (const file of unsuffixed) {
+      console.error(
+        `${file} — server-module-without-suffix (a module under a server-only directory that the ` +
+          "build cannot refuse to ship; rename it to *.server.ts)",
+      );
+    }
+    throw new Error(
+      `${unsuffixed.length} module(s) under a server-only directory carry no .server suffix — see above`,
+    );
+  }
 
   const bundleDirectory = path.resolve(
     process.argv[2] ?? path.join(import.meta.dirname, "..", "..", "apps", "web", "build", "client"),
@@ -150,7 +263,11 @@ function main() {
       event: "client_bundle_verified",
       files: files.length,
       bytes: totalBytes,
-      rules: RULES.length + 1,
+      // The bundle rules, plus the `.server` filename rule, plus the source-side
+      // suffix invariant. Counted here so a rule that stops running shows up as a
+      // number that changed rather than as continued silence.
+      rules: RULES.length + 2,
+      secretNames: SECRET_NAMES.length,
     }),
   );
 }

@@ -30,7 +30,7 @@ import {
 /**
  * The token `/mcp` surface (ADR 0012 Step 5b; ADR 0003). A stateless remote MCP
  * server ported from `apps/web/src/mcp.ts`, retargeted at the batch command core.
- * Every assertion runs against the injectable handler from `~/server/api/mcp`,
+ * Every assertion runs against the injectable handler from `~/server/api/mcp.server`,
  * wired with a local JWKS + the SAME in-memory persistence fakes as `/api` (see
  * `./fixtures/mcp`), so the three tools, Bearer auth (audience `MCP_RESOURCE_URL`),
  * the RFC 9728 metadata, the host/Origin + 64 KiB guards, and the DbSession

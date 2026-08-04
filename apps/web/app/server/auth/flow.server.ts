@@ -1,22 +1,22 @@
 import { redirect } from "react-router";
-import type { IdTokenVerifier, VerifiedIdentity } from "./id-token";
-import type { OidcConfig } from "./oidc-config";
+import type { IdTokenVerifier, VerifiedIdentity } from "./id-token.server";
+import type { OidcConfig } from "./oidc-config.server";
 import {
   deriveCodeChallenge,
   generateCodeVerifier,
   generateNonce,
   generateState,
-} from "./pkce";
+} from "./pkce.server";
 import {
   clearOidcTx,
   readOidcTx,
   serializeOidcTx,
   type OidcTransaction,
 } from "./oidc-tx.server";
-import type { PrincipalDirectory } from "./principal-directory";
-import { safeReturnTo } from "./redirect";
+import type { PrincipalDirectory } from "./principal-directory.server";
+import { safeReturnTo } from "./redirect.server";
 import { commitNewSession, type Clock } from "./session.server";
-import { errorName } from "~/server/api/edge-security";
+import { errorName } from "~/server/api/edge-security.server";
 import {
   subjectDigest,
   type SecurityEventReason,

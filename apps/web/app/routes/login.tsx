@@ -2,10 +2,10 @@ import type { LinksFunction } from "react-router";
 import { redirect } from "react-router";
 import type { Route } from "./+types/login";
 import { runLogin } from "~/server/auth/flow.server";
-import { oidcConfigFromEnv } from "~/server/auth/oidc-config";
-import { safeReturnTo } from "~/server/auth/redirect";
+import { oidcConfigFromEnv } from "~/server/auth/oidc-config.server";
+import { safeReturnTo } from "~/server/auth/redirect.server";
 import { readSession } from "~/server/auth/session.server";
-import { appContext } from "~/server/context";
+import { appContext } from "~/server/context.server";
 import styles from "~/wbs/styles.css?url";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];

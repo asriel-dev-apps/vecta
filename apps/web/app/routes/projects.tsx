@@ -1,7 +1,7 @@
 import type { ProjectRole } from "@vecta/application";
 import { Link, useNavigation, type LinksFunction } from "react-router";
 import type { Route } from "./+types/projects";
-import { requirePrincipal } from "~/server/auth/require-principal";
+import { requirePrincipal } from "~/server/auth/require-principal.server";
 import { loadProjectList } from "~/server/project/project-list.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";

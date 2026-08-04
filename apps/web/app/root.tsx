@@ -10,7 +10,7 @@ import {
   type LinksFunction,
 } from "react-router";
 import type { Route } from "./+types/root";
-import { appContext, dbSessionContext } from "~/server/context";
+import { appContext, dbSessionContext } from "~/server/context.server";
 import { createDbSession } from "~/server/db-session.server";
 import { NoticeScreen } from "~/shell/notice-screen";
 import appStyles from "~/wbs/styles.css?url";

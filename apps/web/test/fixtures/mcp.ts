@@ -1,10 +1,10 @@
 import { createLocalJWKSet } from "jose";
-import { createProjectMcpHandler } from "~/server/api/mcp";
+import { createProjectMcpHandler } from "~/server/api/mcp.server";
 import {
   createJoseOidcTokenVerifier,
   createOidcBearerAuthenticator,
-} from "~/server/api/oidc-auth";
-import type { ApiDeps } from "~/server/api/app";
+} from "~/server/api/oidc-auth.server";
+import type { ApiDeps } from "~/server/api/app.server";
 import { fakeEnv } from "../helpers";
 import {
   API_ISSUER,
