@@ -4,7 +4,7 @@ import {
   generateCodeVerifier,
   generateNonce,
   generateState,
-} from "~/server/auth/pkce";
+} from "~/server/auth/pkce.server";
 
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 

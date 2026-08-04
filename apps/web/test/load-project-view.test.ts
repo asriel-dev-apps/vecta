@@ -7,11 +7,11 @@ import { loadProjectView } from "~/server/project/load-project-view.server";
 import {
   projectMembershipContext,
   projectWorkspaceContext,
-} from "~/server/context";
+} from "~/server/context.server";
 import type {
   ProjectMembershipView,
   ProjectWorkspaceRecord,
-} from "~/server/project/project-access";
+} from "~/server/project/project-access.server";
 import { createDemoProject } from "./fixtures/demo-project";
 
 // ADR 0012 Step 4c — the shared role-scoped view loader is the projection choke

@@ -1,4 +1,4 @@
-import { errorName } from "./api/edge-security";
+import { errorName } from "./api/edge-security.server";
 
 /**
  * Authentication and authorization events for the DOCUMENT surface — the

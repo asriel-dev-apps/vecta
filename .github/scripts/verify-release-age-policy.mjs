@@ -25,7 +25,25 @@
 // somebody getting past a red install by writing the offending version into the
 // exclude list. Both are one-line edits that read as housekeeping in a diff.
 //
-// FOUR rules, each with a CONTROL that must fire on synthetic input every run.
+// WHY THERE IS AN EXEMPTION LANE AT ALL (2026-08-05). The cooldown and a security
+// advisory pull in opposite directions: waiting is free for an ordinary version
+// bump and costs exposure time for a patched vulnerability. The industry answer is
+// not to pick one — Renovate, the most widely used dependency bot, states that
+// "security updates bypass any minimumReleaseAge checks", and that is its DEFAULT.
+// Field guidance goes further: raise the ordinary cooldown (14 days is common) and
+// give vulnerability-driven updates their own lane.
+//
+// This repo had the cooldown and no lane, so on 2026-08-05 a high advisory
+// (`fast-uri`) could not be fixed at all: every patched release was younger than
+// seven days. That is the policy blocking the thing it exists to enable.
+//
+// The lane is NOT "wait less". The cooldown is a PROXY for "has anyone looked at
+// this release?" — when an advisory names the fix, the proxy can be replaced with
+// the real thing: read the diff. Rule 5 requires the entry to cite the advisory,
+// so an exemption is traceable to a third-party report rather than to whoever
+// wanted a red build to go green.
+//
+// FIVE rules, each with a CONTROL that must fire on synthetic input every run.
 // A scanner that can only ever say "clean" is indistinguishable from a broken
 // one; this repo has shipped exactly that mistake before.
 //
@@ -38,6 +56,11 @@
 //   4. exemptions-are-version-pinned — an entry with no `@version` asks for a
 //                                      blanket exemption of every future release
 //                                      of that package, forever.
+//   5. exemptions-cite-an-advisory   — the justification names a GHSA or CVE id.
+//                                      "we need this now" is a reason to skip the
+//                                      cooldown that anyone can write about
+//                                      anything; an advisory id is a claim a third
+//                                      party published and a reviewer can check.
 //
 // Parsed by indentation rather than with a YAML library, deliberately: adding a
 // parser dependency to a supply-chain gate is the wrong trade — the gate would
@@ -55,7 +78,16 @@ export const RULES = [
   "auto-exemption-disabled",
   "exemptions-are-justified",
   "exemptions-are-version-pinned",
+  "exemptions-cite-an-advisory",
 ];
+
+/**
+ * A GHSA or CVE identifier. Deliberately the only accepted form of justification
+ * for skipping the cooldown: it points at a report somebody else published, on a
+ * date, that a reviewer can look up. Prose cannot be checked by a gate, and
+ * "urgent" is available to every reason, good or bad.
+ */
+const ADVISORY_ID = /\b(GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}|CVE-\d{4}-\d{4,})\b/iu;
 
 /** Indentation width of a line, treating tabs as one column (YAML forbids them anyway). */
 function indentOf(line) {
@@ -131,19 +163,22 @@ export function readExemptions(source) {
       if (itemMatch === null) continue;
 
       // The justification must sit directly above the entry. A blank line is
-      // allowed between them; another entry is not.
-      let justified = false;
+      // allowed between them; another entry is not. The whole contiguous comment
+      // block is collected, not just its presence, because rule 5 reads its TEXT.
+      const commentLines = [];
       for (let back = cursor - 1; back > index; back -= 1) {
         const previous = lines[back];
-        if (previous === undefined || isBlank(previous)) continue;
-        justified = isComment(previous);
-        break;
+        if (previous === undefined) break;
+        if (isBlank(previous)) continue;
+        if (!isComment(previous)) break;
+        commentLines.unshift(previous.trim());
       }
 
       entries.push({
         entry: unquote(itemMatch[1]),
         line: cursor + 1,
-        justified,
+        justified: commentLines.length > 0,
+        comment: commentLines.join("\n"),
       });
     }
     break;
@@ -210,7 +245,21 @@ export function scanWorkspace(file, source) {
     });
   }
 
-  for (const { entry, line, justified } of entries) {
+  for (const { entry, line, justified, comment } of entries) {
+    // Only asked of an entry that HAS a justification: an unjustified one is
+    // already reported by rule 3, and two findings for one defect train people to
+    // skim the list.
+    if (justified && !ADVISORY_ID.test(comment)) {
+      findings.push({
+        rule: "exemptions-cite-an-advisory",
+        file,
+        line,
+        detail:
+          `\`${entry}\` is exempt from the cooldown but its comment names no GHSA or CVE id. ` +
+          "Skipping the cooldown is for a version an advisory has already named as the fix — " +
+          "cite it, so the exemption traces to a third-party report and not to a red build",
+      });
+    }
     if (!justified) {
       findings.push({
         rule: "exemptions-are-justified",
@@ -236,14 +285,19 @@ export function scanWorkspace(file, source) {
   return findings;
 }
 
-// Commits all four mistakes at once: no age, no strict, an unjustified entry and
-// an unpinned one.
+// Commits all five mistakes at once: no age, no strict, an unjustified entry, an
+// unpinned one, and — the last entry — one that IS justified and pinned but whose
+// comment names no advisory. That last case has to be written out separately: it
+// is the only one rule 5 can be observed on, because rule 5 deliberately stays
+// quiet about entries rule 3 has already reported.
 const CONTROL_WORKSPACE = `packages:
   - apps/*
 
 minimumReleaseAgeExclude:
   - some-package@1.2.3
   - blanket-package
+  # needed for the build, honestly
+  - justified-but-unsourced@4.5.6
 `;
 
 async function main() {

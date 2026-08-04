@@ -5,7 +5,7 @@ import {
   PostgresProjectListReader,
 } from "@vecta/persistence";
 import { createDbSession } from "../db-session.server";
-import { createApiApp, type ApiPersistence } from "./app";
+import { createApiApp, type ApiPersistence } from "./app.server";
 import {
   boundedRequest,
   bodyTooLargeResponse,
@@ -19,12 +19,12 @@ import {
   secureResponse,
   withRequestId,
   writeHttpRequestLog,
-} from "./edge-security";
+} from "./edge-security.server";
 import {
   createJoseOidcTokenVerifier,
   createOidcBearerAuthenticator,
-} from "./oidc-auth";
-import { createProjectMcpHandler } from "./mcp";
+} from "./oidc-auth.server";
+import { createProjectMcpHandler } from "./mcp.server";
 
 /**
  * Production wiring + edge-security wrapper for the `/api` and `/mcp` surfaces

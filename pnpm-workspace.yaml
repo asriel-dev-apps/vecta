@@ -38,6 +38,29 @@ overrides:
   # that is the policy working, not a stale lockfile. Do not "catch it up" by hand.
   postcss: '>=8.5.18'
 
+  # GHSA-mwp4-54f8-5fhr (high): `ip-address` <=10.3.0 decodes leading-zero octets
+  # as decimal while resolvers decode them as octal, so a check that resolves an
+  # address and a resolver that dials it can disagree — SSRF and trust-boundary
+  # bypass. It arrives only as `@modelcontextprotocol/sdk` -> `express-rate-limit`
+  # -> `ip-address`, so there is nothing of ours to bump; measured 2026-08-04,
+  # taking the SDK from 1.29.0 to 1.30.0 does NOT move it (and duplicates the SDK,
+  # because `agents` -> `@cloudflare/codemode` holds 1.29.0). A floor, like postcss
+  # above, so a re-resolution takes the newest version that satisfies it and has
+  # been public for seven days.
+  ip-address: '>=10.3.1'
+
+  # GHSA-7p8r-x3mc-p8w7 (high): `fast-uri` confuses the host when the authority is
+  # introduced with a backslash or with characters the WHATWG URL parser strips
+  # (TAB/LF/CR) — so a validator and the resolver that dials the address disagree.
+  # It arrives via `@modelcontextprotocol/sdk` -> `ajv` -> `fast-uri`, and unlike
+  # `ip-address` it really is SHIPPED: measured 2026-08-05, `fast-uri`'s three
+  # modules are present in `build/server/index.js` and `new Ajv` appears 8 times.
+  #
+  # Bounded to 3.x on purpose. `ajv@8.20.0` asks for `^3.0.1`, and a bare `>=3.1.5`
+  # floor resolves to 4.1.1 — which the SAME advisory covers (`>=4.0.0 <4.1.2`), so
+  # it would cross a major ajv never sanctioned AND still be vulnerable.
+  fast-uri: '>=3.1.5 <4'
+
 # Dependency maturity. A package published minutes ago is the shape a compromised
 # release takes — the window between an attacker publishing and the registry
 # pulling it is measured in hours — so nothing enters this tree until it has been
@@ -74,3 +97,27 @@ minimumReleaseAgeStrict: true
 # entries are version-specific in practice despite the docs' wording: measured,
 # @cloudflare/codemode@0.4.3 sat in this list while 0.4.4 was still refused. An
 # entry added to get past a red install is the policy being defeated, not applied.
+
+# The cooldown's exemption lane. See `.github/scripts/verify-release-age-policy.mjs`
+# for why one exists at all: a cooldown and a security advisory pull in opposite
+# directions, and the industry answer is a separate lane rather than a shorter wait
+# (Renovate bypasses `minimumReleaseAge` for security updates BY DEFAULT).
+#
+# The gate requires every entry here to pin an exact version and to cite a GHSA or
+# CVE id, so an exemption traces to a third-party report rather than to whoever
+# wanted a red build to go green.
+minimumReleaseAgeExclude:
+  # GHSA-7p8r-x3mc-p8w7. The patched releases (2.4.4, 3.1.5, 4.1.2) were all
+  # published 2026-08-01 and are 4.2 days old, so the seven-day bar would leave a
+  # SHIPPED high advisory open until 2026-08-07 with no way to close it.
+  #
+  # The cooldown is a proxy for "has anyone looked at this release?", so it was
+  # replaced with the real thing — the 3.1.4 -> 3.1.5 diff was read end to end:
+  #   * 3 files change: `index.js`, its `test/security.test.js`, and `package.json`.
+  #   * dependencies 0 -> 0, and there is no `preinstall`/`install`/`postinstall`/
+  #     `prepare` script in either version.
+  #   * no file is added or removed.
+  #   * the change is the fix itself — reject a backslash or whitespace-smuggled
+  #     authority introducer, and throw on a malformed authority in `resolve()`.
+  # Nothing in it resembles the shape the cooldown defends against.
+  - 'fast-uri@3.1.5'

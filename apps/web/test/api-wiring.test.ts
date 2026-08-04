@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fakeEnv } from "./helpers";
 
 /**
- * The `/api` PRODUCTION wiring in `~/server/api/index` (ADR 0012 Step 5a):
+ * The `/api` PRODUCTION wiring in `~/server/api/index.server` (ADR 0012 Step 5a):
  * `authenticateApiRequest` verifies the Bearer token and then enforces the
  * authenticated (principal+route) rate limit via `enforceAuthenticatedLimits`.
  * This exercises that real composition through `handleApiRequest` — only the
@@ -14,8 +14,8 @@ import { fakeEnv } from "./helpers";
 // Stub the token verifier so a well-formed Bearer token verifies with no network.
 // The rest of the module (the real `createOidcBearerAuthenticator`,
 // `AuthenticationRequiredError`, …) is kept via `importOriginal`.
-vi.mock("~/server/api/oidc-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/server/api/oidc-auth")>();
+vi.mock("~/server/api/oidc-auth.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/server/api/oidc-auth.server")>();
   return {
     ...actual,
     createJoseOidcTokenVerifier: () => ({
@@ -30,7 +30,7 @@ vi.mock("~/server/api/oidc-auth", async (importOriginal) => {
 
 // Imported AFTER the mock is registered (vi.mock is hoisted), so `index.ts` builds
 // its module-level authenticator over the stubbed verifier.
-import { handleApiRequest } from "~/server/api";
+import { handleApiRequest } from "~/server/api/index.server";
 
 const ctx = {
   waitUntil() {},

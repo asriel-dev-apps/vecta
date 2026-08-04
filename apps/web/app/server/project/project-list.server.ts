@@ -3,8 +3,8 @@ import {
   type AccessibleProject,
 } from "@vecta/persistence";
 import type { RouterContextProvider } from "react-router";
-import { requirePrincipal } from "../auth/require-principal";
-import { dbSessionContext } from "../context";
+import { requirePrincipal } from "../auth/require-principal.server";
+import { dbSessionContext } from "../context.server";
 
 /**
  * A source of the current principal's accessible projects. `close()` exists for

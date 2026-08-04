@@ -5,8 +5,8 @@ import {
   type CallbackResult,
   type TokenExchanger,
 } from "~/server/auth/flow.server";
-import { createIdTokenVerifier } from "~/server/auth/id-token";
-import type { PrincipalDirectory } from "~/server/auth/principal-directory";
+import { createIdTokenVerifier } from "~/server/auth/id-token.server";
+import type { PrincipalDirectory } from "~/server/auth/principal-directory.server";
 import { serializeOidcTx } from "~/server/auth/oidc-tx.server";
 import { readSession } from "~/server/auth/session.server";
 import { subjectDigest } from "~/server/security-log.server";

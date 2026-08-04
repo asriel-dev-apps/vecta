@@ -1,8 +1,8 @@
 import { data, type RouterContextProvider } from "react-router";
 import { applyCommands } from "./apply-commands.server";
-import { requireProjectMembership } from "./project-access";
-import { requirePrincipal } from "../auth/require-principal";
-import { dbSessionContext } from "../context";
+import { requireProjectMembership } from "./project-access.server";
+import { requirePrincipal } from "../auth/require-principal.server";
+import { dbSessionContext } from "../context.server";
 import { writeSecurityEvent } from "../security-log.server";
 import { CommandBatchSchema, toCommand } from "~/wbs/project-command-contract";
 

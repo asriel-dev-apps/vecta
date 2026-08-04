@@ -8,7 +8,7 @@ import {
 } from "@vecta/application";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { applyCommands } from "~/server/project/apply-commands.server";
-import { AuthenticationRequiredError } from "~/server/api/oidc-auth";
+import { AuthenticationRequiredError } from "~/server/api/oidc-auth.server";
 import { toCommand } from "~/wbs/project-command-contract";
 import {
   API_ISSUER,
@@ -30,7 +30,7 @@ import { scheduledProject } from "./fixtures/wbs";
 
 /**
  * The token `/api` surface (ADR 0012 Step 5a). Every assertion runs against the
- * injectable Hono app from `~/server/api/app`, wired with a local JWKS + in-memory
+ * injectable Hono app from `~/server/api/app.server`, wired with a local JWKS + in-memory
  * persistence fakes (see `./fixtures/api`), so the whole surface — Bearer auth,
  * the `applyCommands` identity/grant seam, the role-scoped read model, the batch
  * write core, conflict/idempotency, and the DbSession lifecycle — is exercised

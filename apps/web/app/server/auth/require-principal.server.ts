@@ -1,6 +1,6 @@
 import { redirect, type RouterContextProvider } from "react-router";
-import { principalContext } from "../context";
-import type { AuthenticatedPrincipal } from "./principal-directory";
+import { principalContext } from "../context.server";
+import type { AuthenticatedPrincipal } from "./principal-directory.server";
 
 /**
  * Read the authenticated principal for a protected-route loader/action. The

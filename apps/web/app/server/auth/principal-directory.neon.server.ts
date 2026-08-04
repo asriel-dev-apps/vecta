@@ -9,7 +9,7 @@ import type {
   AuthenticatedPrincipal,
   PrincipalDirectory,
   PrincipalIdentity,
-} from "./principal-directory";
+} from "./principal-directory.server";
 
 /**
  * Neon-backed {@link PrincipalDirectory} built over the per-request

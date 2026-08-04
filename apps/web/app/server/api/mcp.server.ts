@@ -17,10 +17,10 @@ import {
   UuidSchema,
   toCommand,
 } from "~/wbs/project-command-contract";
-import { projectStateResponse, type ApiDeps } from "./app";
-import { AuthenticationRequiredError } from "./oidc-auth";
-import { boundedRequest, errorName } from "./edge-security";
-import { resolveProjectCommandError } from "./project-command-error";
+import { projectStateResponse, type ApiDeps } from "./app.server";
+import { AuthenticationRequiredError } from "./oidc-auth.server";
+import { boundedRequest, errorName } from "./edge-security.server";
+import { resolveProjectCommandError } from "./project-command-error.server";
 
 /**
  * The token-auth `/mcp` surface over the command core (ADR 0012 Step 5b; ADR

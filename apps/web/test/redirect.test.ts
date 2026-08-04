@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safeReturnTo } from "~/server/auth/redirect";
+import { safeReturnTo } from "~/server/auth/redirect.server";
 
 describe("safeReturnTo (open-redirect guard, P0)", () => {
   const table: Array<[string, string | null | undefined, string]> = [

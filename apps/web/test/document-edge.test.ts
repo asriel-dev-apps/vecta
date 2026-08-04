@@ -7,7 +7,7 @@ import {
   MAX_DOCUMENT_BODY_BYTES,
   withDocumentEdge,
 } from "~/server/document-edge.server";
-import { MAX_REQUEST_BODY_BYTES } from "~/server/api/edge-security";
+import { MAX_REQUEST_BODY_BYTES } from "~/server/api/edge-security.server";
 import { fakeEnv } from "./helpers";
 
 /**

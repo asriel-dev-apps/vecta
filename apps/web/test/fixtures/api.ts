@@ -19,11 +19,11 @@ import {
   type ApiPersistence,
   type ApiProjectListReader,
   type ApiWorkspaceLoader,
-} from "~/server/api/app";
+} from "~/server/api/app.server";
 import {
   createJoseOidcTokenVerifier,
   createOidcBearerAuthenticator,
-} from "~/server/api/oidc-auth";
+} from "~/server/api/oidc-auth.server";
 import type { DbSession } from "~/server/db-session.server";
 import { fakeEnv } from "../helpers";
 

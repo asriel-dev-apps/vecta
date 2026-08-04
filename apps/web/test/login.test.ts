@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { action, loader } from "~/routes/login";
 import { readOidcTx } from "~/server/auth/oidc-tx.server";
 import { commitNewSession } from "~/server/auth/session.server";
-import { appContext } from "~/server/context";
+import { appContext } from "~/server/context.server";
 import { cookiePair, fakeEnv, testOidcConfig, TEST_CLIENT_ID } from "./helpers";
 
 // ADR 0012 auth-UX fix. `/login` is no longer a redirect-only loader: a GET now

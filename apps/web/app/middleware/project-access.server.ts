@@ -4,18 +4,18 @@ import {
   type RouterContextProvider,
 } from "react-router";
 import { NeonHttpProjectWorkspaceReader } from "@vecta/persistence";
-import { findProjectMembership } from "~/server/auth/principal-directory";
-import { requirePrincipal } from "~/server/auth/require-principal";
+import { findProjectMembership } from "~/server/auth/principal-directory.server";
+import { requirePrincipal } from "~/server/auth/require-principal.server";
 import {
   dbSessionContext,
   projectMembershipContext,
   projectWorkspaceContext,
-} from "~/server/context";
+} from "~/server/context.server";
 import {
   isProjectId,
   type ProjectWorkspaceLoader,
   type ProjectWorkspaceRecord,
-} from "~/server/project/project-access";
+} from "~/server/project/project-access.server";
 import { writeSecurityEvent } from "~/server/security-log.server";
 
 /**

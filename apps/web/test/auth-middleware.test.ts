@@ -4,10 +4,10 @@ import { createAuthMiddleware } from "~/middleware/auth.server";
 import type {
   AuthenticatedPrincipal,
   PrincipalDirectory,
-} from "~/server/auth/principal-directory";
-import { requirePrincipal } from "~/server/auth/require-principal";
+} from "~/server/auth/principal-directory.server";
+import { requirePrincipal } from "~/server/auth/require-principal.server";
 import { commitNewSession } from "~/server/auth/session.server";
-import { appContext, principalContext } from "~/server/context";
+import { appContext, principalContext } from "~/server/context.server";
 import { cookiePair, fakeEnv } from "./helpers";
 
 const env = fakeEnv();

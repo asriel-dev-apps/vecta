@@ -10,8 +10,8 @@ import {
   principalContext,
   projectMembershipContext,
   projectWorkspaceContext,
-} from "~/server/context";
-import type { ProjectWorkspaceRecord } from "~/server/project/project-access";
+} from "~/server/context.server";
+import type { ProjectWorkspaceRecord } from "~/server/project/project-access.server";
 import {
   DEFAULT_PROPOSAL_PROVIDER,
   UnknownProposalProviderError,

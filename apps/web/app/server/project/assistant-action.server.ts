@@ -32,9 +32,9 @@ import {
 } from "@vecta/application";
 import { data, type RouterContextProvider } from "react-router";
 import { z } from "zod";
-import { requireProjectMembership, requireProjectWorkspace } from "./project-access";
-import { requirePrincipal } from "../auth/require-principal";
-import { appContext } from "../context";
+import { requireProjectMembership, requireProjectWorkspace } from "./project-access.server";
+import { requirePrincipal } from "../auth/require-principal.server";
+import { appContext } from "../context.server";
 import { selectProposalModel, UnknownProposalProviderError } from "../llm/select-model.server";
 import {
   ASSISTANT_PROPOSAL_KIND,

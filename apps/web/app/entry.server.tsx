@@ -2,7 +2,7 @@ import type { EntryContext } from "react-router";
 import { ServerRouter } from "react-router";
 import { isbot } from "isbot";
 import { renderToReadableStream } from "react-dom/server";
-import { errorName } from "~/server/api/edge-security";
+import { errorName } from "~/server/api/edge-security.server";
 import { documentRoute } from "~/server/security-log.server";
 
 /**

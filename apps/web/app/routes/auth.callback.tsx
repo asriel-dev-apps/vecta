@@ -4,11 +4,11 @@ import {
   runCallback,
   type CallbackScreen,
 } from "~/server/auth/flow.server";
-import { createIdTokenVerifier } from "~/server/auth/id-token";
-import { oidcConfigFromEnv } from "~/server/auth/oidc-config";
+import { createIdTokenVerifier } from "~/server/auth/id-token.server";
+import { oidcConfigFromEnv } from "~/server/auth/oidc-config.server";
 import { clearOidcTx } from "~/server/auth/oidc-tx.server";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
-import { appContext, dbSessionContext } from "~/server/context";
+import { appContext, dbSessionContext } from "~/server/context.server";
 import { writeSecurityEvent } from "~/server/security-log.server";
 import { NoticeScreen } from "~/shell/notice-screen";
 

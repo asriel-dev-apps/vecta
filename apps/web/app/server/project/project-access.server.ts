@@ -3,8 +3,8 @@ import type { ProjectState } from "@vecta/application";
 import type {
   ProjectMembership,
   TenantMembership,
-} from "../auth/principal-directory";
-import { projectMembershipContext, projectWorkspaceContext } from "../context";
+} from "../auth/principal-directory.server";
+import { projectMembershipContext, projectWorkspaceContext } from "../context.server";
 
 /**
  * Project access for the cookie-session surface (ADR 0012 §Decision 2). This

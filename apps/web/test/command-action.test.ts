@@ -8,8 +8,8 @@ import {
   dbSessionContext,
   principalContext,
   projectMembershipContext,
-} from "~/server/context";
-import type { AuthenticatedPrincipal } from "~/server/auth/principal-directory";
+} from "~/server/context.server";
+import type { AuthenticatedPrincipal } from "~/server/auth/principal-directory.server";
 
 /**
  * ASVS scan M3: `write_denied` — the one 403 the browser surface produces, and

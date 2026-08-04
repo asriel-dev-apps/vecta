@@ -1,10 +1,10 @@
 import { createContext } from "react-router";
-import type { AuthenticatedPrincipal } from "./auth/principal-directory";
+import type { AuthenticatedPrincipal } from "./auth/principal-directory.server";
 import type { DbSession } from "./db-session.server";
 import type {
   ProjectMembershipView,
   ProjectWorkspaceRecord,
-} from "./project/project-access";
+} from "./project/project-access.server";
 
 /**
  * Router context handles shared between the Worker entry (`workers/app.ts`,

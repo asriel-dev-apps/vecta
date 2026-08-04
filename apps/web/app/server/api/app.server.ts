@@ -20,9 +20,9 @@ import {
   UuidSchema,
   toCommand,
 } from "~/wbs/project-command-contract";
-import { AuthenticationRequiredError } from "./oidc-auth";
-import { errorName, rateLimitedResponse, RequestRateLimitedError } from "./edge-security";
-import { resolveProjectCommandError } from "./project-command-error";
+import { AuthenticationRequiredError } from "./oidc-auth.server";
+import { errorName, rateLimitedResponse, RequestRateLimitedError } from "./edge-security.server";
+import { resolveProjectCommandError } from "./project-command-error.server";
 
 /**
  * The token-auth `/api` surface over the command core (ADR 0012 Step 5a). A
