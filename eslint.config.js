@@ -1,14 +1,31 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import security from "eslint-plugin-security";
-// Shared with `.github/scripts/verify-client-bundle.mjs`. It used to be a second
-// copy of the same list, and the copies drifted: this one had `hono`, the bundle
-// scanner named hono in its rule's prose and left it out of the pattern (measured
-// 2026-08-04). One list can still be wrong; two lists go wrong separately.
+// Shared with `.github/scripts/verify-client-bundle.mjs`; it used to be a second
+// copy here and the two drifted. That file's header has the measurement.
 import { SERVER_ONLY_PACKAGES } from "./.github/scripts/server-only-surface.mjs";
 
 function serverOnlyPackages(message) {
   return SERVER_ONLY_PACKAGES.map((name) => ({ name, allowTypeImports: true, message }));
+}
+
+/**
+ * `paths` matches a module specifier EXACTLY, so the entries above stop
+ * `import … from "hono"` and nothing else. Measured 2026-08-04 with a probe file
+ * under `app/wbs/`: of `hono`, `hono/cors`,
+ * `@modelcontextprotocol/sdk/server/mcp.js` and `drizzle-orm/neon-http`, eslint
+ * flagged ONE — the bare `hono`. And subpaths are how this repo really imports
+ * these: `api/mcp.server.ts` uses the MCP subpath, `api/app.server.ts` uses
+ * `hono/body-limit`, and `principal-directory.neon.server.ts` uses
+ * `drizzle-orm/neon-http`. So the exact-match list was closing the door that
+ * nobody walks through.
+ */
+function serverOnlySubpaths(message) {
+  return SERVER_ONLY_PACKAGES.map((name) => ({
+    group: [`${name}/*`],
+    allowTypeImports: true,
+    message,
+  }));
 }
 
 /**
@@ -55,9 +72,13 @@ const clientServerBoundary = [
               ],
               allowTypeImports: true,
               message:
-                "`app/server/` is server-only by convention, not by construction — the directory name enforces nothing. " +
-                "Client-reachable modules may only `import type` from it. If the code is genuinely isomorphic, move it out of `app/server/`.",
+                "`app/server/` modules all carry the `.server` suffix, which the build enforces — but only once " +
+                "something client-reachable actually references them. Client-reachable modules may only `import type` " +
+                "from it. If the code is genuinely isomorphic, move it out of `app/server/`.",
             },
+            ...serverOnlySubpaths(
+              "Server-only package (subpath). Client-reachable modules may only `import type` from it.",
+            ),
           ],
         },
       ],
@@ -74,6 +95,9 @@ const clientServerBoundary = [
         {
           paths: serverOnlyPackages(
             "Route modules must reach persistence through a `.server` module, not import the driver directly.",
+          ),
+          patterns: serverOnlySubpaths(
+            "Route modules must reach persistence through a `.server` module, not import the driver directly (subpath).",
           ),
         },
       ],

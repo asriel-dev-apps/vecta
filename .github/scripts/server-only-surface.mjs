@@ -59,8 +59,22 @@ export const ENV_DECLARATION = "apps/web/app/server/env.d.ts";
  * A declared binding is treated as a secret when its NAME ends in one of these.
  * Deliberately a name-shape rule rather than a curated list: the point is to
  * catch the binding somebody adds without reading this file.
+ *
+ * `(_PREVIOUS)?` is what makes `SESSION_SECRET_PREVIOUS` a secret, and it is
+ * written as an optional group rather than as an extra alternative so it applies
+ * to EVERY suffix. The first version spelled it `SECRET|SECRET_PREVIOUS|…`, which
+ * would have classified `SESSION_SECRET_PREVIOUS` correctly and a future
+ * `STAGING_ACCESS_KEY_PREVIOUS` as harmless — the same asymmetry that let
+ * `STAGING_ACCESS_KEY` slip out of the hand-written list in the first place.
+ *
+ * `URL$` is deliberately broad even though most URLs are public. It is safe HERE
+ * because this reads `env.d.ts` only, which declares Worker SECRETS; the public
+ * endpoints (`OIDC_ISSUER`, `MCP_RESOURCE_URL`, …) are wrangler `vars` and live
+ * in the generated `worker-configuration.d.ts`, which this never reads. If a
+ * genuinely public URL is ever declared here, the fix is to move it to `vars`
+ * where it belongs, not to narrow this rule.
  */
-const SECRET_NAME_SUFFIX = /(SECRET|SECRET_PREVIOUS|KEY|TOKEN|PASSWORD|URL)$/u;
+const SECRET_NAME_SUFFIX = /(SECRET|KEY|TOKEN|PASSWORD|URL)(_PREVIOUS)?$/u;
 
 /** Every `readonly NAME` declared in the `Env` interface, in declaration order. */
 export function declaredEnvNames(source) {

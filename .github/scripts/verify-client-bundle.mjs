@@ -54,14 +54,28 @@ function alternation(names) {
   return names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|");
 }
 
+/**
+ * The shared list minus the workspace packages. `@vecta/*` is a real server-only
+ * boundary in SOURCE — eslint must forbid importing `@vecta/persistence` from a
+ * component — but a workspace name is resolved away by the bundler and never
+ * survives into a client asset, so scanning for it here would only ever be
+ * theatre. What it would drag in (drizzle, the Neon driver, a connection string)
+ * is what the `persistence-driver` and `connection-string` rules above catch.
+ */
+const BUNDLE_VISIBLE_PACKAGES = SERVER_ONLY_PACKAGES.filter(
+  (name) => !name.startsWith("@vecta/"),
+);
+
 const RULES = [
   {
     id: "secret-name",
     why: "A secret's NAME in the bundle means the code that reads it was shipped.",
     pattern: new RegExp(`\\b(${alternation(SECRET_NAMES)})\\b`, "u"),
-    // The sample is the LAST declared secret rather than a literal, so a name
-    // that stops being derived breaks the self-check instead of passing quietly.
-    sample: `env.${SECRET_NAMES[SECRET_NAMES.length - 1]}`,
+    // The sample only proves the rule compiles and matches SOMETHING. It cannot
+    // prove the derivation produced the right names — with an empty derivation
+    // this would still be a literal that matches. `selfCheck` names the
+    // credentials that must survive derivation; that is the real check.
+    sample: "env.CLOUDFLARE_API_TOKEN",
   },
   {
     id: "connection-string",
@@ -83,8 +97,27 @@ const RULES = [
     // the old pattern: `hono`, `hono/cors`, `import * as jose from "jose"`,
     // `agents/mcp`. eslint had hono all along — the hole was in the gate that
     // reads what users actually receive, which is the one that is authoritative.
+    //
+    // A package name is matched in MODULE-SPECIFIER position — after a quote, or
+    // after `node_modules/` — not as a bare word. Two measurements forced that
+    // shape, and the first version of this fix had both defects:
+    //
+    //   * `\b` before an `@` never matches, because neither side is a word
+    //     character. So `"@neondatabase/serverless"` and
+    //     `"@modelcontextprotocol/sdk"` were in the list and unmatchable — the
+    //     very defect this rule was being rewritten to fix.
+    //   * a bare word flags ordinary browser code: `\bpg\b` hits `let a,pg,c;`
+    //     (a plausible minifier name) and `\bagents\b` hits the string
+    //     "Manage agents". A gate that flags correct bundles teaches people to
+    //     bypass it, which is a security property, not a UX one.
+    //
+    // `node_modules/` rather than any `/` on the left, because `"/agents/list"`
+    // — an application route — otherwise matches. Verified in both directions:
+    // 10 specifier shapes match (quoted, subpath, scoped, dynamic import,
+    // sourcemap path), 8 look-alikes do not.
     pattern: new RegExp(
-      `\\b(${alternation(SERVER_ONLY_PACKAGES.filter((name) => !name.startsWith("@vecta/")))})(\\b|/)|\\b(jwtVerify|createRemoteJWKSet)\\b`,
+      `(?:["'\`]|node_modules/)(${alternation(BUNDLE_VISIBLE_PACKAGES)})(?=["'\`/])` +
+        "|\\b(jwtVerify|createRemoteJWKSet)\\b",
       "u",
     ),
     sample: 'import { Hono } from "hono"',

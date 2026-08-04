@@ -82,22 +82,37 @@ test("rejects the server-only dependencies the rule named but did not match", as
     ["leak-9.js", 'import{cors}from"hono/cors";\n'],
     ["leak-10.js", 'import{createMcpHandler}from"agents/mcp";\n'],
     ["leak-11.js", 'import * as jose from "jose";\n'],
+    // SCOPED names, which the first version of this rule could not match at all:
+    // `\b` before `@` never holds, because neither side is a word character. Two
+    // of the eight shared packages were unmatchable, and the tests as first
+    // written happened to probe only the unscoped ones.
+    ["leak-12.js", 'import{X}from"@modelcontextprotocol/sdk";\n'],
+    ["leak-13.js", 'import{neon}from"@neondatabase/serverless";\n'],
+    // A package name can also survive as a path segment rather than a specifier.
+    ["leak-14.js", "//# sourceMappingURL=../node_modules/hono/dist/index.js.map\n"],
+    ["leak-15.js", 'await import("agents/mcp");\n'],
   ]) {
     const result = await run(bundleWith({ [name]: contents }));
     assert.equal(result.ok, false, `${name} should have been rejected`);
-    assert.match(result.stderr, /server-only-dependency/u);
+    assert.match(result.stderr, /server-only-dependency|persistence-driver/u);
   }
 });
 
 test("passes browser code whose text merely resembles a server dependency", async () => {
-  // The other direction. A gate that flags correct bundles teaches people to
-  // bypass it, so the alternation must not fire on ordinary client text.
-  const result = await run(
-    bundleWith({
-      "ok-1.js": 'const ua=navigator.userAgent;const s="phonon";const t="josephine";\n',
-    }),
-  );
-  assert.equal(result.ok, true, result.stderr);
+  // The other direction, and the reason the package names are matched in
+  // module-specifier position rather than as bare words. A gate that flags
+  // correct bundles teaches people to bypass it, which is a security property.
+  // Every line here was a FALSE POSITIVE of the first version of the rule.
+  for (const [name, contents] of [
+    ["ok-1.js", 'const ua=navigator.userAgent;const s="phonon";const t="josephine";\n'],
+    ["ok-2.js", "let a,pg,c;a=1;c=2;\n"], // a minifier-allocated name
+    ["ok-3.js", "const o={};o.pg=1;o.hono=2;\n"], // properties, not modules
+    ["ok-4.js", 'const label="Manage agents";\n'], // ordinary UI text
+    ["ok-5.js", 'const route="/agents/list";\n'], // an application route
+  ]) {
+    const result = await run(bundleWith({ [name]: contents }));
+    assert.equal(result.ok, true, `${name} should have passed: ${result.stderr}`);
+  }
 });
 
 test("rejects a client asset built from a .server module, whatever its contents", async () => {
