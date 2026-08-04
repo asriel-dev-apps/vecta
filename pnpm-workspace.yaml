@@ -38,6 +38,33 @@ overrides:
   # that is the policy working, not a stale lockfile. Do not "catch it up" by hand.
   postcss: '>=8.5.18'
 
+  # GHSA-mwp4-54f8-5fhr (high): `ip-address` <=10.3.0 decodes leading-zero octets
+  # as decimal while resolvers decode them as octal, so a check that resolves an
+  # address and a resolver that dials it can disagree — SSRF and trust-boundary
+  # bypass. It arrives only as `@modelcontextprotocol/sdk` -> `express-rate-limit`
+  # -> `ip-address`, so there is nothing of ours to bump; measured 2026-08-04,
+  # taking the SDK from 1.29.0 to 1.30.0 does NOT move it (and duplicates the SDK,
+  # because `agents` -> `@cloudflare/codemode` holds 1.29.0). A floor, like postcss
+  # above, so a re-resolution takes the newest version that satisfies it and has
+  # been public for seven days.
+  ip-address: '>=10.3.1'
+
+  # GHSA-7p8r-x3mc-p8w7 (high): `fast-uri` host confusion via a backslash authority
+  # introducer. It arrives via `@modelcontextprotocol/sdk` -> `ajv` -> `fast-uri`.
+  #
+  # THERE IS NO OVERRIDE FOR IT YET, and that is the maturity policy working rather
+  # than an oversight. Measured 2026-08-05: every patched release — 2.4.4, 3.1.5 and
+  # 4.1.2 — is 4.24 days old and fails the seven-day bar, so no floor can reach one.
+  # A `>=3.1.5` floor resolves to 4.1.1, which the advisory ALSO covers
+  # (`>=4.0.0 <4.1.2`), so it would cross a major ajv never sanctioned and fix
+  # nothing; that was tried and reverted.
+  #
+  # Consequence: `pnpm audit:deps` stays red on this one advisory until the patched
+  # releases mature, around 2026-08-07. Do NOT reach for `minimumReleaseAgeExclude`
+  # or a lower `--audit-level` to clear it — that is the policy being defeated, not
+  # applied. Trigger: on/after 2026-08-07, add `fast-uri: '>=4.1.2'` here.
+
+
 # Dependency maturity. A package published minutes ago is the shape a compromised
 # release takes — the window between an attacker publishing and the registry
 # pulling it is measured in hours — so nothing enters this tree until it has been
