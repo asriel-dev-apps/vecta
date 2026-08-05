@@ -416,7 +416,13 @@ export const projectBaselines = pgTable(
     // The project revision the snapshot was taken AT — the command's
     // `expectedRevision`, so the contents correspond to that exact state.
     sourceRevision: bigint("source_revision", { mode: "bigint" }).notNull(),
-    publishedByPrincipalId: uuid("published_by_principal_id").notNull(),
+    // Mirrors `audit_events`: actor type + a TEXT id, with no foreign key to
+    // `principals`. The application's `AuditActor.id` is a plain string and its
+    // type includes SYSTEM, which has no principals row at all — a uuid column
+    // with an FK would reject a legitimate caller at runtime, which is a database
+    // constraint stricter than the type that feeds it.
+    publishedByActorType: auditActorType("published_by_actor_type").notNull(),
+    publishedByActorId: text("published_by_actor_id").notNull(),
     publishedAt: auditTimestamp("published_at").notNull().defaultNow(),
   },
   (table) => [
@@ -425,11 +431,6 @@ export const projectBaselines = pgTable(
       columns: [table.tenantId, table.projectId],
       foreignColumns: [projects.tenantId, projects.id],
       name: "project_baselines_project_fk",
-    }).onDelete("restrict"),
-    foreignKey({
-      columns: [table.publishedByPrincipalId],
-      foreignColumns: [principals.id],
-      name: "project_baselines_principal_fk",
     }).onDelete("restrict"),
     check("project_baselines_version_positive", sql`${table.version} >= 1`),
     check("project_baselines_source_revision_non_negative", sql`${table.sourceRevision} >= 0`),

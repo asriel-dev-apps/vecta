@@ -108,6 +108,7 @@ const project: ProjectState = {
     }),
   ],
   nextTaskSeq: 5,
+  nextBaselineVersion: 1,
 };
 
 function rowByKey(rows: readonly EvmDashboardRow[], key: string): EvmDashboardRow {

@@ -47,6 +47,7 @@ export function projectHeaderQuery(
       defaultCalendarId: projects.defaultCalendarId,
       revision: projects.revision,
       nextTaskSeq: projects.nextTaskSeq,
+      nextBaselineVersion: projects.nextBaselineVersion,
     })
     .from(projects)
     .innerJoin(tenants, eq(tenants.id, projects.tenantId))

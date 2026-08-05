@@ -273,6 +273,7 @@ export function createSeedProjectRecord(
       defaultCalendarId: "standard",
       revision: 1n,
       nextTaskSeq: nextSeq,
+      nextBaselineVersion: 1,
     },
     calendars,
     members,

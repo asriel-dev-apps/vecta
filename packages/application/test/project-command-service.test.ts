@@ -44,6 +44,7 @@ const initialProject: ProjectState = {
     },
   ],
   nextTaskSeq: 2,
+  nextBaselineVersion: 1,
 };
 
 class InMemoryProjectCommandUnitOfWork implements ProjectCommandUnitOfWork {

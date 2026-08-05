@@ -177,6 +177,7 @@ export function toProjectDetailRecord(
       defaultCalendarId: projectHeader.defaultCalendarId,
       revision: projectHeader.revision,
       nextTaskSeq: projectHeader.nextTaskSeq,
+      nextBaselineVersion: projectHeader.nextBaselineVersion,
     },
     calendars: rows.calendars.map((row) =>
       withoutGeneratedFields(row, ["createdAt", "updatedAt"]),

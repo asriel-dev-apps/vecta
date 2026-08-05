@@ -94,6 +94,12 @@ export interface ProjectState {
    * numbers and a delete never rewinds it (gaps persist).
    */
   readonly nextTaskSeq: number;
+  /**
+   * Next baseline version to hand out (Design 0009). Same shape and the same
+   * reasoning as `nextTaskSeq`: a counter advanced inside the command's own
+   * transaction rather than a database sequence.
+   */
+  readonly nextBaselineVersion: number;
 }
 
 /**
@@ -199,7 +205,33 @@ export interface DeleteTemplateCommand {
   readonly templateId: string;
 }
 
+/**
+ * Freeze the current plan as an approved baseline (Design 0009).
+ *
+ * It is a ProjectCommand rather than a separate endpoint so that it inherits the
+ * revision pin, the idempotency receipt and the audit actor unchanged — the same
+ * reasoning that kept the assistant off a second write path. The STATE transition
+ * is only the counter; the snapshot rows are written by the unit of work in the
+ * same transaction, from the state this command was applied to.
+ *
+ * `acknowledgeUnplottedTasks` exists because BAC and PV come from the daily plot,
+ * not from the estimate (measured 2026-08-05): a task with an estimate and an
+ * empty plot contributes ZERO, and freezing that bakes the hole in permanently —
+ * every later SV is that much kinder. Publishing such a plan is allowed, but not
+ * by accident.
+ */
+export interface PublishBaselineCommand {
+  readonly type: "baseline.publish";
+  /**
+   * Set only after a human has been shown the count of leaves whose plot is empty
+   * or disagrees with their estimate. Absent or false with such leaves present is
+   * rejected.
+   */
+  readonly acknowledgeUnplottedTasks?: boolean;
+}
+
 export type ProjectCommand =
+  | PublishBaselineCommand
   | AddTaskCommand
   | UpdateTaskCommand
   | DeleteTaskCommand
@@ -557,12 +589,55 @@ function reprorateSubtasks(tasks: readonly ProjectTask[]): readonly ProjectTask[
   });
 }
 
+/**
+ * Leaf tasks whose daily plot would freeze a budget that is not the one the
+ * estimate claims — either empty, or disagreeing with `plannedEffortMinutes`.
+ *
+ * Measured 2026-08-05: BAC and PV are Σ dailyPlan, and `plannedEffortMinutes`
+ * never reaches either. A leaf with a 480-minute estimate and an empty plot is
+ * worth ZERO to the baseline, so freezing it makes every later SV kinder by that
+ * amount, permanently and invisibly. Summary rows are excluded because they do
+ * not roll up at all.
+ */
+export function unplottedLeafTasks(state: ProjectState): readonly ProjectTask[] {
+  // The SAME leaf predicate the rollup uses, called rather than copied. It was
+  // written out by hand here at first and agreed by transcription; a transcribed
+  // agreement is one edit away from a baseline BAC that disagrees with the
+  // rollup's, and nothing would say which is right.
+  const leaves = leafTaskIds(state.tasks);
+  return state.tasks.filter((task) => {
+    if (!leaves.has(task.id)) return false;
+    const plotted = Object.values(task.dailyPlan).reduce((sum, value) => sum + value, 0);
+    // Disagreement is the whole test. An earlier version also flagged any plot
+    // summing to zero, which is a false positive on a legitimate leaf: a task
+    // estimated at 0 minutes, plotted or not, is worth 0 to the baseline either
+    // way and hides nothing. Daily-plan validation permits zero-valued days, so
+    // `{ "2026-08-05": 0 }` against an estimate of 0 is valid input that would
+    // have raised the acknowledgement prompt for no reason — and a prompt that
+    // cries wolf is how the real case gets waved through.
+    return plotted !== task.plannedEffortMinutes;
+  });
+}
+
 export function applyProjectCommand(
   state: ProjectState,
   command: ProjectCommand,
 ): ProjectState {
   let next: ProjectState;
-  if (command.type === "task.add") {
+  if (command.type === "baseline.publish") {
+    // The state transition is ONLY the counter. The snapshot rows are written by
+    // the unit of work, in the same transaction, from the state this was applied
+    // to — so the frozen plan and the revision it is pinned to cannot disagree.
+    const unplotted = unplottedLeafTasks(state);
+    if (unplotted.length > 0 && command.acknowledgeUnplottedTasks !== true) {
+      throw new Error(
+        `Cannot publish a baseline while ${unplotted.length} leaf task(s) have an empty or ` +
+          "inconsistent daily plot: they would be frozen at zero budget. " +
+          "Acknowledge them explicitly to publish anyway.",
+      );
+    }
+    next = { ...state, nextBaselineVersion: state.nextBaselineVersion + 1 };
+  } else if (command.type === "task.add") {
     // Assign the immutable display No. from the project counter, then advance it
     // (Design 0003 §F-1). Server-authoritative: any client-supplied value is
     // impossible (AddTaskCommand.task omits `seq`), and the optimistic client

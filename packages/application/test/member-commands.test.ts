@@ -38,6 +38,7 @@ const project: ProjectState = {
     },
   ],
   nextTaskSeq: 2,
+  nextBaselineVersion: 1,
 };
 
 describe("member commands", () => {

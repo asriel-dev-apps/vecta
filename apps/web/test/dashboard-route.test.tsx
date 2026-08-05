@@ -101,6 +101,7 @@ const seed: ProjectState = {
     }),
   ],
   nextTaskSeq: 5,
+  nextBaselineVersion: 1,
 };
 
 function mount(project: ProjectState = seed): void {

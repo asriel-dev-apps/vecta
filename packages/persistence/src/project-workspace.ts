@@ -68,6 +68,7 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       subtasks: subtasks.map((step) => ({ ...step })),
     })),
     nextTaskSeq: record.project.nextTaskSeq,
+    nextBaselineVersion: record.project.nextBaselineVersion,
     tasks: record.tasks.map((task) => ({
       id: task.id,
       parentId: task.parentTaskId,

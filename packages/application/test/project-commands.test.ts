@@ -63,6 +63,7 @@ const project: ProjectState = {
     }),
   ],
   nextTaskSeq: 3,
+  nextBaselineVersion: 1,
 };
 
 describe("applyProjectCommand", () => {
@@ -156,6 +157,7 @@ describe("applyProjectCommand", () => {
       ],
       tasks: [makeTask({ id: "parent-1", sortOrder: 0, seq: 1, name: "Parent" })],
       nextTaskSeq: 2,
+      nextBaselineVersion: 1,
     };
     const generated = applyProjectCommand(seedProject, {
       type: "task.generateSubtasks",

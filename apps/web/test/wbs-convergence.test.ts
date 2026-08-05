@@ -160,6 +160,13 @@ const cases: ReadonlyArray<readonly [string, ProjectCommand]> = [
   ],
   ["template.update", { type: "template.update", templateId: base.templates[0]!.id, changes: { name: "T-renamed" } }],
   ["template.delete", { type: "template.delete", templateId: base.templates[0]!.id }],
+  // Design 0009. Its state transition is only the baseline counter, so client and
+  // server converge trivially — but it is IN the union, and this suite exists to
+  // make sure nothing in the union escapes the invariant unexamined. The snapshot
+  // rows it writes are the unit of work's business and are covered against a real
+  // database in `packages/persistence/test/baseline-publish.test.ts`; the client
+  // never derives them, which is precisely why the optimistic states still match.
+  ["baseline.publish", { type: "baseline.publish", acknowledgeUnplottedTasks: true }],
 ];
 
 describe("§0 convergence: client transition === server transition (PRIVILEGED)", () => {

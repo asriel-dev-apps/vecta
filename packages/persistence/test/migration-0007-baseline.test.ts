@@ -139,8 +139,8 @@ describe("migration 0007 baseline freezing", () => {
 
   it("refuses UPDATE and DELETE on a published baseline", async () => {
     await client.query(
-      `insert into project_baselines (tenant_id, project_id, version, source_revision, published_by_principal_id)
-       values ($1, $2, 1, 0, $3)`,
+      `insert into project_baselines (tenant_id, project_id, version, source_revision, published_by_actor_type, published_by_actor_id)
+       values ($1, $2, 1, 0, 'HUMAN', $3)`,
       [tenantId, projectId, principalId],
     );
     await client.query(

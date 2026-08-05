@@ -264,6 +264,7 @@ describe("expander — the expansion is a valid project edit (A1, domain half)",
     templates: [],
     tasks: [],
     nextTaskSeq: 1,
+    nextBaselineVersion: 1,
   };
   const projectView: AssistantProjectView = {
     defaultCalendarId: project.defaultCalendarId,

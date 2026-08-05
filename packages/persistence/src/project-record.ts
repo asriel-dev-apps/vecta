@@ -17,6 +17,8 @@ export interface ProjectRecord {
   readonly revision: bigint;
   /** Next per-project display No. to hand out (Design 0003 §F-1). */
   readonly nextTaskSeq: number;
+  /** Next baseline version to hand out (Design 0009). */
+  readonly nextBaselineVersion: number;
 }
 
 export interface ProjectCalendarRecord {

@@ -13,7 +13,8 @@ CREATE TABLE "project_baselines" (
 	"project_id" uuid NOT NULL,
 	"version" integer NOT NULL,
 	"source_revision" bigint NOT NULL,
-	"published_by_principal_id" uuid NOT NULL,
+	"published_by_actor_type" "audit_actor_type" NOT NULL,
+	"published_by_actor_id" text NOT NULL,
 	"published_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "project_baselines_pkey" PRIMARY KEY("tenant_id","project_id","version"),
 	CONSTRAINT "project_baselines_version_positive" CHECK ("project_baselines"."version" >= 1),
@@ -38,7 +39,6 @@ CREATE TABLE "baseline_tasks" (
 );--> statement-breakpoint
 
 ALTER TABLE "project_baselines" ADD CONSTRAINT "project_baselines_project_fk" FOREIGN KEY ("tenant_id","project_id") REFERENCES "public"."projects"("tenant_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_baselines" ADD CONSTRAINT "project_baselines_principal_fk" FOREIGN KEY ("published_by_principal_id") REFERENCES "public"."principals"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "baseline_tasks" ADD CONSTRAINT "baseline_tasks_baseline_fk" FOREIGN KEY ("tenant_id","project_id","version") REFERENCES "public"."project_baselines"("tenant_id","project_id","version") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "baseline_tasks_project_version_idx" ON "baseline_tasks" USING btree ("tenant_id","project_id","version");--> statement-breakpoint
 

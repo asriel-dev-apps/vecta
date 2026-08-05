@@ -291,5 +291,6 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
     templates,
     tasks,
     nextTaskSeq: nextSeq,
+    nextBaselineVersion: 1,
   };
 }

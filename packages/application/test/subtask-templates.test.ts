@@ -76,6 +76,7 @@ function baseProject(parentEffortMinutes: number): ProjectState {
       }),
     ],
     nextTaskSeq: 2,
+    nextBaselineVersion: 1,
   };
 }
 

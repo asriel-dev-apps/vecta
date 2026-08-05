@@ -62,6 +62,7 @@ const project: ProjectState = {
     }),
   ],
   nextTaskSeq: 3,
+  nextBaselineVersion: 1,
 };
 
 describe("projectWbsGrid", () => {

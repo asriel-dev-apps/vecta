@@ -143,6 +143,16 @@ export const ApiCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("template.add"), template: TemplateSchema }),
   z.object({ type: z.literal("template.update"), templateId: UuidSchema, changes: TemplateChangesSchema }),
   z.object({ type: z.literal("template.delete"), templateId: UuidSchema }),
+  // Design 0009. It rides the same command envelope as everything else so it
+  // inherits the revision pin, the idempotency receipt and the audit actor
+  // rather than growing a second write path — the same reasoning that kept the
+  // assistant off one. `acknowledgeUnplottedTasks` is the human's answer to
+  // "these leaves would be frozen at zero budget"; it is optional because the
+  // question is only asked when there are such leaves.
+  z.object({
+    type: z.literal("baseline.publish"),
+    acknowledgeUnplottedTasks: z.boolean().optional(),
+  }),
 ]);
 
 // ADR 0012 Step 4b — the write-path batch envelope. The client posts a whole
@@ -290,6 +300,11 @@ function cloneTemplateChanges(changes: TemplateChangesInput) {
 }
 
 export function toCommand(command: z.infer<typeof ApiCommandSchema>): ProjectCommand {
+  if (command.type === "baseline.publish") {
+    return command.acknowledgeUnplottedTasks === undefined
+      ? { type: command.type }
+      : { type: command.type, acknowledgeUnplottedTasks: command.acknowledgeUnplottedTasks };
+  }
   if (command.type === "task.add") {
     return { type: command.type, task: toTask(command.task) };
   }
@@ -421,6 +436,11 @@ function fromTaskChanges(
 }
 
 export function fromCommand(command: ProjectCommand): z.infer<typeof ApiCommandSchema> {
+  if (command.type === "baseline.publish") {
+    return command.acknowledgeUnplottedTasks === undefined
+      ? { type: command.type }
+      : { type: command.type, acknowledgeUnplottedTasks: command.acknowledgeUnplottedTasks };
+  }
   if (command.type === "task.add") {
     return { type: command.type, task: fromTask(command.task) };
   }
