@@ -206,6 +206,7 @@ const NAV_ITEMS = [
   { to: "members", label: "メンバー", testId: "nav-members" },
   { to: "templates", label: "テンプレート", testId: "nav-templates" },
   { to: "dashboard", label: "ダッシュボード", testId: "nav-dashboard" },
+  { to: "timesheet", label: "勤怠取込", testId: "nav-timesheet" },
 ] as const;
 
 /**

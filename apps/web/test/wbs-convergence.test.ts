@@ -108,6 +108,7 @@ const cases: ReadonlyArray<readonly [string, ProjectCommand]> = [
         actualEffortMinutes: 0,
         prorationWeightBp: null,
         dailyPlan: {},
+        datedActuals: {},
         actualStart: null,
         actualFinish: null,
         dependencies: [],

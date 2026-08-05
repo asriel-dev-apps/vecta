@@ -210,6 +210,10 @@ function toTask(task: z.infer<typeof TaskSchema>): Omit<ProjectTask, "seq"> {
     actualEffortMinutes: task.actualEffortMinutes,
     prorationWeightBp: task.prorationWeightBp,
     dailyPlan: { ...task.dailyPlan },
+    // Never from the wire. Dated actuals exist only through the timesheet
+    // import, whose command is built server-side from a parsed CSV — so a new
+    // task starts with none and no client can post any (Design 0011 §6.1).
+    datedActuals: {},
     actualStart: task.actualStart,
     actualFinish: task.actualFinish,
     dependencies: task.dependencies.map((dependency) => ({ ...dependency })),
@@ -436,6 +440,14 @@ function fromTaskChanges(
 }
 
 export function fromCommand(command: ProjectCommand): z.infer<typeof ApiCommandSchema> {
+  if (command.type === "actuals.import") {
+    // Deliberately absent from `ApiCommandSchema`, so there is nothing to convert
+    // it to. A timesheet import is built server-side from a parsed CSV by the
+    // `/projects/:id/timesheet` action (Design 0011 §6.1); putting it on the wire
+    // command surface would let a client post arbitrary resolved actuals and skip
+    // every rejection the importer exists to make.
+    throw new Error("actuals.import is not a wire command");
+  }
   if (command.type === "baseline.publish") {
     return command.acknowledgeUnplottedTasks === undefined
       ? { type: command.type }

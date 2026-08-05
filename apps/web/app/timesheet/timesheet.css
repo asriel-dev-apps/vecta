@@ -1,0 +1,128 @@
+/* The timesheet import screen (Design 0011 §6.2).
+   Defines no tokens of its own: the shared sheet the layout links owns the
+   palette, so one theme toggle drives this screen too. */
+
+.timesheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px 32px;
+  max-width: 760px;
+}
+
+.timesheet__panel {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--panel);
+}
+
+.timesheet__panel--error {
+  border-color: var(--risk);
+}
+
+.timesheet__title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.timesheet__note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.timesheet__template {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  /* A header line can be wider than the panel on a narrow window; it scrolls
+     inside its own box rather than widening the page. */
+  overflow-x: auto;
+}
+
+.timesheet__file {
+  display: block;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.timesheet__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.timesheet__button {
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 6px 14px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.timesheet__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.timesheet__button--primary:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timesheet__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 0;
+}
+
+.timesheet__summary dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timesheet__summary dd {
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.timesheet__done {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--ok);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.timesheet__error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--risk);
+}
+
+.timesheet__issues {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ink);
+  /* A long file can produce many issues; the list scrolls rather than pushing
+     the rest of the screen away. */
+  max-height: 320px;
+  overflow-y: auto;
+}
