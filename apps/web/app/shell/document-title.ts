@@ -10,6 +10,17 @@
  * `root.tsx` supplies the fallback and a leaf overrides it. Routes that only
  * redirect (`routes/index.tsx`, `project.index.tsx`, `logout.tsx`) deliberately
  * export none: they never render, and giving them a title would only be dead code.
+ *
+ * That arrangement is MEASURED, not assumed — against a running `react-router dev`
+ * on 2026-08-05, reading the served HTML:
+ *
+ *   * `/login`            → `<title>サインイン | VECTA</title>`, exactly one `<title>`.
+ *   * an unmatched path   → `<title>プロジェクト管理 | VECTA</title>`.
+ *
+ * The second is the control: it is the root's own title, so it shows the fallback
+ * really is reached rather than the leaf's happening to be right. The per-screen
+ * builders are covered by unit tests; what needed a real render was this
+ * deepest-wins-with-fallback behaviour, because it belongs to the framework.
  */
 
 /** The product half of every title. One constant so a rename is one edit. */
