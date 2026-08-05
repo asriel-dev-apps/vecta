@@ -275,6 +275,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           actualEffortMinutes: task.actualEffortMinutes,
           prorationWeightBp: task.prorationWeightBp,
           dailyPlan: task.dailyPlan as Record<string, number>,
+          datedActuals: task.datedActuals as Record<string, number>,
           actualStart: task.actualStart,
           actualFinish: task.actualFinish,
           dependencies: dependenciesByTask.get(task.id) ?? [],
@@ -520,6 +521,10 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           actualEffortMinutes: task.actualEffortMinutes,
           prorationWeightBp: task.prorationWeightBp,
           dailyPlan: task.dailyPlan,
+          // Design 0011. Carried in the same per-task write as `dailyPlan`, which
+          // is why an import survives the next unrelated command: both the total
+          // and the rows it comes from travel with the task.
+          datedActuals: task.datedActuals,
           actualStart: task.actualStart,
           actualFinish: task.actualFinish,
         };

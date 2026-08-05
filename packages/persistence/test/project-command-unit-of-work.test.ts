@@ -147,6 +147,7 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       actualEffortMinutes: 0,
       prorationWeightBp: null,
       dailyPlan: { "2026-01-05": 120 },
+      datedActuals: {},
       actualStart: null,
       actualFinish: null,
       dependencies: [

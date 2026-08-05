@@ -116,6 +116,7 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       actualEffortMinutes: task.actualEffortMinutes,
       prorationWeightBp: task.prorationWeightBp,
       dailyPlan: task.dailyPlan,
+      datedActuals: task.datedActuals,
       actualStart: task.actualStart,
       actualFinish: task.actualFinish,
       dependencies: dependenciesByTask.get(task.id) ?? [],

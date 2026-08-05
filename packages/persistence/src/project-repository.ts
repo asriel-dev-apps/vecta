@@ -201,6 +201,7 @@ export function toProjectDetailRecord(
       (row): TaskRecord => ({
         ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
         dailyPlan: row.dailyPlan as Record<string, number>,
+        datedActuals: row.datedActuals as Record<string, number>,
       }),
     ),
     dependencies: rows.dependencies.map(

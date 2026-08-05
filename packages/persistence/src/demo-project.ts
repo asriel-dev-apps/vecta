@@ -184,6 +184,7 @@ export function createSeedProjectRecord(
       actualEffortMinutes: 0,
       prorationWeightBp: null,
       dailyPlan: {},
+      datedActuals: {},
       actualStart: null,
       actualFinish: null,
     });
@@ -226,6 +227,10 @@ export function createSeedProjectRecord(
         actualEffortMinutes,
         prorationWeightBp: null,
         dailyPlan,
+        // Design 0011. The seed carries no timesheet: dated actuals arrive only
+        // through an import, and a synthetic one would make AC look like it had
+        // a time axis everywhere it does not.
+        datedActuals: {},
         actualStart,
         actualFinish,
       });

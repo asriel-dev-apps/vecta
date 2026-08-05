@@ -94,6 +94,8 @@ export interface TaskRecord {
   /** Basis-point proration weight (0–10000) for template-generated subtasks; null otherwise. */
   readonly prorationWeightBp: number | null;
   readonly dailyPlan: Readonly<Record<string, number>>;
+  /** Design 0011: `"YYYY-MM-DD|<memberId>"` → person-minutes. */
+  readonly datedActuals: Readonly<Record<string, number>>;
   readonly actualStart: string | null;
   readonly actualFinish: string | null;
 }

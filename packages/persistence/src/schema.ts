@@ -296,6 +296,12 @@ export const tasks = pgTable(
     actualEffortMinutes: integer("actual_effort_minutes").notNull().default(0),
     prorationWeightBp: integer("proration_weight_bp"),
     dailyPlan: jsonb("daily_plan").notNull().default(sql`'{}'::jsonb`),
+    // Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → minutes.
+    // The actuals side's `daily_plan`, and stored the same way for the same
+    // reason: the command unit of work rewrites every task row on every command,
+    // so anything AC is derived from has to travel with the task or the next
+    // unrelated edit writes a stale total back over it.
+    datedActuals: jsonb("dated_actuals").notNull().default(sql`'{}'::jsonb`),
     actualStart: date("actual_start", { mode: "string" }),
     actualFinish: date("actual_finish", { mode: "string" }),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
