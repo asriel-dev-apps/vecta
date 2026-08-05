@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { EffortRatio } from "@vecta/domain";
+import { useFetcher } from "react-router";
+import { calculateBaselineEvm, type EffortRatio } from "@vecta/domain";
 import {
   projectEvmDashboard,
   type EvmDashboardProjection,
@@ -7,6 +8,7 @@ import {
   type ProjectionRole,
   type ProjectState,
 } from "@vecta/application";
+import type { BaselineView } from "~/server/project/load-project-view.server";
 
 /**
  * The EVM dashboard (design 0007 — Step 4). One table whose rows mean either the
@@ -29,6 +31,16 @@ export interface EvmDashboardProps {
   readonly projectionRole: ProjectionRole;
   /** Today, resolved server-side (see `as-of-date.ts`) — the initial as-of date. */
   readonly today: string;
+  /** The latest published baseline, or `null` if the plan has never been frozen. */
+  readonly baseline: BaselineView | null;
+  /** The project revision the view was loaded at — the publish command's pin. */
+  readonly revision: string;
+  /**
+   * Leaves whose daily plot disagrees with their estimate. Publishing freezes them
+   * at whatever the PLOT says (BAC comes from the plot, not the estimate), so the
+   * count is shown before the button can be used — see Design 0009 §3.1.
+   */
+  readonly unplottedLeafCount: number;
 }
 
 /**
@@ -244,13 +256,45 @@ export function EvmDashboard({
   project,
   projectionRole,
   today,
+  baseline,
+  revision,
+  unplottedLeafCount,
 }: EvmDashboardProps): ReactNode {
   const [asOf, setAsOf] = useState(today);
   const [segment, setSegment] = useState<EvmSegment>("task");
+  const [acknowledged, setAcknowledged] = useState(false);
+  // The same fetcher the grid saves through, posting the same command envelope to
+  // the same action — publishing is not a special transport, only a special
+  // command (Design 0009 §5).
+  const publisher = useFetcher<{ ok: boolean; message?: string }>();
+  const publishError =
+    publisher.data === undefined || publisher.data.ok
+      ? null
+      : (publisher.data.message ?? "ベースラインを凍結できませんでした");
 
   const projection = useMemo(
     () => projectEvmDashboard(project, { statusDate: asOf, role: projectionRole }),
     [project, asOf, projectionRole],
+  );
+
+  // Schedule variance against the APPROVED plan (Design 0009). Both terms come
+  // from the baseline scope — `M_baseline × T_current` — so a task added after
+  // publishing cannot flatter SPI by entering EV without entering PV.
+  const baselineEvm = useMemo(
+    () =>
+      baseline === null
+        ? null
+        : calculateBaselineEvm({
+            statusDate: asOf,
+            baselineTasks: baseline.tasks.map((task) => ({
+              id: task.taskId,
+              dailyPlan: task.dailyPlan,
+            })),
+            progressByTaskId: Object.fromEntries(
+              project.tasks.map((task) => [task.id, task.progressBasisPoints]),
+            ),
+          }),
+    [baseline, project.tasks, asOf],
   );
   const rows = segment === "task" ? projection.byParentTask : projection.byMember;
 
@@ -301,6 +345,97 @@ export function EvmDashboard({
           </div>
         </div>
       </header>
+
+      {/* Where PV comes from, always — not only when a baseline exists. An
+          unlabelled SPI cannot be read: against the approved plan and against a
+          plan someone edited this morning are different claims. */}
+      <div className="evm-baseline" data-testid="evm-baseline-source">
+        {baseline === null ? (
+          <p className="evm-baseline__source">
+            <b>PV: 現在計画（未凍結・参考値）</b> — ベースラインがまだありません。
+            計画を編集すると過去の SV・SPI も変わります。
+          </p>
+        ) : (
+          <p className="evm-baseline__source">
+            <b>
+              PV: ベースライン v{baseline.version}（公開 {baseline.publishedAt.slice(0, 10)}）
+            </b>{" "}
+            — SV・SPI はこの承認済み計画に対する差です。
+          </p>
+        )}
+        {baselineEvm === null ? null : (
+          <dl className="evm-baseline__metrics" data-testid="evm-baseline-metrics">
+            <div>
+              <dt>BAC</dt>
+              <dd data-testid="baseline-bac">{formatDays(baselineEvm.bac)}</dd>
+            </div>
+            <div>
+              <dt>PV</dt>
+              <dd data-testid="baseline-pv">{formatDays(baselineEvm.pv)}</dd>
+            </div>
+            <div>
+              <dt>SV</dt>
+              <dd data-testid="baseline-sv">{formatDays(baselineEvm.sv)}</dd>
+            </div>
+            <div>
+              <dt>SPI</dt>
+              <dd data-testid="baseline-spi">{formatDayForecast(baselineEvm.spi)}</dd>
+            </div>
+          </dl>
+        )}
+        <div className="evm-baseline__publish">
+          {/* The count is rendered BEFORE the checkbox that waives it. The gate is
+              only meaningful if the number was in front of the person who ticked
+              it — a checkbox with nothing beside it is a formality. */}
+          {unplottedLeafCount > 0 ? (
+            <label className="evm-baseline__ack">
+              <input
+                type="checkbox"
+                data-testid="evm-acknowledge-unplotted"
+                checked={acknowledged}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <span data-testid="evm-unplotted-count">
+                日次計画が見積りと合わない末端タスクが {unplottedLeafCount} 件あります。
+                そのまま凍結すると、その分の予算は 0 として固定されます。
+              </span>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="evm-baseline__button"
+            data-testid="evm-publish-baseline"
+            disabled={publisher.state !== "idle"}
+            onClick={() => {
+              // `void`, not `await`: the fetcher owns the lifecycle and re-renders
+              // with its own state; awaiting here would only hold the handler open.
+              // Marked explicitly because `no-floating-promises` is one of the
+              // rules this repo keeps for the authorization case it also catches.
+              void publisher.submit(
+                {
+                  expectedRevision: revision,
+                  commands: [
+                    {
+                      command:
+                        acknowledged
+                          ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
+                          : { type: "baseline.publish" },
+                    },
+                  ],
+                },
+                { method: "post", encType: "application/json" },
+              );
+            }}
+          >
+            {publisher.state === "idle" ? "現在の計画をベースラインとして凍結" : "凍結中…"}
+          </button>
+          {publishError === null ? null : (
+            <p className="evm-baseline__error" role="alert" data-testid="evm-publish-error">
+              {publishError}
+            </p>
+          )}
+        </div>
+      </div>
 
       {/* Says plainly what the as-of date does. Without it an earlier date reads
           as a historical snapshot, and it is not one: only PV is recomputed. */}

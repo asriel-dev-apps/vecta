@@ -280,3 +280,75 @@
 
 .evm-curve__ev--ok { fill: var(--ok); }
 .evm-curve__ev--risk { fill: var(--risk); }
+
+/* Design 0009 — where PV comes from, and the control that freezes it.
+   Above the table, not beside it: an SPI read without knowing its baseline is a
+   different claim from one read with it, so the answer has to arrive first. */
+.evm-baseline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, transparent);
+}
+.evm-baseline__source {
+  margin: 0;
+  flex: 1 1 22rem;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.evm-baseline__metrics {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+}
+.evm-baseline__metrics div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.evm-baseline__metrics dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.evm-baseline__metrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.evm-baseline__publish {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+.evm-baseline__ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 30rem;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.evm-baseline__button {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, transparent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.evm-baseline__button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.evm-baseline__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger, #c8342b);
+}

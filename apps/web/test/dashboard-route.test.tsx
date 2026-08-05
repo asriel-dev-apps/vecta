@@ -114,6 +114,8 @@ function mount(project: ProjectState = seed): void {
         stateView: project,
         projectionRole: "PRIVILEGED" as const,
         today: AS_OF,
+        baseline: null,
+        unplottedLeafCount: 0,
       }),
     },
   ]);

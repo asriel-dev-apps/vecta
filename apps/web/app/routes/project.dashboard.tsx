@@ -1,8 +1,10 @@
 import type { LinksFunction } from "react-router";
 import type { Route } from "./+types/project.dashboard";
 import { loadProjectView } from "~/server/project/load-project-view.server";
+import { runCommandAction } from "~/server/project/command-action.server";
 import { EvmDashboard } from "~/dashboard/evm-dashboard";
 import { todayInProjectTimeZone } from "~/dashboard/as-of-date";
+import { unplottedLeafTasks } from "@vecta/application";
 import { projectTitle } from "~/shell/document-title";
 import dashboardStyles from "~/dashboard/evm-dashboard.css?url";
 
@@ -38,7 +40,23 @@ export function meta({ loaderData }: Route.MetaArgs) {
  */
 export async function loader({ context }: Route.LoaderArgs) {
   const view = await loadProjectView(context);
-  return { ...view, today: todayInProjectTimeZone(new Date()) };
+  return {
+    ...view,
+    today: todayInProjectTimeZone(new Date()),
+    // Computed server-side so the number the person sees is the server's, not a
+    // client re-derivation that could disagree with the check that will actually
+    // run. It is the SAME function the command uses to refuse (Design 0009 §3.1).
+    unplottedLeafCount: unplottedLeafTasks(view.stateView).length,
+  };
+}
+
+/**
+ * `baseline.publish` (Design 0009). It reuses `runCommandAction` unchanged, so
+ * there is no second write path: the revision pin, the idempotency receipt and
+ * the audit actor are the ones every other command gets.
+ */
+export async function action(args: Route.ActionArgs) {
+  return runCommandAction(args, "baseline-publish");
 }
 
 export default function ProjectDashboard({ loaderData }: Route.ComponentProps) {
@@ -47,6 +65,9 @@ export default function ProjectDashboard({ loaderData }: Route.ComponentProps) {
       project={loaderData.stateView}
       projectionRole={loaderData.projectionRole}
       today={loaderData.today}
+      baseline={loaderData.baseline}
+      revision={loaderData.revision}
+      unplottedLeafCount={loaderData.unplottedLeafCount}
     />
   );
 }
