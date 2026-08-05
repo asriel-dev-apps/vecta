@@ -164,6 +164,39 @@ describe("timesheet import screen", () => {
     expect(screen.getByTestId("timesheet-done").textContent).toContain("3 行");
   });
 
+  it("REVIEW 2026-08-06: choosing a second file closes the import button again", async () => {
+    // Found by review. Clearing the file text was not enough — `fetcher.data`
+    // outlived it, so the first file's preview kept the button open and the
+    // SECOND file would have been imported with nobody having seen what it
+    // deletes. That is the exact failure the gate exists to prevent.
+    const posted: { intent: string; csv: string }[] = [];
+    const action = async ({ request }: { request: Request }) => {
+      const body = (await request.json()) as { intent: string; csv: string };
+      posted.push({ intent: body.intent, csv: body.csv });
+      return data({ ok: true, kind: "timesheet-preview", summary: SUMMARY });
+    };
+    renderScreen(action);
+
+    const first = "タスクNo,日付,メンバー,工数(時間)\n1,2026-08-03,Member 01,2\n";
+    chooseFile(first);
+    await waitFor(() =>
+      expect((screen.getByTestId("timesheet-preview") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("timesheet-preview"));
+    await waitFor(() =>
+      expect((screen.getByTestId("timesheet-import") as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    // A different file, chosen without previewing it.
+    chooseFile("タスクNo,日付,メンバー,工数(時間)\n1,2026-09-09,Member 01,7\n");
+    await waitFor(() =>
+      expect((screen.getByTestId("timesheet-import") as HTMLButtonElement).disabled).toBe(true),
+    );
+    // The old summary must not be presented as this file's, either.
+    expect(screen.queryByTestId("timesheet-summary")).toBeNull();
+    expect(posted).toHaveLength(1);
+  });
+
   it("lists EVERY rejected line with its number, not just the first", async () => {
     const action = () =>
       data(

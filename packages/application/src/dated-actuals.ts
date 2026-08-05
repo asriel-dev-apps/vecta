@@ -75,6 +75,28 @@ export function datedActualsByDate(actuals: DatedActuals): Record<string, number
 }
 
 /**
+ * Whether any of this map's entries fall inside the given partitions — i.e.
+ * whether a replacement would actually change it.
+ *
+ * Needed because "has dated actuals at all" is NOT the same question. A task that
+ * was imported in March is untouched by an import of April, and recomputing its
+ * column W anyway would overwrite a hand edit the design deliberately permits
+ * (Design 0011 §4). Found by review, 2026-08-06.
+ */
+export function touchesDatedActualPartitions(
+  actuals: DatedActuals,
+  partitions: readonly DatedActualKeyParts[],
+): boolean {
+  if (partitions.length === 0) return false;
+  const cleared = new Set(partitions.map((part) => datedActualKey(part.workDate, part.memberId)));
+  for (const key of Object.keys(actuals)) {
+    const parts = parseDatedActualKey(key);
+    if (parts !== null && cleared.has(datedActualKey(parts.workDate, parts.memberId))) return true;
+  }
+  return false;
+}
+
+/**
  * Replace whole `(date, member)` partitions.
  *
  * The import's unit of change is "one person's one day" (Design 0011 §5.1), and

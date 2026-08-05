@@ -63,13 +63,20 @@ export function TimesheetImport({
   // The file's TEXT, held so "import" can post the same bytes the preview
   // approved without asking the person to pick the file twice.
   const [csv, setCsv] = useState<string | null>(null);
+  // WHICH text the preview on screen describes. Without it, choosing a second
+  // file left the first file's preview in `fetcher.data`, so the import button
+  // stayed open and applied a file whose blast radius nobody had seen (found by
+  // review, 2026-08-06). The gate is only a gate if it names what it approved.
+  const [previewedCsv, setPreviewedCsv] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const attempt = useRef(0);
 
   const result = fetcher.data;
   const previewed =
-    result !== undefined && result.ok && result.kind === "timesheet-preview" ? result.summary : null;
+    result !== undefined && result.ok && result.kind === "timesheet-preview" && previewedCsv === csv
+      ? result.summary
+      : null;
   const imported =
     result !== undefined && result.ok && result.kind === "timesheet-import" ? result : null;
   const issues = result !== undefined && !result.ok ? result.issues : [];
@@ -77,16 +84,19 @@ export function TimesheetImport({
 
   const post = (intent: "preview" | "import"): void => {
     if (csv === null) return;
+    if (intent === "preview") setPreviewedCsv(csv);
     attempt.current += 1;
     void fetcher.submit(
       {
         intent,
         csv,
         expectedRevision: revision,
-        // Client-minted and unique per attempt, exactly as the baseline publish
-        // button does it: a double-click replays the first receipt rather than
-        // importing twice.
-        idempotencyKey: `timesheet-${revision}-${attempt.current}`,
+        // Client-minted per attempt. A UUID rather than `${revision}-${n}`,
+        // which two tabs at the same revision would both produce for DIFFERENT
+        // files — the receipt would then reject the second on a hash mismatch
+        // with an internal error (found by review, 2026-08-06). Every other write
+        // path in the app already mints a UUID here.
+        idempotencyKey: crypto.randomUUID(),
       },
       { method: "post", encType: "application/json" },
     );
@@ -138,6 +148,9 @@ export function TimesheetImport({
             onChange={(event) => {
               const file = event.target.files?.[0];
               setCsv(null);
+              // Drop the approval with the file it approved. Clearing `csv` alone
+              // is not enough: `fetcher.data` outlives it.
+              setPreviewedCsv(null);
               setFileName(null);
               setReadError(null);
               if (file === undefined) return;

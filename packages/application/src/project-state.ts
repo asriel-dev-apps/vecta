@@ -3,6 +3,7 @@ import {
   datedActualTotalMinutes,
   parseDatedActualKey,
   replaceDatedActualPartitions,
+  touchesDatedActualPartitions,
   type DatedActualEntry,
   type DatedActualKeyParts,
 } from "./dated-actuals.js";
@@ -748,9 +749,15 @@ export function applyProjectCommand(
     next = {
       ...state,
       tasks: state.tasks.map((task) => {
-        const had = Object.keys(task.datedActuals).length > 0;
         const mine = entriesByTask.get(task.id) ?? [];
-        if (!had && mine.length === 0) return task;
+        // "Already has dated actuals" is the WRONG test, and using it overwrote a
+        // hand edit on a task the import never mentioned (found by review,
+        // 2026-08-06). The affected set is what Design 0011 §4 says: tasks with
+        // rows inside a REPLACED partition, plus tasks named in the file. A task
+        // imported in March is untouched by an import of April.
+        if (mine.length === 0 && !touchesDatedActualPartitions(task.datedActuals, partitions)) {
+          return task;
+        }
         const datedActuals = replaceDatedActualPartitions(task.datedActuals, partitions, mine);
         return {
           ...task,
@@ -825,6 +832,21 @@ export function applyProjectCommand(
     }
     if (state.tasks.some((task) => task.assigneeMemberId === command.memberId)) {
       throw new Error(`Member ${command.memberId} is assigned to a task`);
+    }
+    // Imported actuals reference the member by id, and validation requires every
+    // dated-actual key to name a live member — so without this the delete failed
+    // deep inside `validateProject` with an internal key string as the message,
+    // and there was no way to clear the rows either (found by review, 2026-08-06).
+    // Refusing here, in the same shape as the assignee guard, is what Design 0011
+    // §3 already chose for the equivalent foreign key: restrict, not cascade.
+    if (
+      state.tasks.some((task) =>
+        Object.keys(task.datedActuals).some(
+          (key) => parseDatedActualKey(key)?.memberId === command.memberId,
+        ),
+      )
+    ) {
+      throw new Error(`Member ${command.memberId} has imported actuals`);
     }
     next = {
       ...state,

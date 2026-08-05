@@ -2,7 +2,6 @@ import { data, type RouterContextProvider } from "react-router";
 import {
   parseTimesheetCsv,
   TIMESHEET_HEADERS,
-  TIMESHEET_MAX_ROWS,
   type TimesheetIssue,
   type TimesheetSummary,
 } from "@vecta/application";
@@ -44,6 +43,13 @@ import { dbSessionContext } from "../context.server";
  */
 
 export const TIMESHEET_SAVE_KIND = "timesheet-import" as const;
+
+/**
+ * Request-body ceiling, in characters. 2,000 rows of four columns is a few tens
+ * of kilobytes; this leaves an order of magnitude of headroom and still refuses
+ * a body that could exhaust the Worker before the row cap is ever consulted.
+ */
+export const MAX_CSV_CHARACTERS = 1_000_000;
 
 export interface TimesheetPreviewResult {
   readonly ok: true;
@@ -108,6 +114,20 @@ export async function runTimesheetAction({
   if (typeof body.csv !== "string" || body.csv.trim() === "") {
     return invalid("CSV が空です", 422);
   }
+  // Bound the work BEFORE doing any of it. The 2,000-row cap only fires after the
+  // reader has walked the whole text character by character, so it is no defence
+  // against one enormous field — and this runs in a Worker with 128 MB
+  // (found by review, 2026-08-06).
+  if (body.csv.length > MAX_CSV_CHARACTERS) {
+    return invalid(`CSV が大きすぎます（${MAX_CSV_CHARACTERS} 文字までです）`, 413);
+  }
+  // Both intents, not just the write. A preview parses the whole file against the
+  // PRIVILEGED state; leaving it open to a VIEWER makes a read-only role able to
+  // spend the Worker's budget on demand, and Design 0011 §6.1 scopes the feature
+  // to OWNER/EDITOR in the first place.
+  if (membership.projectRole !== "OWNER" && membership.projectRole !== "EDITOR") {
+    return invalid("権限がありません", 403);
+  }
 
   const workspace = await requireProjectWorkspace(context);
   // Parsed against `workspace.current`, the PRIVILEGED state, not the role-scoped
@@ -120,10 +140,6 @@ export async function runTimesheetAction({
     // long as the file (Design 0011 §5.2).
     return data({ ok: false as const, code: "INVALID" as const, issues: parsed.issues }, { status: 422 });
   }
-  if (parsed.entries.length > TIMESHEET_MAX_ROWS) {
-    return invalid(`データ行が ${TIMESHEET_MAX_ROWS} 行を超えています`, 422);
-  }
-
   if (intent === "preview") {
     return data({ ok: true as const, kind: "timesheet-preview" as const, summary: parsed.summary });
   }

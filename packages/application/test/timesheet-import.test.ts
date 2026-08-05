@@ -165,6 +165,24 @@ describe("parseTimesheetCsv", () => {
     expect(parsed.ok).toBe(true);
   });
 
+  it("REVIEW 2026-08-06: bounds the hours a row may claim, and refuses odd notations", () => {
+    // Found by review. `Number()` reads "0x10" as 16 and "1e3" as 1000, which is
+    // this module inventing an interpretation of a timesheet's text. And an
+    // unbounded value means one slipped decimal point silently rewrites AC.
+    for (const bad of ["0x10", "1e3", "25", "-1", " 1 2"]) {
+      const parsed = parseTimesheetCsv(`${HEADER}\n2,2026-08-03,Member 01,${bad}\n`, makeProject());
+      expect(parsed.ok, `expected ${bad} to be refused`).toBe(false);
+    }
+  });
+
+  it("CONTROL (pair): ordinary decimal hours are still accepted", () => {
+    // Without this, refusing everything would pass the test above.
+    for (const good of ["0", "1", "7.5", "24"]) {
+      const parsed = parseTimesheetCsv(`${HEADER}\n2,2026-08-03,Member 01,${good}\n`, makeProject());
+      expect(parsed.ok, `expected ${good} to be accepted`).toBe(true);
+    }
+  });
+
   it("refuses a member name that two members share, rather than guessing", () => {
     const project = makeProject({
       members: [
@@ -254,6 +272,61 @@ describe("actuals.import", () => {
     const imported = importCsv(project, `${HEADER}\n2,2026-08-03,Member 01,1\n`);
     expect(taskById(imported, "leaf-2").actualEffortMinutes).toBe(999);
     expect(taskById(imported, "leaf-2").datedActuals).toEqual({});
+  });
+
+  it("REVIEW 2026-08-06: an unrelated day does not overwrite a hand-edited W", () => {
+    // Found by review. The affected-set test was "does this task have ANY dated
+    // actuals", which is not the question: a task imported in March is untouched
+    // by an import of April, and recomputing its W anyway silently reverts a hand
+    // edit that Design 0011 §4 deliberately allows.
+    const march = importCsv(makeProject(), `${HEADER}\n2,2026-03-02,Member 01,2\n`);
+
+    // The user corrects leaf-1's total by hand afterwards.
+    const handEdited = applyProjectCommand(march, {
+      type: "task.update",
+      taskId: "leaf-1",
+      changes: { actualEffortMinutes: 999 },
+    });
+    expect(taskById(handEdited, "leaf-1").actualEffortMinutes).toBe(999);
+
+    // An import of a DIFFERENT day, naming a different task entirely.
+    const april = importCsv(handEdited, `${HEADER}\n3,2026-04-06,Member 02,1\n`);
+    expect(taskById(april, "leaf-1").actualEffortMinutes).toBe(999);
+    // ...and its dated rows are untouched, so the flag still describes reality.
+    expect(taskById(april, "leaf-1").datedActuals).toEqual(
+      taskById(march, "leaf-1").datedActuals,
+    );
+  });
+
+  it("CONTROL (pair): the SAME day IS recomputed, hand edit or not", () => {
+    // Without this, "never recompute" would pass the test above. When the import
+    // does replace a task's person-day, the import is the authority.
+    const march = importCsv(makeProject(), `${HEADER}\n2,2026-03-02,Member 01,2\n`);
+    const handEdited = applyProjectCommand(march, {
+      type: "task.update",
+      taskId: "leaf-1",
+      changes: { actualEffortMinutes: 999 },
+    });
+    const corrected = importCsv(handEdited, `${HEADER}\n2,2026-03-02,Member 01,3\n`);
+    expect(taskById(corrected, "leaf-1").actualEffortMinutes).toBe(180);
+  });
+
+  it("REVIEW 2026-08-06: a member with imported actuals cannot be deleted, and is told why", () => {
+    // Found by review. Validation requires every dated-actual key to name a live
+    // member, so deleting one used to fail deep inside `validateProject` with an
+    // internal key string as the message — and there was no way to clear the rows
+    // either, so the member was simply undeletable with no explanation.
+    const imported = importCsv(makeProject(), `${HEADER}\n2,2026-08-03,Member 01,2\n`);
+    expect(() =>
+      applyProjectCommand(imported, { type: "member.delete", memberId: MEMBER_A }),
+    ).toThrow(/has imported actuals/u);
+  });
+
+  it("CONTROL (pair): a member with NO imported actuals still deletes", () => {
+    // Without this, "never delete a member" would pass the test above.
+    const imported = importCsv(makeProject(), `${HEADER}\n2,2026-08-03,Member 01,2\n`);
+    const after = applyProjectCommand(imported, { type: "member.delete", memberId: MEMBER_B });
+    expect(after.members.map((member) => member.id)).toEqual([MEMBER_A]);
   });
 
   it("CONTROL 負 3: refuses entries aimed at a summary task", () => {
