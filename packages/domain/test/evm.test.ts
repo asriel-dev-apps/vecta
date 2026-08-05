@@ -219,24 +219,14 @@ describe("calculateEffortEvm", () => {
         },
       ],
     });
+    // This is what discriminates: a ceiling of any kind makes it fail. Verified by
+    // adding one — clamping the ratio to `Math.min(r, 10)` turns this test red and
+    // leaves the other 38 green. The zero-denominator half of the behaviour is
+    // pinned by the test above and deliberately not repeated here; asserting it
+    // again would not distinguish a capped SPI from an uncapped one, which is the
+    // only thing this test is for.
     expect(typeof result.rollup.spi).toBe("number");
     expect(result.rollup.spi as number).toBeGreaterThan(100);
-    // Control: the same shape with a zero denominator still takes the guard, so
-    // this test cannot pass by the guard having been removed.
-    const zero = calculateEffortEvm({
-      statusDate: "2026-07-31",
-      tasks: [
-        {
-          id: "not-yet-planned",
-          plannedEffortMinutes: 480,
-          progressBasisPoints: 5_000,
-          actualEffortMinutes: 0,
-          dailyPlan: { "2026-09-01": 480 },
-        },
-      ],
-    });
-    expect(zero.rollup.pv).toBe(0);
-    expect(zero.rollup.spi).toBe("-");
   });
 });
 

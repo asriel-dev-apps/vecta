@@ -22,6 +22,20 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Testing Library's own 1 s async budget lives in `test/setup.ts`; this is the
+    // outer one. Measured 2026-08-05: the heaviest test ("hydrates a large
+    // (5000-task) fixture") takes 585 ms on a quiet machine and blew the 5 s
+    // default when a headless-Chrome render ran beside it.
+    //
+    // 30 s rather than 15 s, sized by reproducing the failure instead of guessing:
+    // with all 8 cores saturated the suite takes 86 s instead of 17 s, and at 15 s
+    // one test still timed out — a 204 ms test stretched past 15 s, i.e. >70x. The
+    // same number `packages/persistence/vitest.config.ts` reached for the same
+    // reason: the default is a limit for pure computation, and these tests spend
+    // real wall-clock rendering. The cost of the higher ceiling is that a
+    // genuinely hung test takes 30 s to say so, which is the cheaper mistake.
+    setupFiles: ["./test/setup.ts"],
+    testTimeout: 30_000,
     server: {
       deps: {
         // Inline node_modules through Vite's transform (rather than Node's

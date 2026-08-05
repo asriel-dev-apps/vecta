@@ -3,13 +3,17 @@ import type { Route } from "./+types/project.dashboard";
 import { loadProjectView } from "~/server/project/load-project-view.server";
 import { EvmDashboard } from "~/dashboard/evm-dashboard";
 import { todayInProjectTimeZone } from "~/dashboard/as-of-date";
-import dashboardStyles from "~/dashboard/evm-dashboard.css?url";
 import { projectTitle } from "~/shell/document-title";
+import dashboardStyles from "~/dashboard/evm-dashboard.css?url";
 
 // The screen's own sheet, linked from the route so it is in the first-paint
 // <head> (same mechanism as the WBS grid's). It defines no tokens of its own —
 // the layout already links the shared stylesheet that does, and RR dedupes it.
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: dashboardStyles }];
+
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: projectTitle("EVM ダッシュボード", loaderData.stateView.name) }];
+}
 
 /**
  * SSR loader for `/projects/:id/dashboard` (design 0007 — Step 4).
@@ -32,10 +36,6 @@ export const links: LinksFunction = () => [{ rel: "stylesheet", href: dashboardS
  * from then on, and a client that read its own clock would hydrate a different
  * initial date than the server rendered.
  */
-export function meta({ loaderData }: Route.MetaArgs) {
-  return [{ title: projectTitle("EVM ダッシュボード", loaderData.stateView.name) }];
-}
-
 export async function loader({ context }: Route.LoaderArgs) {
   const view = await loadProjectView(context);
   return { ...view, today: todayInProjectTimeZone(new Date()) };

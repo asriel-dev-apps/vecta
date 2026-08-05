@@ -6,8 +6,8 @@ import { oidcConfigFromEnv } from "~/server/auth/oidc-config.server";
 import { safeReturnTo } from "~/server/auth/redirect.server";
 import { readSession } from "~/server/auth/session.server";
 import { appContext } from "~/server/context.server";
-import styles from "~/wbs/styles.css?url";
 import { appTitle } from "~/shell/document-title";
+import styles from "~/wbs/styles.css?url";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 
@@ -19,15 +19,15 @@ export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 // authorization-code flow (PKCE + state + nonce + `oidc_tx`) is triggered by a
 // full-document POST behind the button, where an external 302 works document-side.
 
+export function meta() {
+  return [{ title: appTitle("サインイン") }];
+}
+
 /**
  * GET `/login`: an already-authenticated principal never sees the sign-in page
  * (bounce to `/projects`); otherwise render it, carrying a validated `returnTo`
  * so the eventual callback lands where the user was headed.
  */
-export function meta() {
-  return [{ title: appTitle("サインイン") }];
-}
-
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(appContext);
   const session = await readSession(env, request);

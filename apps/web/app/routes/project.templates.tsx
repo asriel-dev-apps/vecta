@@ -5,8 +5,8 @@ import { runCommandAction } from "~/server/project/command-action.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { MasterRoute } from "~/masters/master-route";
 import { TemplateSection } from "~/masters/template-section";
-import masterStyles from "~/wbs/styles.css?url";
 import { projectTitle } from "~/shell/document-title";
+import masterStyles from "~/wbs/styles.css?url";
 
 // ADR 0012 Step 4c-1 — `/projects/:id/templates` = the SPA's サブタスクテンプレート
 // master (`TemplateSection`: the template list + the selected template's step

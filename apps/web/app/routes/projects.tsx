@@ -5,8 +5,8 @@ import { requirePrincipal } from "~/server/auth/require-principal.server";
 import { loadProjectList } from "~/server/project/project-list.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";
-import styles from "~/wbs/styles.css?url";
 import { appTitle } from "~/shell/document-title";
+import styles from "~/wbs/styles.css?url";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 

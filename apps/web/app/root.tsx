@@ -12,9 +12,9 @@ import {
 import type { Route } from "./+types/root";
 import { appContext, dbSessionContext } from "~/server/context.server";
 import { createDbSession } from "~/server/db-session.server";
+import { appTitle } from "~/shell/document-title";
 import { NoticeScreen } from "~/shell/notice-screen";
 import appStyles from "~/wbs/styles.css?url";
-import { appTitle } from "~/shell/document-title";
 
 // Linked from the ROOT, not just from each screen, so the error boundary is
 // styled no matter which route failed — an error thrown before a leaf route's

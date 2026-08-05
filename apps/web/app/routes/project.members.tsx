@@ -5,8 +5,8 @@ import { runCommandAction } from "~/server/project/command-action.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { MasterRoute } from "~/masters/master-route";
 import { MemberList } from "~/masters/member-list";
-import masterStyles from "~/wbs/styles.css?url";
 import { projectTitle } from "~/shell/document-title";
+import masterStyles from "~/wbs/styles.css?url";
 
 // ADR 0012 Step 4c-1 — `/projects/:id/members` hosts ONLY the SPA's existing
 // MemberList (name / 稼働カレンダー / 日次キャパシティ). Option A reserves this route
