@@ -1898,3 +1898,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* The member master's cost-rate cell (Design 0010). Narrow, tabular, and only
+   rendered when the rate reached the client at all — a general viewer's payload
+   has no such field, so there is nothing to lay out. */
+.master-input--rate {
+  width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

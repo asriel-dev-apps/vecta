@@ -119,7 +119,7 @@ export function createSeedProjectRecord(
     projectId,
     name: `Member ${(index + 1).toString().padStart(2, "0")}`,
     calendarId: "standard",
-    dailyCapacityMinutes: 480,
+    dailyCapacityMinutes: 480, costRateMinorPerHour: null,
   }));
 
   // 工程 / プロダクト masters: one row per distinct synthetic phase/product used

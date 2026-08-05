@@ -37,6 +37,8 @@ export interface MemberRecord {
   readonly name: string;
   readonly calendarId: string;
   readonly dailyCapacityMinutes: number;
+  /** Design 0010: minor units per person-hour, or null when none is recorded. */
+  readonly costRateMinorPerHour: number | null;
 }
 
 export interface ProcessRecord {

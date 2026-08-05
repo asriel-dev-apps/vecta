@@ -27,6 +27,20 @@ export interface ProjectMember {
   readonly name: string;
   readonly calendarId: string;
   readonly dailyCapacityMinutes: number;
+  /**
+   * Cost rate in the project's currency's minor unit, per PERSON-HOUR, or `null`
+   * when none has been recorded (Design 0010).
+   *
+   * `null` is not zero, and the difference is the whole point: a zero rate would
+   * make a member's work cost nothing and be summed silently, while `null` means
+   * "not known" and takes that member's leaves OUT of the money aggregate with a
+   * visible count. Same failure shape as the empty daily plot in Design 0009 §3.1.
+   *
+   * SENSITIVE (ADR 0011 Decision 7). It is removed from the GENERAL read model at
+   * the structure level by `stripSensitiveMemberFields`, so a viewer never
+   * receives the key at all.
+   */
+  readonly costRateMinorPerHour: number | null;
 }
 
 /** Project-scoped 工程 master (name-only). Supplies the grid's 工程 dropdown. */
@@ -320,6 +334,14 @@ function validateMembers(project: ProjectState): void {
       member.dailyCapacityMinutes > 1_440
     ) {
       throw new Error(`Member ${member.id} daily capacity must be a whole number from 1 to 1440`);
+    }
+    // Minor units, so a whole number — money must not carry a binary fraction
+    // into a sum (Design 0010 §2). `null` is "not recorded" and is allowed.
+    if (
+      member.costRateMinorPerHour !== null &&
+      (!Number.isInteger(member.costRateMinorPerHour) || member.costRateMinorPerHour < 0)
+    ) {
+      throw new Error(`Member ${member.id} cost rate must be a whole non-negative amount`);
     }
   }
 }

@@ -40,7 +40,7 @@ function baseState(): ProjectState {
         id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         name: "Spare member",
         calendarId: "standard",
-        dailyCapacityMinutes: 480,
+        dailyCapacityMinutes: 480, costRateMinorPerHour: null,
       },
     ],
     processes: [
@@ -129,7 +129,7 @@ const cases: ReadonlyArray<readonly [string, ProjectCommand]> = [
         id: "dddddddd-dddd-4ddd-8ddd-dddddddddd02",
         name: "Added member",
         calendarId: "standard",
-        dailyCapacityMinutes: 300,
+        dailyCapacityMinutes: 300, costRateMinorPerHour: null,
       },
     },
   ],

@@ -146,7 +146,7 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
       id,
       name: `Member ${(index + 1).toString().padStart(2, "0")}`,
       calendarId: paidLeaveCalendarByMemberId.get(id) ?? "standard",
-      dailyCapacityMinutes: 480,
+      dailyCapacityMinutes: 480, costRateMinorPerHour: null,
     };
   });
 

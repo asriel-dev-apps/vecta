@@ -71,7 +71,7 @@ const project: ProjectState = {
   calendars: [
     { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
   ],
-  members: [{ id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 }],
+  members: [{ id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null }],
   processes: [],
   products: [],
   templates: [],

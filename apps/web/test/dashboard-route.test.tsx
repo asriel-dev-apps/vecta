@@ -60,8 +60,8 @@ const seed: ProjectState = {
     { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
   ],
   members: [
-    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
-    { id: "member-2", name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480 },
+    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
+    { id: "member-2", name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
   ],
   processes: [],
   products: [],

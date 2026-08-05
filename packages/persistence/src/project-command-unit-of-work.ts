@@ -240,6 +240,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           name: member.name,
           calendarId: member.calendarId,
           dailyCapacityMinutes: member.dailyCapacityMinutes,
+          costRateMinorPerHour: member.costRateMinorPerHour,
         })),
         processes: processRows.map((process) => ({
           id: process.id,

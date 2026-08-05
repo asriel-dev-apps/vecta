@@ -224,13 +224,13 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       actor: { type: "HUMAN", id: "user-001" },
       command: {
         type: "member.add",
-        member: { id: memberId, name: "Member 99", calendarId: "standard", dailyCapacityMinutes: 420 },
+        member: { id: memberId, name: "Member 99", calendarId: "standard", dailyCapacityMinutes: 420, costRateMinorPerHour: null },
       },
     });
     let reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.find((member) => member.id === memberId)).toMatchObject({
       name: "Member 99",
-      dailyCapacityMinutes: 420,
+      dailyCapacityMinutes: 420, costRateMinorPerHour: null,
     });
 
     await service().execute({

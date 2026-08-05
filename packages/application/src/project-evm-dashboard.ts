@@ -10,7 +10,7 @@ import {
   projectWorkspaceView,
   type ProjectionRole,
 } from "./project-projection.js";
-import { leafTaskIds, type ProjectState, type ProjectTask } from "./project-state.js";
+import { leafTaskIds, type ProjectMember, type ProjectState, type ProjectTask } from "./project-state.js";
 
 /**
  * The EVM dashboard projection (design 0007 — Step 4). One table, two row
@@ -67,6 +67,29 @@ export interface EvmCurvePoint {
   readonly pv: number;
 }
 
+/**
+ * The same six additive metrics, in the project's currency's MINOR UNIT
+ * (Design 0010). Ratios are deliberately absent: SPI and CPI are dimensionless,
+ * and the money ones are on {@link EvmDashboardRow} beside their effort twins.
+ *
+ * Money is DERIVED and never stored: the only persisted figure is a member's
+ * rate, and every amount here is `hours × rate` computed afresh. Storing an
+ * amount would let it go stale the moment the effort behind it was edited, and
+ * a reader could not tell which of the two was right.
+ */
+export interface EvmMoneyMetrics {
+  readonly bac: number;
+  readonly pv: number;
+  readonly ev: number;
+  readonly ac: number;
+  readonly sv: number;
+  readonly cv: number;
+  readonly cpi: EffortRatio;
+  readonly spi: EffortRatio;
+  readonly eac: EffortRatio;
+  readonly etc: EffortRatio;
+}
+
 export type EvmDashboardRowKind = "total" | "task" | "member" | "unassigned";
 
 export interface EvmDashboardRow extends EvmDashboardMetrics {
@@ -90,6 +113,18 @@ export interface EvmDashboardRow extends EvmDashboardMetrics {
    * the single EV level at the as-of date instead.
    */
   readonly curve: readonly EvmCurvePoint[];
+  /**
+   * The same row in money (Design 0010), or `null` when this row's leaves have
+   * no rate to price them with.
+   *
+   * `null` rather than zeroes, because a row of zeroes reads as "this cost
+   * nothing" and the truth is "nobody said what this costs". Leaves whose
+   * assignee has no rate — or no assignee — are EXCLUDED from the sums above and
+   * counted in {@link EvmDashboardProjection.unratedLeafCount}, the same
+   * treatment Design 0009 §3.1 gave a task with an empty daily plot after a
+   * silent zero was measured baking a permanent hole into the budget.
+   */
+  readonly money: EvmMoneyMetrics | null;
 }
 
 export interface EvmDashboardProjection {
@@ -105,6 +140,17 @@ export interface EvmDashboardProjection {
   readonly byParentTask: readonly EvmDashboardRow[];
   /** Project members in their display order, then the unassigned row if it has anything. */
   readonly byMember: readonly EvmDashboardRow[];
+  /**
+   * Leaves left OUT of every money figure because no rate could be found for
+   * them — no assignee, an assignee the member list does not contain, or an
+   * assignee whose rate is `null` (Design 0010 §4).
+   *
+   * The screen shows it beside the money. Without it the amounts look complete
+   * and are quietly short.
+   */
+  readonly unratedLeafCount: number;
+  /** How many leaves the money figures DO price. Zero means there is no cost layer yet. */
+  readonly ratedLeafCount: number;
 }
 
 export interface EvmDashboardOptions {
@@ -130,12 +176,33 @@ interface Accumulator {
   pvHours: number;
   evHours: number;
   acHours: number;
+  // The money side accumulates in PARALLEL, per leaf, because the rate belongs to
+  // the leaf and not to the row: multiplying a row's total hours by anything
+  // would be pricing several people's work at one rate. `rated` is false until a
+  // priced leaf lands here, which is what distinguishes "costs nothing" from
+  // "nobody said".
+  bacMinor: number;
+  pvMinor: number;
+  evMinor: number;
+  acMinor: number;
+  rated: boolean;
   /** date → planned person-minutes, for the cumulative curve. */
   readonly dailyMinutes: Map<string, number>;
 }
 
 function emptyAccumulator(): Accumulator {
-  return { bacHours: 0, pvHours: 0, evHours: 0, acHours: 0, dailyMinutes: new Map() };
+  return {
+    bacHours: 0,
+    pvHours: 0,
+    evHours: 0,
+    acHours: 0,
+    bacMinor: 0,
+    pvMinor: 0,
+    evMinor: 0,
+    acMinor: 0,
+    rated: false,
+    dailyMinutes: new Map(),
+  };
 }
 
 function ratio(numerator: number, denominator: number): EffortRatio {
@@ -163,7 +230,30 @@ function toRow(
   const ev = effortHoursToDays(accumulator.evHours);
   const ac = effortHoursToDays(accumulator.acHours);
   const forecast = effortForecast(bac, ev, ac);
+  const moneyForecast = effortForecast(
+    accumulator.bacMinor,
+    accumulator.evMinor,
+    accumulator.acMinor,
+  );
+  const money: EvmMoneyMetrics | null = accumulator.rated
+    ? {
+        bac: accumulator.bacMinor,
+        pv: accumulator.pvMinor,
+        ev: accumulator.evMinor,
+        ac: accumulator.acMinor,
+        sv: accumulator.evMinor - accumulator.pvMinor,
+        cv: accumulator.evMinor - accumulator.acMinor,
+        // NOT copied from the effort ratios. They agree only when every rate is
+        // equal; when rates differ, a high-rate slip weighs more in money than in
+        // hours, and that difference IS the cost layer's entire information gain.
+        cpi: ratio(accumulator.evMinor, accumulator.acMinor),
+        spi: ratio(accumulator.evMinor, accumulator.pvMinor),
+        eac: moneyForecast.eac,
+        etc: moneyForecast.etc,
+      }
+    : null;
   return {
+    money,
     key,
     kind,
     label,
@@ -232,6 +322,7 @@ export function projectEvmDashboard(
   // member field can never be summed into a row a GENERAL viewer receives.
   const members = projectWorkspaceView(project, role).members;
   const memberIds = new Set(members.map((member) => member.id));
+  const memberById = new Map(members.map((member) => [member.id, member]));
 
   const leaves = leafTaskIds(project.tasks);
   const rootById = firstLevelAncestors(project.tasks);
@@ -241,6 +332,8 @@ export function projectEvmDashboard(
   const byMemberKey = new Map<string, Accumulator>();
   let planStart: string | null = null;
   let planEnd: string | null = null;
+  let unratedLeafCount = 0;
+  let ratedLeafCount = 0;
 
   for (const task of project.tasks) {
     if (!leaves.has(task.id)) continue;
@@ -266,6 +359,22 @@ export function projectEvmDashboard(
         ? task.assigneeMemberId
         : UNASSIGNED_ROW_KEY;
 
+    // The leaf's own rate, or `null`. Read through the ROLE-SCOPED member list, so
+    // a GENERAL viewer's projection has no rate to find and every row's `money`
+    // comes out `null` — the cost layer disappears at the structure level rather
+    // than being hidden by the screen (ADR 0011 Decision 7).
+    const assignee =
+      task.assigneeMemberId === null ? undefined : memberById.get(task.assigneeMemberId);
+    // `in` narrows a union to the member that HAS the key, which is how the
+    // general projection's absence of it becomes a `null` rate rather than a
+    // type error — the role projection is doing the work here, not a UI check.
+    const rate: number | null =
+      assignee !== undefined && "costRateMinorPerHour" in assignee
+        ? (assignee as ProjectMember).costRateMinorPerHour
+        : null;
+    if (rate === null) unratedLeafCount += 1;
+    else ratedLeafCount += 1;
+
     const buckets = [total];
     let root = byRootId.get(rootId);
     if (root === undefined) {
@@ -285,6 +394,12 @@ export function projectEvmDashboard(
       bucket.pvHours += metrics.plannedEarnedHours;
       bucket.evHours += metrics.earnedEffortHours;
       bucket.acHours += metrics.actualEffortHours;
+      if (rate === null) continue;
+      bucket.rated = true;
+      bucket.bacMinor += metrics.plannedEffortHours * rate;
+      bucket.pvMinor += metrics.plannedEarnedHours * rate;
+      bucket.evMinor += metrics.earnedEffortHours * rate;
+      bucket.acMinor += metrics.actualEffortHours * rate;
     }
     for (const [date, minutes] of Object.entries(task.dailyPlan)) {
       // Zero-valued plan entries exist and carry no effort; they must not widen
@@ -321,5 +436,7 @@ export function projectEvmDashboard(
     total: toRow("__total__", "total", "", total),
     byParentTask,
     byMember,
+    unratedLeafCount,
+    ratedLeafCount,
   };
 }

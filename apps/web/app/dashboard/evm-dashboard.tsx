@@ -27,6 +27,14 @@ import type { BaselineView } from "~/server/project/load-project-view.server";
 /** Rows are never sorted here. Design 0007 §2: the WBS projection owns row order. */
 export type EvmSegment = "task" | "member";
 
+/**
+ * Effort or money (Design 0010). The COLUMNS do not change — the reference
+ * spreadsheet has no money column and Design 0003 §B-1 forbids inventing one —
+ * so the cost layer is a change of unit on the same ten columns, which is what
+ * ADR 0011 Decision 1 means by calling it optional.
+ */
+export type EvmUnit = "days" | "money";
+
 export interface EvmDashboardProps {
   /** The role-scoped project view the route loaded. */
   readonly project: ProjectState;
@@ -83,6 +91,31 @@ function formatDayForecast(value: EffortRatio): string {
   return value === "-" ? "—" : formatDays(value);
 }
 
+/**
+ * Money, in the project currency's MINOR UNIT, grouped in threes.
+ *
+ * Deliberately not `Intl.NumberFormat`: this table is rendered on the server and
+ * hydrated on the client, and node's ICU and workerd's need not agree on
+ * grouping or symbols — a mismatch would be a hydration error in production and
+ * nowhere else. There is no per-currency decimal table either; JPY's minor unit
+ * is the yen, and a table nobody exercises is a table nobody checks.
+ */
+function formatMinor(value: number): string {
+  const rounded = Math.round(value);
+  const sign = rounded < 0 ? "-" : "";
+  const digits = Math.abs(rounded).toString();
+  let grouped = "";
+  for (let index = 0; index < digits.length; index += 1) {
+    if (index > 0 && (digits.length - index) % 3 === 0) grouped += ",";
+    grouped += digits[index];
+  }
+  return `${sign}${grouped}`;
+}
+
+function formatMoneyForecast(value: EffortRatio): string {
+  return value === "-" ? "—" : formatMinor(value);
+}
+
 /** −1 / 0 / +1 of the DISPLAYED value, so the marker agrees with the digits. */
 function displayedSign(value: number): number {
   return Math.sign(Math.round(value * 10) / 10);
@@ -95,9 +128,12 @@ function displayedSign(value: number): number {
  */
 function VarianceCell({
   value,
+  format,
   group = false,
 }: {
   readonly value: number;
+  /** Person-days or minor units — the sign logic is identical, the digits are not. */
+  readonly format: (value: number) => string;
   /** Starts the variance group — draws the hairline that separates it. */
   readonly group?: boolean;
 }): ReactNode {
@@ -112,7 +148,7 @@ function VarianceCell({
       </span>
       <span className="evm-variance__value">
         {sign > 0 ? "+" : ""}
-        {formatDays(value)}
+        {format(value)}
       </span>
     </td>
   );
@@ -222,14 +258,24 @@ function MetricRow({
   row,
   projection,
   caption,
+  unit,
 }: {
   readonly row: EvmDashboardRow;
   readonly projection: EvmDashboardProjection;
   readonly caption: string;
+  readonly unit: EvmUnit;
 }): ReactNode {
+  // In money, the row IS its money block. A row with nothing priced has none,
+  // and renders em dashes rather than zeroes — "nobody said what this costs" is
+  // not "this costs nothing" (Design 0010 §4).
+  const money = unit === "money" ? row.money : null;
+  const shown = money ?? row;
+  const priced = unit === "days" || money !== null;
+  const format = unit === "days" ? formatDays : formatMinor;
+  const formatForecast = unit === "days" ? formatDayForecast : formatMoneyForecast;
   const atRisk =
-    (row.cpi !== "-" && row.cpi < RISK_INDEX_THRESHOLD) ||
-    (row.spi !== "-" && row.spi < RISK_INDEX_THRESHOLD);
+    (shown.cpi !== "-" && shown.cpi < RISK_INDEX_THRESHOLD) ||
+    (shown.spi !== "-" && shown.spi < RISK_INDEX_THRESHOLD);
   return (
     <tr
       className={`evm-row evm-row--${row.kind}${atRisk ? " evm-row--risk" : ""}`}
@@ -240,15 +286,28 @@ function MetricRow({
       </th>
       {DAY_COLUMNS.map((column) => (
         <td key={column.key} className="evm-cell evm-cell--num">
-          {formatDays(row[column.key])}
+          {priced ? format(shown[column.key]) : "—"}
         </td>
       ))}
-      <VarianceCell value={row.sv} group />
-      <VarianceCell value={row.cv} />
-      <IndexCell value={row.cpi} />
-      <IndexCell value={row.spi} />
-      <td className="evm-cell evm-cell--num evm-cell--group">{formatDayForecast(row.eac)}</td>
-      <td className="evm-cell evm-cell--num">{formatDayForecast(row.etc)}</td>
+      {priced ? (
+        <>
+          <VarianceCell value={shown.sv} format={format} group />
+          <VarianceCell value={shown.cv} format={format} />
+        </>
+      ) : (
+        <>
+          <td className="evm-cell evm-cell--num evm-cell--muted evm-cell--group">—</td>
+          <td className="evm-cell evm-cell--num evm-cell--muted">—</td>
+        </>
+      )}
+      <IndexCell value={priced ? shown.cpi : "-"} />
+      <IndexCell value={priced ? shown.spi : "-"} />
+      <td className="evm-cell evm-cell--num evm-cell--group">
+        {priced ? formatForecast(shown.eac) : "—"}
+      </td>
+      <td className="evm-cell evm-cell--num">{priced ? formatForecast(shown.etc) : "—"}</td>
+      {/* The sparkline is the PLAN's shape and stays in effort in both units: it
+          is drawn from the daily plot, which has no money in it. */}
       <Sparkline row={row} projection={projection} />
     </tr>
   );
@@ -264,6 +323,7 @@ export function EvmDashboard({
 }: EvmDashboardProps): ReactNode {
   const [asOf, setAsOf] = useState(today);
   const [segment, setSegment] = useState<EvmSegment>("task");
+  const [unit, setUnit] = useState<EvmUnit>("days");
   const [acknowledged, setAcknowledged] = useState(false);
   // The same fetcher the grid saves through, posting the same command envelope to
   // the same action — publishing is not a special transport, only a special
@@ -322,6 +382,7 @@ export function EvmDashboard({
       <header className="app-header">
         <p className="app-subtitle">
           {project.name ? `${project.name} · ` : ""}EVM · 基準日 {asOf} ·{" "}
+          {unit === "days" ? "人日" : "金額"} ·{" "}
           {segment === "task" ? "親タスク" : "メンバー"} {rows.length} 行
         </p>
         <div className="app-header__actions">
@@ -342,6 +403,32 @@ export function EvmDashboard({
           {/* §5 C-7 — a segmented control, not tabs: the same table with the same
               columns, only the meaning of a row changes, so nothing should suggest
               a move to another page. */}
+          {/* Design 0010. Rendered only when a rate actually reached this client:
+              `ratedLeafCount` is zero for a general viewer because the projection
+              removed the rates, and zero for a project nobody has priced. Either
+              way there is nothing to show, so there is no control. */}
+          {projection.ratedLeafCount > 0 ? (
+            <div className="evm-segment" role="group" aria-label="表示する単位">
+              <button
+                type="button"
+                className={`evm-segment__option${unit === "days" ? " evm-segment__option--on" : ""}`}
+                aria-pressed={unit === "days"}
+                data-testid="evm-unit-days"
+                onClick={() => setUnit("days")}
+              >
+                人日
+              </button>
+              <button
+                type="button"
+                className={`evm-segment__option${unit === "money" ? " evm-segment__option--on" : ""}`}
+                aria-pressed={unit === "money"}
+                data-testid="evm-unit-money"
+                onClick={() => setUnit("money")}
+              >
+                金額
+              </button>
+            </div>
+          ) : null}
           <div className="evm-segment" role="group" aria-label="集計の単位">
             <button
               type="button"
@@ -492,6 +579,22 @@ export function EvmDashboard({
         </p>
       </section>
 
+      {unit === "money" ? (
+        <p className="evm-note" data-testid="evm-money-note">
+          金額は<b>単価 × 工数</b>の導出値で、どこにも保存していません（単位は
+          {project.currency} の最小単位）。
+          {projection.unratedLeafCount > 0 ? (
+            <>
+              {" "}
+              単価の分からない末端タスクが{" "}
+              <b data-testid="evm-unrated-count">{projection.unratedLeafCount}</b>{" "}
+              件あり、<b>金額の集計から外しています</b>（0 円として足すと、
+              費用が少なく出たことが画面から読めなくなるため）。
+            </>
+          ) : null}
+        </p>
+      ) : null}
+
       {/* Says plainly what the as-of date does. Without it an earlier date reads
           as a historical snapshot, and it is not one: only PV is recomputed. */}
       <p className="evm-note">
@@ -545,13 +648,19 @@ export function EvmDashboard({
           <tbody>
             {/* §5 A-2 — the project total stays pinned under the header, so a row
                 far down the table can always be read against the whole. */}
-            <MetricRow row={projection.total} projection={projection} caption="プロジェクト合計" />
+            <MetricRow
+              row={projection.total}
+              projection={projection}
+              caption="プロジェクト合計"
+              unit={unit}
+            />
             {rows.map((row) => (
               <MetricRow
                 key={row.key}
                 row={row}
                 projection={projection}
                 caption={row.kind === "unassigned" ? "未割当" : row.label}
+                unit={unit}
               />
             ))}
           </tbody>

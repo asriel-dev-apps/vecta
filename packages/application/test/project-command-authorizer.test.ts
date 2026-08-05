@@ -124,7 +124,7 @@ describe("ProjectCommandAuthorizer", () => {
         projectId: "10000000-0000-4000-8000-000000000001",
         command: {
           type: "member.add",
-          member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+          member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
         },
       }),
     ).rejects.toBeInstanceOf(AgentPlanApprovalRequiredError);

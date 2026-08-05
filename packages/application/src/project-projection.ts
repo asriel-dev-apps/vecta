@@ -31,7 +31,10 @@ export function projectionRoleForProjectRole(projectRole: ProjectRole): Projecti
  * (and future rate/productivity) is absent from the type, so it cannot be
  * emitted downstream. PRIVILEGED keeps the full {@link ProjectMember}.
  */
-export type GeneralProjectMember = Omit<ProjectMember, "dailyCapacityMinutes">;
+export type GeneralProjectMember = Omit<
+  ProjectMember,
+  "dailyCapacityMinutes" | "costRateMinorPerHour"
+>;
 export type ProjectMemberView = ProjectMember | GeneralProjectMember;
 
 /** Project read model with members narrowed to whatever the role may read. */
@@ -45,6 +48,10 @@ export interface ProjectStateView extends Omit<ProjectState, "members"> {
  * place that enumerates the general-visible member fields.
  */
 function stripSensitiveMemberFields(member: ProjectMember): GeneralProjectMember {
+  // An ALLOW-list, not a delete-list: a field added to `ProjectMember` is absent
+  // from the general view until someone writes it here on purpose. The cost rate
+  // (Design 0010) is the first field where getting that backwards would leak
+  // something commercially sensitive rather than merely operational.
   return { id: member.id, name: member.name, calendarId: member.calendarId };
 }
 

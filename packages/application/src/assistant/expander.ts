@@ -278,13 +278,18 @@ function expandMasters(
             MAX_DAILY_CAPACITY_MINUTES,
             Math.max(1, Math.round(hours * MINUTES_PER_HOUR)),
           ),
+          // The assistant never sets a rate. A cost rate is commercially
+          // sensitive (ADR 0011 Decision 7) and nothing in a third-party CSV
+          // establishes one, so a model-supplied figure would be a guess about
+          // money — the exact case Design 0005 keeps the model out of.
+          costRateMinorPerHour: null,
         },
       });
       return;
     }
 
     // op === "update" — a rename, and nothing else. The other master fields are
-    // absent from the IR by design (§7.2): `dailyCapacityMinutes: 1` disables a
+    // absent from the IR by design (§7.2): `dailyCapacityMinutes: 1, costRateMinorPerHour: null` disables a
     // member as effectively as deleting them.
     const newName = master.newName.trim();
     if (newName.length === 0) {

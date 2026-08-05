@@ -157,6 +157,10 @@ export const members = pgTable(
     name: text().notNull(),
     calendarId: text("calendar_id").notNull(),
     dailyCapacityMinutes: integer("daily_capacity_minutes").notNull(),
+    // Cost rate in the project currency's minor unit per person-hour (Design
+    // 0010). Nullable on purpose: "not recorded" and "free" are different, and
+    // only one of them may be summed.
+    costRateMinorPerHour: integer("cost_rate_minor_per_hour"),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
     updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
   },
@@ -174,6 +178,10 @@ export const members = pgTable(
     }).onDelete("restrict"),
     check("members_name_not_blank", sql`length(trim(${table.name})) > 0`),
     check("members_daily_capacity_range", sql`${table.dailyCapacityMinutes} between 1 and 1440`),
+    check(
+      "members_cost_rate_non_negative",
+      sql`${table.costRateMinorPerHour} is null or ${table.costRateMinorPerHour} >= 0`,
+    ),
   ],
 );
 

@@ -62,6 +62,11 @@ export const MemberSchema = z.object({
   name: z.string().trim().min(1).max(200),
   calendarId: CalendarIdSchema,
   dailyCapacityMinutes: z.number().int().min(1).max(1_440),
+  // Design 0010. Minor units per person-hour; `null` is "not recorded" and is
+  // NOT the same as zero — zero would price a member's work at nothing and be
+  // summed in silence. The cap is arbitrary but finite: an unbounded integer on
+  // a write surface is a way to make a later sum overflow into nonsense.
+  costRateMinorPerHour: z.number().int().min(0).max(100_000_000).nullable(),
 }).strict();
 
 export const MemberChangesSchema = MemberSchema.omit({ id: true })
@@ -336,6 +341,9 @@ export function toCommand(command: z.infer<typeof ApiCommandSchema>): ProjectCom
         ...(command.changes.dailyCapacityMinutes === undefined
           ? {}
           : { dailyCapacityMinutes: command.changes.dailyCapacityMinutes }),
+        ...(command.changes.costRateMinorPerHour === undefined
+          ? {}
+          : { costRateMinorPerHour: command.changes.costRateMinorPerHour }),
       },
     };
   }

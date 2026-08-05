@@ -84,12 +84,15 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       workingWeekdays,
       nonWorkingDates,
     })),
-    members: record.members.map(({ id, name, calendarId, dailyCapacityMinutes }) => ({
-      id,
-      name,
-      calendarId,
-      dailyCapacityMinutes,
-    })),
+    members: record.members.map(
+      ({ id, name, calendarId, dailyCapacityMinutes, costRateMinorPerHour }) => ({
+        id,
+        name,
+        calendarId,
+        dailyCapacityMinutes,
+        costRateMinorPerHour,
+      }),
+    ),
     processes: record.processes.map(({ id, name, sortOrder }) => ({ id, name, sortOrder })),
     products: record.products.map(({ id, name, sortOrder }) => ({ id, name, sortOrder })),
     templates: record.templates.map(({ id, name, sortOrder, subtasks }) => ({

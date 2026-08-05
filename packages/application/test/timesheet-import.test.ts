@@ -66,8 +66,8 @@ function makeProject(overrides: Partial<ProjectState> = {}): ProjectState {
       { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
     ],
     members: [
-      { id: MEMBER_A, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
-      { id: MEMBER_B, name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480 },
+      { id: MEMBER_A, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
+      { id: MEMBER_B, name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     ],
     processes: [],
     products: [],
@@ -186,8 +186,8 @@ describe("parseTimesheetCsv", () => {
   it("refuses a member name that two members share, rather than guessing", () => {
     const project = makeProject({
       members: [
-        { id: MEMBER_A, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
-        { id: MEMBER_B, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+        { id: MEMBER_A, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
+        { id: MEMBER_B, name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
       ],
     });
     const parsed = parseTimesheetCsv(`${HEADER}\n2,2026-08-03,Member 01,1\n`, project);
