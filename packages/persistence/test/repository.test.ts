@@ -101,13 +101,13 @@ describe("ProjectRepository", () => {
 
   it("reads the same workspace through the batched (HTTP) reader", async () => {
     // The batched reader is what production reads through: it sends the header +
-    // seven child queries as ONE `db.batch(...)` instead of ten sequential round
-    // trips. Only the execution strategy differs — the queries and the row→record
-    // mapping are shared code — so the two readers must agree exactly. Running it
-    // here against the real database exercises the batch WIRING (that all eight
-    // queries are issued, and that the results are threaded back in the right
-    // order) with no fake rows: only `batch` itself is substituted, since the
-    // Neon HTTP endpoint has no local equivalent.
+    // nine child queries as ONE `db.batch(...)` instead of that many sequential
+    // round trips. Only the execution strategy differs — the queries and the
+    // row→record mapping are shared code — so the two readers must agree exactly.
+    // Running it here against the real database exercises the batch WIRING (that
+    // every query is issued, and that the results are threaded back in the right
+    // order) with no fake rows: only `batch` itself is substituted, since the Neon
+    // HTTP endpoint has no local equivalent.
     const workspace = await new NeonHttpProjectWorkspaceReader(
       batchingReadDatabase(createPersistenceDatabase(client)),
     ).load(demoProjectRecord.project.tenantId, demoProjectRecord.project.id);
@@ -118,7 +118,15 @@ describe("ProjectRepository", () => {
         demoProjectRecord.project.id,
       ),
     );
-    expect(batchedQueryCounts).toEqual([8]);
+    // ONE batch is the invariant — the array's LENGTH, not the number inside it.
+    // A `/projects/:id/*` document already costs two sequential Neon round trips
+    // and the 2026-07-26 fold exists to keep it at two. The count went 8 -> 10 when
+    // the baseline joined the batch (Design 0009): more statements, same round
+    // trip, which is why the baseline was put here rather than in a query of its
+    // own. Both halves are asserted, so adding a SECOND batch fails as loudly as
+    // dropping a query does.
+    expect(batchedQueryCounts).toHaveLength(1);
+    expect(batchedQueryCounts).toEqual([10]);
 
     await expect(
       new NeonHttpProjectWorkspaceReader(

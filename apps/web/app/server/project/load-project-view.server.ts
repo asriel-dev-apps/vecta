@@ -5,6 +5,7 @@ import {
   type ProjectionRole,
   type ProjectState,
 } from "@vecta/application";
+import type { BaselineSnapshotTask } from "@vecta/persistence";
 import {
   requireProjectMembership,
   requireProjectWorkspace,
@@ -30,6 +31,23 @@ export interface ProjectViewPayload {
   readonly revision: string;
   readonly stateView: ProjectState;
   readonly projectionRole: ProjectionRole;
+  /**
+   * The latest published baseline, or `null` when the plan has never been frozen
+   * (Design 0009). `sourceRevision` is a string for the same reason `revision` is:
+   * a bigint does not survive the loader's JSON.
+   *
+   * It carries no per-member capacity or rate, so unlike `stateView` it needs no
+   * role projection — every column in it is already visible to GENERAL through the
+   * grid.
+   */
+  readonly baseline: BaselineView | null;
+}
+
+export interface BaselineView {
+  readonly version: number;
+  readonly sourceRevision: string;
+  readonly publishedAt: string;
+  readonly tasks: readonly BaselineSnapshotTask[];
 }
 
 export async function loadProjectView(
@@ -51,5 +69,14 @@ export async function loadProjectView(
     revision: workspace.revision.toString(),
     stateView,
     projectionRole,
+    baseline:
+      workspace.baseline === null
+        ? null
+        : {
+            version: workspace.baseline.version,
+            sourceRevision: workspace.baseline.sourceRevision.toString(),
+            publishedAt: workspace.baseline.publishedAt,
+            tasks: workspace.baseline.tasks,
+          },
   };
 }
