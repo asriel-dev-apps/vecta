@@ -17,6 +17,7 @@ import type {
 import { fromCommand } from "~/wbs/project-command-contract";
 import wbsStyles from "~/wbs/styles.css?url";
 import assistantStyles from "~/assistant/assistant.css?url";
+import { projectTitle } from "~/shell/document-title";
 
 // The ported grid's stylesheet is linked from the route (ADR 0012 Step 4a). The
 // `?url` + `links` export puts a real <link> into the first-paint <head> via
@@ -36,6 +37,10 @@ export const links: LinksFunction = () => [
 // (server render + client hydrate) via `projectWbsGrid`, so the payload is halved
 // and there is one source of truth. The helper is shared by every master route so
 // no loader ever bypasses the `projectWorkspaceView` projection choke point (D18).
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: projectTitle("WBS", loaderData.stateView.name) }];
+}
+
 export async function loader({ context }: Route.LoaderArgs) {
   return loadProjectView(context);
 }

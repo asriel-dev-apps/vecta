@@ -6,11 +6,12 @@ import { loadProjectList } from "~/server/project/project-list.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { AppBar } from "~/shell/app-bar";
 import styles from "~/wbs/styles.css?url";
+import { appTitle } from "~/shell/document-title";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 
 export function meta() {
-  return [{ title: "プロジェクト | VECTA" }];
+  return [{ title: appTitle("プロジェクト") }];
 }
 
 export async function loader({ context }: Route.LoaderArgs) {

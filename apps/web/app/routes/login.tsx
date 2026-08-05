@@ -7,6 +7,7 @@ import { safeReturnTo } from "~/server/auth/redirect.server";
 import { readSession } from "~/server/auth/session.server";
 import { appContext } from "~/server/context.server";
 import styles from "~/wbs/styles.css?url";
+import { appTitle } from "~/shell/document-title";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 
@@ -23,6 +24,10 @@ export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
  * (bounce to `/projects`); otherwise render it, carrying a validated `returnTo`
  * so the eventual callback lands where the user was headed.
  */
+export function meta() {
+  return [{ title: appTitle("サインイン") }];
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(appContext);
   const session = await readSession(env, request);

@@ -193,6 +193,51 @@ describe("calculateEffortEvm", () => {
       cpi: "-",
     });
   });
+
+  it("does NOT cap SPI when PV is merely small — the ratio is reported as it is", () => {
+    // A real fixture produced SPI 41.41 (PV 0.3, EV 10.4) and it was queried as a
+    // possible missing guard. It is not: `ratio` already returns "-" at PV 0, and
+    // it does so for SPI and CPI through the SAME helper, so the two are symmetric
+    // (the test above pins that). What is left is correct arithmetic on a task
+    // whose plan has barely started while its progress has not.
+    //
+    // Capping or thresholding it would DEVIATE FROM THE FORMULA MAP, which ADR 0011
+    // Decision 1 makes the spec: "No rounding is applied; division by zero yields
+    // `-`". The spreadsheet is the only spec for these columns, so an invented
+    // ceiling would be exactly the unrequested behaviour the project forbids.
+    // This test exists so the next reader treats the large number as decided
+    // rather than as an oversight to fix.
+    const result = calculateEffortEvm({
+      statusDate: "2026-08-05",
+      tasks: [
+        {
+          id: "barely-planned",
+          plannedEffortMinutes: 480,
+          progressBasisPoints: 10_000,
+          actualEffortMinutes: 100,
+          dailyPlan: { "2026-08-01": 1, "2026-09-01": 479 },
+        },
+      ],
+    });
+    expect(typeof result.rollup.spi).toBe("number");
+    expect(result.rollup.spi as number).toBeGreaterThan(100);
+    // Control: the same shape with a zero denominator still takes the guard, so
+    // this test cannot pass by the guard having been removed.
+    const zero = calculateEffortEvm({
+      statusDate: "2026-07-31",
+      tasks: [
+        {
+          id: "not-yet-planned",
+          plannedEffortMinutes: 480,
+          progressBasisPoints: 5_000,
+          actualEffortMinutes: 0,
+          dailyPlan: { "2026-09-01": 480 },
+        },
+      ],
+    });
+    expect(zero.rollup.pv).toBe(0);
+    expect(zero.rollup.spi).toBe("-");
+  });
 });
 
 describe("effortForecast", () => {
