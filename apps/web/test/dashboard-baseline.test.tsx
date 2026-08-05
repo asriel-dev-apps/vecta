@@ -168,6 +168,15 @@ describe("EVM dashboard — baseline strip", () => {
     expect(Number(bac.replace(/[^\d.-]/gu, ""))).toBeGreaterThan(0);
   });
 
+  it("formats SPI as a RATIO, not as person-days", async () => {
+    // Caught in a real browser: the strip showed 0.8 where the table showed 0.83,
+    // because SPI was going through the person-days formatter. Two numbers for the
+    // same quantity on one screen is worse than either.
+    renderDashboard({ baseline: frozenFromCurrent() });
+    const spi = await screen.findByTestId("baseline-spi");
+    expect(spi.textContent?.trim()).toMatch(/^(—|\d+\.\d{2})$/u);
+  });
+
   it("shows the unplotted-leaf COUNT before offering the checkbox that waives it", async () => {
     // The gate is only meaningful if the number was in front of the person who
     // ticked the box. A checkbox with nothing beside it is a formality.

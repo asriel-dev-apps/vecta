@@ -121,6 +121,8 @@ export default tseslint.config(
       // directory that ships nothing. It was green locally only because this
       // machine happens to have `spikes/tanstack-grid/node_modules`.
       "spikes/**",
+      // Playwright traces/screenshots — generated, and megabytes of them.
+      "**/e2e/.artifacts/**",
     ],
   },
   eslint.configs.recommended,

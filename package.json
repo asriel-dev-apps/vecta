@@ -23,7 +23,8 @@
     "verify:workflow-pins": "node .github/scripts/verify-workflow-pins.mjs",
     "verify:release-age": "node .github/scripts/verify-release-age-policy.mjs",
     "audit:deps": "pnpm audit --prod --audit-level high",
-    "security:surfaces": "node .github/scripts/security-surfaces.mjs"
+    "security:surfaces": "node .github/scripts/security-surfaces.mjs",
+    "e2e": "pnpm --filter @vecta/web e2e"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

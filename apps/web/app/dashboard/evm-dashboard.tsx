@@ -379,7 +379,9 @@ export function EvmDashboard({
             </div>
             <div>
               <dt>SPI</dt>
-              <dd data-testid="baseline-spi">{formatDayForecast(baselineEvm.spi)}</dd>
+              <dd data-testid="baseline-spi">
+                {baselineEvm.spi === "-" ? "—" : baselineEvm.spi.toFixed(2)}
+              </dd>
             </div>
           </dl>
         )}
@@ -416,10 +418,16 @@ export function EvmDashboard({
                   expectedRevision: revision,
                   commands: [
                     {
-                      command:
-                        acknowledged
-                          ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
-                          : { type: "baseline.publish" },
+                      command: acknowledged
+                        ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
+                        : { type: "baseline.publish" },
+                      // Client-minted, and unique per attempt. The batch schema
+                      // requires it, and it is what makes a double-click one
+                      // publish rather than two — a duplicate key replays the
+                      // first receipt instead of executing again.
+                      idempotencyKey: `baseline-publish-${revision}-${
+                        acknowledged ? "ack" : "plain"
+                      }`,
                     },
                   ],
                 },

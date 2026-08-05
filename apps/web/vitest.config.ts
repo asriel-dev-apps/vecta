@@ -22,6 +22,11 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // `e2e/` belongs to Playwright, which has its own runner, config and browser.
+    // vitest's default glob picks up `*.spec.ts` too, so without this the e2e
+    // suite is collected into `pnpm check` — the one place Design 0008 says it
+    // must not run, because `check` is also the deploy gate.
+    exclude: ["e2e/**", "node_modules/**", "build/**", ".react-router/**"],
     // Testing Library's own 1 s async budget lives in `test/setup.ts`; this is the
     // outer one. Measured 2026-08-05: the heaviest test ("hydrates a large
     // (5000-task) fixture") takes 585 ms on a quiet machine and blew the 5 s

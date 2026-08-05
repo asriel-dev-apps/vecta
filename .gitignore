@@ -28,3 +28,7 @@ apps/web/**/*.js
 scratchpad/
 .agents/
 .claude/
+
+# Playwright output (screenshots are for a person to look at, not to commit)
+apps/web/e2e/.artifacts/
+apps/web/playwright-report/
