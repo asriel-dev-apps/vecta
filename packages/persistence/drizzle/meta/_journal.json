@@ -50,6 +50,13 @@
       "when": 1784800000000,
       "tag": "0006_task_display_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784900000000,
+      "tag": "0007_baseline_freezing",
+      "breakpoints": true
     }
   ]
 }
