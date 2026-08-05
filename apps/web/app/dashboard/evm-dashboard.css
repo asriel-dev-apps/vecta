@@ -352,3 +352,102 @@
   font-size: 12px;
   color: var(--danger, #c8342b);
 }
+
+/* The project trend (Design 0013). One chart, above the table, sharing its
+   palette: PV green, AC orange, EV magenta — the same band colours the table's
+   column headers use, so a line and a column mean the same thing. */
+
+.evm-trend {
+  margin: 0 20px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.evm-trend__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.evm-trend__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.evm-trend__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.evm-trend__key::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.evm-trend__key--pv::before { background: var(--band-pv-ink); }
+.evm-trend__key--ac::before { background: var(--band-ac-ink); }
+.evm-trend__key--ev::before { background: var(--band-ev-ink); height: 6px; width: 6px; border-radius: 50%; }
+
+.evm-trend__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.evm-trend__grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.evm-trend__tick {
+  fill: var(--faint);
+  font-size: 9px;
+}
+
+.evm-trend__asof {
+  stroke: var(--faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.evm-trend__pv {
+  fill: none;
+  stroke: var(--band-pv-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.evm-trend__ac {
+  fill: none;
+  stroke: var(--band-ac-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.evm-trend__ev {
+  fill: var(--band-ev-ink);
+}
+
+.evm-trend__note,
+.evm-trend__empty {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}

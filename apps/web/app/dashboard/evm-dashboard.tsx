@@ -3,11 +3,13 @@ import { useFetcher } from "react-router";
 import { calculateBaselineEvm, type EffortRatio } from "@vecta/domain";
 import {
   projectEvmDashboard,
+  projectEvmTrend,
   type EvmDashboardProjection,
   type EvmDashboardRow,
   type ProjectionRole,
   type ProjectState,
 } from "@vecta/application";
+import { EvmTrendChart } from "./evm-trend-chart";
 import type { BaselineView } from "~/server/project/load-project-view.server";
 
 /**
@@ -296,6 +298,23 @@ export function EvmDashboard({
           }),
     [baseline, project.tasks, asOf],
   );
+  // Design 0013. Derived on both sides from the same props as the table, so the
+  // chart is server-rendered and hydrates to identical SVG.
+  const trend = useMemo(
+    () =>
+      projectEvmTrend(project, {
+        statusDate: asOf,
+        ...(baseline === null
+          ? {}
+          : {
+              baselineTasks: baseline.tasks.map((task) => ({
+                id: task.taskId,
+                dailyPlan: task.dailyPlan,
+              })),
+            }),
+      }),
+    [project, baseline, asOf],
+  );
   const rows = segment === "task" ? projection.byParentTask : projection.byMember;
 
   return (
@@ -444,6 +463,34 @@ export function EvmDashboard({
           )}
         </div>
       </div>
+
+      <section className="evm-trend" data-testid="evm-trend">
+        <div className="evm-trend__head">
+          <h2 className="evm-trend__title">推移（人日・累積）</h2>
+          <ul className="evm-trend__legend">
+            <li className="evm-trend__key evm-trend__key--pv">
+              PV{trend.pvSource === "baseline" ? "（ベースライン）" : "（現在計画）"}
+            </li>
+            <li className="evm-trend__key evm-trend__key--ac">AC（日付つき実績）</li>
+            <li className="evm-trend__key evm-trend__key--ev">EV（基準日の 1 点）</li>
+          </ul>
+        </div>
+        <EvmTrendChart trend={trend} />
+        {/* EV is a point and not a line, and the reason has to be on the screen:
+            a missing line reads as a bug unless it is named as a limit. */}
+        <p className="evm-trend__note">
+          EV は<b>線になりません</b>。進捗は現在値だけを保持していて履歴が無いため、
+          基準日の 1 点として描いています。
+          {trend.undatedActualDays > 0 ? (
+            <>
+              {" "}
+              また AC の曲線には<b>日付つきの実績だけ</b>が入ります。日付の無い実績{" "}
+              <b data-testid="evm-trend-undated">{formatDays(trend.undatedActualDays)}</b>{" "}
+              人日は、下の表の AC には含まれますが曲線には現れません（いつ使ったかが分からないため）。
+            </>
+          ) : null}
+        </p>
+      </section>
 
       {/* Says plainly what the as-of date does. Without it an earlier date reads
           as a historical snapshot, and it is not one: only PV is recomputed. */}
