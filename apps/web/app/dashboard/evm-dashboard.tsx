@@ -25,7 +25,19 @@ import type { BaselineView } from "~/server/project/load-project-view.server";
  */
 
 /** Rows are never sorted here. Design 0007 §2: the WBS projection owns row order. */
-export type EvmSegment = "task" | "member";
+export type EvmSegment = "task" | "member" | "change";
+
+/**
+ * The segment buttons. "変更別" groups by the first-level ancestor's NAME
+ * (ADR 0011 Decision 8), which the user confirmed on 2026-08-06 is what the
+ * reference spreadsheet does — same-named rows merge. With every name distinct
+ * it is identical to 親タスク別, and that is expected rather than a fault.
+ */
+const SEGMENTS = [
+  { key: "task", label: "親タスク別", caption: "親タスク", testId: "evm-segment-task" },
+  { key: "member", label: "人別", caption: "メンバー", testId: "evm-segment-member" },
+  { key: "change", label: "変更別", caption: "変更", testId: "evm-segment-change" },
+] as const;
 
 /**
  * Effort or money (Design 0010). The COLUMNS do not change — the reference
@@ -375,7 +387,13 @@ export function EvmDashboard({
       }),
     [project, baseline, asOf],
   );
-  const rows = segment === "task" ? projection.byParentTask : projection.byMember;
+  const rows =
+    segment === "task"
+      ? projection.byParentTask
+      : segment === "member"
+        ? projection.byMember
+        : projection.byChange;
+  const segmentCaption = SEGMENTS.find((option) => option.key === segment)?.caption ?? "";
 
   return (
     <div className="app-shell">
@@ -383,7 +401,7 @@ export function EvmDashboard({
         <p className="app-subtitle">
           {project.name ? `${project.name} · ` : ""}EVM · 基準日 {asOf} ·{" "}
           {unit === "days" ? "人日" : "金額"} ·{" "}
-          {segment === "task" ? "親タスク" : "メンバー"} {rows.length} 行
+          {segmentCaption} {rows.length} 行
         </p>
         <div className="app-header__actions">
           <label className="evm-asof">
@@ -430,24 +448,18 @@ export function EvmDashboard({
             </div>
           ) : null}
           <div className="evm-segment" role="group" aria-label="集計の単位">
-            <button
-              type="button"
-              className={`evm-segment__option${segment === "task" ? " evm-segment__option--on" : ""}`}
-              aria-pressed={segment === "task"}
-              data-testid="evm-segment-task"
-              onClick={() => setSegment("task")}
-            >
-              親タスク別
-            </button>
-            <button
-              type="button"
-              className={`evm-segment__option${segment === "member" ? " evm-segment__option--on" : ""}`}
-              aria-pressed={segment === "member"}
-              data-testid="evm-segment-member"
-              onClick={() => setSegment("member")}
-            >
-              人別
-            </button>
+            {SEGMENTS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`evm-segment__option${segment === option.key ? " evm-segment__option--on" : ""}`}
+                aria-pressed={segment === option.key}
+                data-testid={option.testId}
+                onClick={() => setSegment(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
       </header>
@@ -608,7 +620,7 @@ export function EvmDashboard({
           <thead>
             <tr>
               <th scope="col" className="evm-head evm-head--name">
-                {segment === "task" ? "親タスク" : "メンバー"}
+                {segmentCaption}
               </th>
               {/* §5 A-3 — the unit is written once, here, and never in a cell:
                   a unit inside a cell breaks the digit alignment A-1 buys. */}

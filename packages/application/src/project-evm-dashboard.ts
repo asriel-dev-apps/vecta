@@ -90,7 +90,7 @@ export interface EvmMoneyMetrics {
   readonly etc: EffortRatio;
 }
 
-export type EvmDashboardRowKind = "total" | "task" | "member" | "unassigned";
+export type EvmDashboardRowKind = "total" | "task" | "member" | "unassigned" | "change";
 
 export interface EvmDashboardRow extends EvmDashboardMetrics {
   /** Stable React key: the task id, the member id, or {@link UNASSIGNED_ROW_KEY}. */
@@ -140,6 +140,25 @@ export interface EvmDashboardProjection {
   readonly byParentTask: readonly EvmDashboardRow[];
   /** Project members in their display order, then the unassigned row if it has anything. */
   readonly byMember: readonly EvmDashboardRow[];
+  /**
+   * Change-level rollup (ADR 0011 Decision 8, Design 0014): the same leaves
+   * grouped by their first-level ancestor's NAME, so two top-level rows with the
+   * same name are one change.
+   *
+   * ADR 0011 Decision 8 says "group by the task name", and the user confirmed
+   * (2026-08-06) that the reference spreadsheet does merge same-named rows —
+   * SUMIF, not one row per position. Merging is therefore the ONLY behaviour
+   * that distinguishes this from {@link EvmDashboardProjection.byParentTask};
+   * with every name distinct the two are identical, and that is fine.
+   *
+   * The grouping key is the NAME, so renaming a top-level task splits or merges
+   * a change row. That is faithful to a text-matched rollup and is worth knowing
+   * before someone reports it as a bug.
+   *
+   * Names are compared byte for byte. No trim, no NFKC, no case folding: every
+   * one of those would be this module speaking for a spreadsheet it may not read.
+   */
+  readonly byChange: readonly EvmDashboardRow[];
   /**
    * Leaves left OUT of every money figure because no rate could be found for
    * them — no assignee, an assignee the member list does not contain, or an
@@ -326,9 +345,13 @@ export function projectEvmDashboard(
 
   const leaves = leafTaskIds(project.tasks);
   const rootById = firstLevelAncestors(project.tasks);
+  const taskById = new Map(project.tasks.map((task) => [task.id, task]));
 
   const total = emptyAccumulator();
   const byRootId = new Map<string, Accumulator>();
+  const byChangeName = new Map<string, Accumulator>();
+  /** WBS position of the first root that carried each name — the row order. */
+  const changeOrder = new Map<string, { sortOrder: number; id: string }>();
   const byMemberKey = new Map<string, Accumulator>();
   let planStart: string | null = null;
   let planEnd: string | null = null;
@@ -382,6 +405,24 @@ export function projectEvmDashboard(
       byRootId.set(rootId, root);
     }
     buckets.push(root);
+    // The change bucket. Keyed by the ancestor's NAME so same-named roots merge;
+    // ordered by the FIRST root to carry that name, in WBS order, because
+    // Design 0007 §2 makes the WBS projection the authority on row order and a
+    // merged row has no position of its own.
+    const rootTask = taskById.get(rootId);
+    const changeName = rootTask?.name ?? "";
+    let change = byChangeName.get(changeName);
+    if (change === undefined) {
+      change = emptyAccumulator();
+      byChangeName.set(changeName, change);
+    }
+    if (rootTask !== undefined) {
+      const seen = changeOrder.get(changeName);
+      if (seen === undefined || compareTaskOrder(rootTask, seen) < 0) {
+        changeOrder.set(changeName, { sortOrder: rootTask.sortOrder, id: rootTask.id });
+      }
+    }
+    buckets.push(change);
     let member = byMemberKey.get(memberKey);
     if (member === undefined) {
       member = emptyAccumulator();
@@ -413,6 +454,15 @@ export function projectEvmDashboard(
     }
   }
 
+  const byChange = [...byChangeName.entries()]
+    .sort(([leftName], [rightName]) => {
+      const left = changeOrder.get(leftName);
+      const right = changeOrder.get(rightName);
+      if (left === undefined || right === undefined) return leftName.localeCompare(rightName);
+      return compareTaskOrder(left, right);
+    })
+    .map(([name, accumulator]) => toRow(`change:${name}`, "change", name, accumulator));
+
   const byParentTask = project.tasks
     .filter((task) => rootById.get(task.id) === task.id)
     .sort(compareTaskOrder)
@@ -436,6 +486,7 @@ export function projectEvmDashboard(
     total: toRow("__total__", "total", "", total),
     byParentTask,
     byMember,
+    byChange,
     unratedLeafCount,
     ratedLeafCount,
   };

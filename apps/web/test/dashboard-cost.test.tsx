@@ -175,6 +175,29 @@ describe("EVM dashboard — cost layer", () => {
     expect(JSON.stringify(payload)).toContain("costRateMinorPerHour");
   });
 
+  it("offers the change segment, and merges same-named parents into one row", async () => {
+    // ADR 0011 Decision 8 + the user's 2026-08-06 answer: the spreadsheet's
+    // change rollup merges same-named rows. With distinct names this segment is
+    // identical to 親タスク別, so the fixture gives two roots the same name and
+    // the row count is what proves the merge happened on screen.
+    const twoNamed: ProjectState = {
+      ...priced,
+      tasks: [
+        makeTask({ id: "p1", seq: 10, sortOrder: 10, name: "変更A" }),
+        { ...priced.tasks[0]!, parentId: "p1" },
+        makeTask({ id: "p2", seq: 11, sortOrder: 11, name: "変更A" }),
+        { ...priced.tasks[1]!, parentId: "p2" },
+      ],
+    };
+    renderDashboard(twoNamed);
+    fireEvent.click(await screen.findByTestId("evm-segment-task"));
+    const parents = screen.getAllByTestId(/^evm-row-/u).length;
+    fireEvent.click(screen.getByTestId("evm-segment-change"));
+    const changes = screen.getAllByTestId(/^evm-row-/u).length;
+    // One fewer row: the two "変更A" parents became one change.
+    expect(changes).toBe(parents - 1);
+  });
+
   it("does not add a column — the unit changes, the table does not", async () => {
     renderDashboard(priced);
     await screen.findByTestId("evm-unit-money");
