@@ -1,11 +1,18 @@
 import type { DependencyType } from "@vecta/domain";
 import {
+  datedActualTotalMinutes,
+  parseDatedActualKey,
+  replaceDatedActualPartitions,
+  type DatedActualEntry,
+  type DatedActualKeyParts,
+} from "./dated-actuals.js";
+import {
   deriveSubtaskId,
   prorateLargestRemainder,
   type SubtaskTemplate,
 } from "./subtask-templates.js";
 
-export type { DependencyType, SubtaskTemplate };
+export type { DependencyType, SubtaskTemplate, DatedActualEntry };
 
 export interface ProjectCalendar {
   readonly id: string;
@@ -69,6 +76,16 @@ export interface ProjectTask {
    */
   readonly prorationWeightBp: number | null;
   readonly dailyPlan: Readonly<Record<string, number>>;
+  /**
+   * Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → person-minutes.
+   *
+   * The actuals side's `dailyPlan`. Empty for every task that has never been
+   * imported — which is all of production — and while it is empty this task's AC
+   * behaves exactly as before. When it has entries,
+   * {@link ProjectTask.actualEffortMinutes} is their sum, maintained by the
+   * import; see `dated-actuals.ts` for why the detail lives in the state.
+   */
+  readonly datedActuals: Readonly<Record<string, number>>;
   readonly actualStart: string | null;
   readonly actualFinish: string | null;
   readonly dependencies: readonly ProjectDependency[];
@@ -230,8 +247,27 @@ export interface PublishBaselineCommand {
   readonly acknowledgeUnplottedTasks?: boolean;
 }
 
+/**
+ * Import dated actuals from a timesheet (Design 0011).
+ *
+ * The entries are ALREADY resolved to task and member ids: the CSV, its header
+ * names and every rejection live in `timesheet-import.ts`, which runs before a
+ * command exists. This command is therefore about data, not about a file — the
+ * same reason `task.update` carries values rather than keystrokes.
+ *
+ * The replacement unit is one person's one day, computed across the whole batch
+ * and applied to EVERY task. It has to be project-wide: if a corrected file moves
+ * someone's Tuesday from task X to task Y, X's row for that person-day must go,
+ * and X is not in the file.
+ */
+export interface ImportActualsCommand {
+  readonly type: "actuals.import";
+  readonly entries: readonly DatedActualEntry[];
+}
+
 export type ProjectCommand =
   | PublishBaselineCommand
+  | ImportActualsCommand
   | AddTaskCommand
   | UpdateTaskCommand
   | DeleteTaskCommand
@@ -449,6 +485,26 @@ function validateProject(project: ProjectState): void {
         throw new Error(`Task ${task.id} daily plan values must be finite and >= 0`);
       }
     }
+    // Dated actuals (Design 0011). Validated the same way as `dailyPlan` — same
+    // shape, same reasons — plus the one thing the map alone cannot carry: its
+    // key must decode to a real date and a member of THIS project.
+    //
+    // Deliberately NOT validated: that the entries sum to column W. The import
+    // sets them equal, but W is an Input column of the reference spreadsheet
+    // (Design 0002 §2), and making it conditionally read-only would be exactly
+    // the kind of unrequested behaviour change Design 0003 §B-1 exists to
+    // forbid. A later hand edit is allowed to disagree, and the grid flags it —
+    // the same treatment the existing `estimateVsDailyMismatch` gives L vs Σ
+    // daily, which is the same situation one column to the left.
+    for (const [key, value] of Object.entries(task.datedActuals)) {
+      const parts = parseDatedActualKey(key);
+      if (parts === null || !isIsoDate(parts.workDate) || !memberIds.has(parts.memberId)) {
+        throw new Error(`Task ${task.id} dated actuals have an invalid key: ${key}`);
+      }
+      if (!Number.isInteger(value) || value < 0) {
+        throw new Error(`Task ${task.id} dated actuals must be whole minutes >= 0`);
+      }
+    }
     if (task.actualStart !== null && !isIsoDate(task.actualStart)) {
       throw new Error(`Task ${task.id} has an invalid actual start`);
     }
@@ -532,6 +588,7 @@ function generateSubtaskTasks(
     actualEffortMinutes: 0,
     prorationWeightBp: step.weightBp,
     dailyPlan: {},
+    datedActuals: {},
     actualStart: null,
     actualFinish: null,
     dependencies:
@@ -637,6 +694,71 @@ export function applyProjectCommand(
       );
     }
     next = { ...state, nextBaselineVersion: state.nextBaselineVersion + 1 };
+  } else if (command.type === "actuals.import") {
+    // Design 0011. Two passes over the tasks, and the order matters:
+    //
+    //   1. the replacement partitions are collected across the WHOLE batch, so
+    //      moving someone's Tuesday from task X to task Y clears X even though X
+    //      never appears in the file;
+    //   2. every task then has those partitions cleared and its own entries
+    //      written, and its column W is re-derived from what is left.
+    //
+    // W is re-derived only for tasks that HAD or NOW HAVE dated rows. Touching
+    // every task would overwrite the hand-entered actuals of tasks this import
+    // says nothing about — the entire project, on the first import.
+    const leaves = leafTaskIds(state.tasks);
+    const taskById = new Map(state.tasks.map((task) => [task.id, task]));
+    const memberIds = new Set(state.members.map((member) => member.id));
+    for (const entry of command.entries) {
+      const task = taskById.get(entry.taskId);
+      if (task === undefined) {
+        throw new Error(`Actuals import references an unknown task: ${entry.taskId}`);
+      }
+      if (!leaves.has(entry.taskId)) {
+        // A summary row's effort is carried by its children, so actuals on one
+        // would be counted twice by every rollup (ADR 0011 Decision 5).
+        throw new Error(`Actuals import targets a summary task: ${entry.taskId}`);
+      }
+      if (!memberIds.has(entry.memberId)) {
+        throw new Error(`Actuals import references an unknown member: ${entry.memberId}`);
+      }
+      if (!isIsoDate(entry.workDate)) {
+        throw new Error(`Actuals import has an invalid date: ${entry.workDate}`);
+      }
+      validateWholeNonNegative(
+        entry.actualMinutes,
+        `Actuals import minutes must be whole and >= 0: ${entry.workDate}`,
+      );
+    }
+
+    const partitions: DatedActualKeyParts[] = [];
+    const seenPartitions = new Set<string>();
+    const entriesByTask = new Map<string, DatedActualEntry[]>();
+    for (const entry of command.entries) {
+      const partition = `${entry.workDate}|${entry.memberId}`;
+      if (!seenPartitions.has(partition)) {
+        seenPartitions.add(partition);
+        partitions.push({ workDate: entry.workDate, memberId: entry.memberId });
+      }
+      const forTask = entriesByTask.get(entry.taskId);
+      if (forTask === undefined) entriesByTask.set(entry.taskId, [entry]);
+      else forTask.push(entry);
+    }
+
+    next = {
+      ...state,
+      tasks: state.tasks.map((task) => {
+        const had = Object.keys(task.datedActuals).length > 0;
+        const mine = entriesByTask.get(task.id) ?? [];
+        if (!had && mine.length === 0) return task;
+        const datedActuals = replaceDatedActualPartitions(task.datedActuals, partitions, mine);
+        return {
+          ...task,
+          datedActuals,
+          actualEffortMinutes: datedActualTotalMinutes(datedActuals),
+        };
+      }),
+    };
   } else if (command.type === "task.add") {
     // Assign the immutable display No. from the project counter, then advance it
     // (Design 0003 §F-1). Server-authoritative: any client-supplied value is

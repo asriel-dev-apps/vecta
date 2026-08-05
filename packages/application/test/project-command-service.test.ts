@@ -38,6 +38,7 @@ const initialProject: ProjectState = {
       actualEffortMinutes: 300,
       prorationWeightBp: null,
       dailyPlan: { "2026-01-05": 480 },
+      datedActuals: {},
       actualStart: "2026-01-05",
       actualFinish: null,
       dependencies: [],
