@@ -101,6 +101,10 @@ export const projects = pgTable(
     // transactional column counter — advanced under the project row lock the
     // command UoW already holds — is simpler and safer here than a PG sequence.
     nextTaskSeq: integer("next_task_seq").notNull().default(1),
+    // Per-project baseline version counter (Design 0009). Same shape and the same
+    // reasoning as `nextTaskSeq`: a transactional column advanced under the
+    // project row lock the command UoW already holds, rather than a PG sequence.
+    nextBaselineVersion: integer("next_baseline_version").notNull().default(1),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
     updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
   },
@@ -111,6 +115,7 @@ export const projects = pgTable(
     check("projects_currency_uppercase", sql`${table.currency} ~ '^[A-Z]{3}$'`),
     check("projects_revision_non_negative", sql`${table.revision} >= 0`),
     check("projects_next_task_seq_positive", sql`${table.nextTaskSeq} >= 1`),
+    check("projects_next_baseline_version_positive", sql`${table.nextBaselineVersion} >= 1`),
     check("projects_status_after_start", sql`${table.statusDate} >= ${table.projectStart}`),
   ],
 );
@@ -152,6 +157,10 @@ export const members = pgTable(
     name: text().notNull(),
     calendarId: text("calendar_id").notNull(),
     dailyCapacityMinutes: integer("daily_capacity_minutes").notNull(),
+    // Cost rate in the project currency's minor unit per person-hour (Design
+    // 0010). Nullable on purpose: "not recorded" and "free" are different, and
+    // only one of them may be summed.
+    costRateMinorPerHour: integer("cost_rate_minor_per_hour"),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
     updatedAt: auditTimestamp("updated_at").notNull().defaultNow(),
   },
@@ -169,6 +178,10 @@ export const members = pgTable(
     }).onDelete("restrict"),
     check("members_name_not_blank", sql`length(trim(${table.name})) > 0`),
     check("members_daily_capacity_range", sql`${table.dailyCapacityMinutes} between 1 and 1440`),
+    check(
+      "members_cost_rate_non_negative",
+      sql`${table.costRateMinorPerHour} is null or ${table.costRateMinorPerHour} >= 0`,
+    ),
   ],
 );
 
@@ -291,6 +304,12 @@ export const tasks = pgTable(
     actualEffortMinutes: integer("actual_effort_minutes").notNull().default(0),
     prorationWeightBp: integer("proration_weight_bp"),
     dailyPlan: jsonb("daily_plan").notNull().default(sql`'{}'::jsonb`),
+    // Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → minutes.
+    // The actuals side's `daily_plan`, and stored the same way for the same
+    // reason: the command unit of work rewrites every task row on every command,
+    // so anything AC is derived from has to travel with the task or the next
+    // unrelated edit writes a stale total back over it.
+    datedActuals: jsonb("dated_actuals").notNull().default(sql`'{}'::jsonb`),
     actualStart: date("actual_start", { mode: "string" }),
     actualFinish: date("actual_finish", { mode: "string" }),
     createdAt: auditTimestamp("created_at").notNull().defaultNow(),
@@ -390,6 +409,89 @@ export const taskDependencies = pgTable(
       sql`${table.predecessorTaskId} <> ${table.successorTaskId}`,
     ),
     check("task_dependencies_lag_non_negative", sql`${table.lagWorkingDays} >= 0`),
+  ],
+);
+
+/**
+ * An approved baseline: the plan as it stood when a human published it
+ * (Design 0009, ADR 0007's surviving decisions re-expressed for the effort model).
+ *
+ * Rows here and in `baselineTasks` are IMMUTABLE. That is enforced by a trigger
+ * installed in the same migration, not by the repository declining to write —
+ * "we never call update" is a convention, and a convention is what this table
+ * exists to replace.
+ */
+export const projectBaselines = pgTable(
+  "project_baselines",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    version: integer().notNull(),
+    // The project revision the snapshot was taken AT — the command's
+    // `expectedRevision`, so the contents correspond to that exact state.
+    sourceRevision: bigint("source_revision", { mode: "bigint" }).notNull(),
+    // Mirrors `audit_events`: actor type + a TEXT id, with no foreign key to
+    // `principals`. The application's `AuditActor.id` is a plain string and its
+    // type includes SYSTEM, which has no principals row at all — a uuid column
+    // with an FK would reject a legitimate caller at runtime, which is a database
+    // constraint stricter than the type that feeds it.
+    publishedByActorType: auditActorType("published_by_actor_type").notNull(),
+    publishedByActorId: text("published_by_actor_id").notNull(),
+    publishedAt: auditTimestamp("published_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.version] }),
+    foreignKey({
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+      name: "project_baselines_project_fk",
+    }).onDelete("restrict"),
+    check("project_baselines_version_positive", sql`${table.version} >= 1`),
+    check("project_baselines_source_revision_non_negative", sql`${table.sourceRevision} >= 0`),
+  ],
+);
+
+/**
+ * One frozen task per baseline. Deliberately small — see Design 0009 §3.
+ *
+ * `daily_plan` is the whole of the plan side: measured 2026-08-05, BAC and PV come
+ * from Σ dailyPlan and NOT from `planned_effort_minutes`. The estimate is frozen
+ * anyway for the K column and the "L ≠ Σdaily" consistency flag; `assignee_member_id`
+ * so member-segment PV does not follow a later reassignment; `name`/`seq` purely so
+ * a task DELETED after publishing can still be named in the variance it causes.
+ *
+ * **No foreign key to `tasks`.** A cascade would make the immutability trigger
+ * refuse an ordinary task deletion, and a restrict would forbid it outright. A
+ * baseline is a copy of a moment, not a reference to the present.
+ */
+export const baselineTasks = pgTable(
+  "baseline_tasks",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    version: integer().notNull(),
+    taskId: uuid("task_id").notNull(),
+    parentTaskId: uuid("parent_task_id"),
+    dailyPlan: jsonb("daily_plan").notNull().default(sql`'{}'::jsonb`),
+    plannedEffortMinutes: integer("planned_effort_minutes").notNull().default(0),
+    assigneeMemberId: uuid("assignee_member_id"),
+    name: text().notNull(),
+    seq: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.version, table.taskId] }),
+    foreignKey({
+      columns: [table.tenantId, table.projectId, table.version],
+      foreignColumns: [projectBaselines.tenantId, projectBaselines.projectId, projectBaselines.version],
+      name: "baseline_tasks_baseline_fk",
+    }).onDelete("restrict"),
+    index("baseline_tasks_project_version_idx").on(table.tenantId, table.projectId, table.version),
+    check("baseline_tasks_planned_effort_non_negative", sql`${table.plannedEffortMinutes} >= 0`),
+    check("baseline_tasks_seq_positive", sql`${table.seq} >= 1`),
+    check(
+      "baseline_tasks_not_own_parent",
+      sql`${table.parentTaskId} is null or ${table.parentTaskId} <> ${table.taskId}`,
+    ),
   ],
 );
 

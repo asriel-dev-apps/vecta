@@ -1,4 +1,5 @@
 import type { RouterContextProvider } from "react-router";
+import type { BaselineSnapshot } from "@vecta/persistence";
 import type { ProjectState } from "@vecta/application";
 import type {
   ProjectMembership,
@@ -32,6 +33,13 @@ export interface ProjectMembershipView {
 export interface ProjectWorkspaceRecord {
   readonly revision: bigint;
   readonly current: ProjectState;
+  /**
+   * The latest published baseline, or `null` when the plan has never been frozen
+   * (Design 0009). It rides the SAME batch as the rest of the workspace, so it
+   * costs no additional round trip — a project document already costs two and the
+   * 2026-07-26 fold exists to keep it at two.
+   */
+  readonly baseline: BaselineSnapshot | null;
 }
 
 /** The persistence seam the gate reads the workspace through (fakeable in tests). */

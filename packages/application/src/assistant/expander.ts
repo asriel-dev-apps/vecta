@@ -106,6 +106,7 @@ function newTaskDefaults(): Omit<
     actualEffortMinutes: 0,
     prorationWeightBp: null,
     dailyPlan: {},
+    datedActuals: {},
     actualStart: null,
     actualFinish: null,
     dependencies: [],
@@ -277,6 +278,11 @@ function expandMasters(
             MAX_DAILY_CAPACITY_MINUTES,
             Math.max(1, Math.round(hours * MINUTES_PER_HOUR)),
           ),
+          // The assistant never sets a rate. A cost rate is commercially
+          // sensitive (ADR 0011 Decision 7) and nothing in a third-party CSV
+          // establishes one, so a model-supplied figure would be a guess about
+          // money — the exact case Design 0005 keeps the model out of.
+          costRateMinorPerHour: null,
         },
       });
       return;

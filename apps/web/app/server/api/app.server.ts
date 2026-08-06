@@ -154,6 +154,7 @@ const ProjectStateResponseSchema = z.object({
   templates: z.array(TemplateResponseSchema),
   tasks: z.array(TaskResponseSchema),
   nextTaskSeq: z.number().int(),
+  nextBaselineVersion: z.number().int(),
 });
 
 const WorkspaceResponseSchema = z
@@ -241,6 +242,7 @@ export function projectStateResponse(
       dependencies: task.dependencies.map((dependency) => ({ ...dependency })),
     })),
     nextTaskSeq: project.nextTaskSeq,
+    nextBaselineVersion: project.nextBaselineVersion,
   };
 }
 

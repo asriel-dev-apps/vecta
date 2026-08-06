@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   applyEffortSchedule,
+  leafTaskIds,
   IdempotencyConflictError,
   ProjectNotFoundError,
   ProjectVersionConflictError,
@@ -14,6 +15,8 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   auditEvents,
+  baselineTasks,
+  projectBaselines,
   commandReceipts,
   members,
   processes,
@@ -134,6 +137,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           currency: projects.currency,
           defaultCalendarId: projects.defaultCalendarId,
           nextTaskSeq: projects.nextTaskSeq,
+          nextBaselineVersion: projects.nextBaselineVersion,
         })
         .from(projects)
         .where(and(eq(projects.tenantId, request.tenantId), eq(projects.id, request.projectId)))
@@ -236,6 +240,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           name: member.name,
           calendarId: member.calendarId,
           dailyCapacityMinutes: member.dailyCapacityMinutes,
+          costRateMinorPerHour: member.costRateMinorPerHour,
         })),
         processes: processRows.map((process) => ({
           id: process.id,
@@ -254,6 +259,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           subtasks: template.subtasks as readonly SubtaskTemplateStep[],
         })),
         nextTaskSeq: projectRow.nextTaskSeq,
+        nextBaselineVersion: projectRow.nextBaselineVersion,
         tasks: taskRows.map((task) => ({
           id: task.id,
           parentId: task.parentTaskId,
@@ -270,6 +276,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           actualEffortMinutes: task.actualEffortMinutes,
           prorationWeightBp: task.prorationWeightBp,
           dailyPlan: task.dailyPlan as Record<string, number>,
+          datedActuals: task.datedActuals as Record<string, number>,
           actualStart: task.actualStart,
           actualFinish: task.actualFinish,
           dependencies: dependenciesByTask.get(task.id) ?? [],
@@ -515,6 +522,10 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           actualEffortMinutes: task.actualEffortMinutes,
           prorationWeightBp: task.prorationWeightBp,
           dailyPlan: task.dailyPlan,
+          // Design 0011. Carried in the same per-task write as `dailyPlan`, which
+          // is why an import survives the next unrelated command: both the total
+          // and the rows it comes from travel with the task.
+          datedActuals: task.datedActuals,
           actualStart: task.actualStart,
           actualFinish: task.actualFinish,
         };
@@ -568,6 +579,48 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         await transaction.insert(taskDependencies).values(dependencyValues);
       }
 
+      // Design 0009. The snapshot is taken from `current` — the state AT
+      // `expectedRevision` — not from `next`, even though for this command they
+      // differ only by the counter. Reading the pre-transition state is what makes
+      // "the frozen plan and the revision it is pinned to agree" true by
+      // construction rather than by the transition happening to be a no-op.
+      //
+      // Only LEAF rows are frozen. A summary row does not roll up (`calculateEvm`
+      // skips it), so storing one would put a number in the table that no reader
+      // may add, and the first person to sum the column would double-count.
+      if (request.command.type === "baseline.publish") {
+        // `leafTaskIds` rather than a local re-derivation: this set decides what
+        // the baseline's BAC is, and the rollup's BAC comes from the same
+        // predicate. Two hand-written copies agree by transcription, which is not
+        // a property anything enforces.
+        const leaves = leafTaskIds(current.tasks);
+        await transaction.insert(projectBaselines).values({
+          tenantId: request.tenantId,
+          projectId: request.projectId,
+          version: current.nextBaselineVersion,
+          sourceRevision: actualRevision,
+          publishedByActorType: request.actor.type,
+          publishedByActorId: request.actor.id,
+        });
+        const frozen = current.tasks
+          .filter((task) => leaves.has(task.id))
+          .map((task) => ({
+            tenantId: request.tenantId,
+            projectId: request.projectId,
+            version: current.nextBaselineVersion,
+            taskId: task.id,
+            parentTaskId: task.parentId,
+            dailyPlan: task.dailyPlan,
+            plannedEffortMinutes: task.plannedEffortMinutes,
+            assigneeMemberId: task.assigneeMemberId,
+            name: task.name,
+            seq: task.seq,
+          }));
+        if (frozen.length > 0) {
+          await transaction.insert(baselineTasks).values(frozen);
+        }
+      }
+
       const resultRevision = actualRevision + 1n;
       // Advance the per-project display-No. counter transactionally alongside the
       // revision bump, under the project row lock held above (§F-1). A task.add or
@@ -575,7 +628,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       // tasks created; every other command leaves it unchanged.
       await transaction
         .update(projects)
-        .set({ revision: resultRevision, nextTaskSeq: next.nextTaskSeq, updatedAt: sql`now()` })
+        .set({
+          revision: resultRevision,
+          nextTaskSeq: next.nextTaskSeq,
+          nextBaselineVersion: next.nextBaselineVersion,
+          updatedAt: sql`now()`,
+        })
         .where(
           and(
             eq(projects.tenantId, request.tenantId),

@@ -5,6 +5,7 @@ import { runCommandAction } from "~/server/project/command-action.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { MasterRoute } from "~/masters/master-route";
 import { MasterList } from "~/masters/master-list";
+import { projectTitle } from "~/shell/document-title";
 import masterStyles from "~/wbs/styles.css?url";
 
 // ADR 0012 Step 4c-1 — `/projects/:id/masters` = the project master data 工程 +
@@ -14,6 +15,10 @@ import masterStyles from "~/wbs/styles.css?url";
 // MemberList only. The master stylesheet is linked from the route so the panels
 // are styled server-side with no flash-of-unstyled (same pattern as the wbs route).
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: masterStyles }];
+
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: projectTitle("マスタ", loaderData.stateView.name) }];
+}
 
 export async function loader({ context }: Route.LoaderArgs) {
   return loadProjectView(context);

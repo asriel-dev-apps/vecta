@@ -10,6 +10,7 @@ import { clearOidcTx } from "~/server/auth/oidc-tx.server";
 import { createNeonPrincipalDirectory } from "~/server/auth/principal-directory.neon.server";
 import { appContext, dbSessionContext } from "~/server/context.server";
 import { writeSecurityEvent } from "~/server/security-log.server";
+import { appTitle } from "~/shell/document-title";
 import { NoticeScreen } from "~/shell/notice-screen";
 
 // Module-scoped so the remote JWKS is fetched and cached per isolate across
@@ -23,6 +24,15 @@ const SCREEN_STATUS: Record<CallbackScreen, number> = {
   forbidden: 403,
   unavailable: 503,
 };
+
+// This route is NOT redirect-only: when the OIDC exchange is refused it RENDERS
+// (measured — `GET /auth/callback?code=x&state=y` answers 400 with the notice
+// screen). Without its own `meta` a failed sign-in inherits the root fallback and
+// the tab reads "プロジェクト管理", which is the one thing the person in front of
+// it has just failed to reach.
+export function meta() {
+  return [{ title: appTitle("サインインの確認") }];
+}
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(appContext);

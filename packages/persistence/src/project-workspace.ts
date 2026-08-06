@@ -12,9 +12,40 @@ import {
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { schema } from "./schema.js";
 
+/**
+ * A published baseline, as the screens need it (Design 0009).
+ *
+ * It sits BESIDE `current` rather than inside `ProjectState`, deliberately.
+ * `ProjectState` is the thing commands transition and both render sides derive
+ * from; a baseline is neither — it is a frozen copy that no command may change.
+ * Putting it in the state would invite exactly the edit this feature exists to
+ * make impossible.
+ */
+export interface BaselineSnapshot {
+  readonly version: number;
+  /** The project revision the plan was frozen at. */
+  readonly sourceRevision: bigint;
+  readonly publishedAt: string;
+  /** Leaves only — summary rows do not roll up, so freezing one would double-count. */
+  readonly tasks: readonly BaselineSnapshotTask[];
+}
+
+export interface BaselineSnapshotTask {
+  readonly taskId: string;
+  readonly parentTaskId: string | null;
+  readonly dailyPlan: Readonly<Record<string, number>>;
+  readonly plannedEffortMinutes: number;
+  readonly assigneeMemberId: string | null;
+  /** Frozen so a task DELETED after publishing can still be named in its variance. */
+  readonly name: string;
+  readonly seq: number;
+}
+
 export interface ProjectWorkspace {
   readonly revision: bigint;
   readonly current: ProjectState;
+  /** The latest published baseline, or `null` when the plan has never been frozen. */
+  readonly baseline: BaselineSnapshot | null;
 }
 
 /**
@@ -53,12 +84,15 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       workingWeekdays,
       nonWorkingDates,
     })),
-    members: record.members.map(({ id, name, calendarId, dailyCapacityMinutes }) => ({
-      id,
-      name,
-      calendarId,
-      dailyCapacityMinutes,
-    })),
+    members: record.members.map(
+      ({ id, name, calendarId, dailyCapacityMinutes, costRateMinorPerHour }) => ({
+        id,
+        name,
+        calendarId,
+        dailyCapacityMinutes,
+        costRateMinorPerHour,
+      }),
+    ),
     processes: record.processes.map(({ id, name, sortOrder }) => ({ id, name, sortOrder })),
     products: record.products.map(({ id, name, sortOrder }) => ({ id, name, sortOrder })),
     templates: record.templates.map(({ id, name, sortOrder, subtasks }) => ({
@@ -68,6 +102,7 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       subtasks: subtasks.map((step) => ({ ...step })),
     })),
     nextTaskSeq: record.project.nextTaskSeq,
+    nextBaselineVersion: record.project.nextBaselineVersion,
     tasks: record.tasks.map((task) => ({
       id: task.id,
       parentId: task.parentTaskId,
@@ -84,6 +119,7 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
       actualEffortMinutes: task.actualEffortMinutes,
       prorationWeightBp: task.prorationWeightBp,
       dailyPlan: task.dailyPlan,
+      datedActuals: task.datedActuals,
       actualStart: task.actualStart,
       actualFinish: task.actualFinish,
       dependencies: dependenciesByTask.get(task.id) ?? [],
@@ -91,8 +127,54 @@ export function toProjectState(record: ProjectStateSource): ProjectState {
   };
 }
 
-export function toProjectWorkspace(record: ProjectStateSource): ProjectWorkspace {
-  return { revision: record.project.revision, current: toProjectState(record) };
+export function toProjectWorkspace(
+  record: ProjectStateSource,
+  baseline: BaselineSnapshot | null = null,
+): ProjectWorkspace {
+  return { revision: record.project.revision, current: toProjectState(record), baseline };
+}
+
+/**
+ * Build the snapshot from the two baseline result sets, or `null` when the plan
+ * has never been frozen. Only rows of the LATEST version are kept: the tables
+ * hold every version so a later screen can show history, and the read path takes
+ * `max(version)` (Design 0009 §8).
+ */
+export function toBaselineSnapshot(
+  headers: readonly {
+    version: number;
+    sourceRevision: bigint;
+    publishedAt: string | Date;
+  }[],
+  rows: readonly {
+    version: number;
+    taskId: string;
+    parentTaskId: string | null;
+    dailyPlan: unknown;
+    plannedEffortMinutes: number;
+    assigneeMemberId: string | null;
+    name: string;
+    seq: number;
+  }[],
+): BaselineSnapshot | null {
+  const header = headers[0];
+  if (header === undefined) return null;
+  return {
+    version: header.version,
+    sourceRevision: header.sourceRevision,
+    publishedAt: new Date(header.publishedAt).toISOString(),
+    tasks: rows
+      .filter((row) => row.version === header.version)
+      .map((row) => ({
+        taskId: row.taskId,
+        parentTaskId: row.parentTaskId,
+        dailyPlan: row.dailyPlan as Readonly<Record<string, number>>,
+        plannedEffortMinutes: row.plannedEffortMinutes,
+        assigneeMemberId: row.assigneeMemberId,
+        name: row.name,
+        seq: row.seq,
+      })),
+  };
 }
 
 /** What every workspace reader offers, whatever transport it runs on. */
@@ -145,6 +227,8 @@ export class NeonHttpProjectWorkspaceReader implements ProjectWorkspaceReader {
       templates,
       tasks,
       dependencies,
+      baselineHeaders,
+      baselineRows,
     ] = await this.database.batch([
       projectHeaderQuery(this.database, tenantId, projectId),
       details.calendars,
@@ -154,6 +238,8 @@ export class NeonHttpProjectWorkspaceReader implements ProjectWorkspaceReader {
       details.templates,
       details.tasks,
       details.dependencies,
+      details.baseline,
+      details.baselineTasks,
     ]);
 
     const projectHeader = headerRows[0];
@@ -170,6 +256,7 @@ export class NeonHttpProjectWorkspaceReader implements ProjectWorkspaceReader {
         tasks,
         dependencies,
       }),
+      toBaselineSnapshot(baselineHeaders, baselineRows),
     );
   }
 }

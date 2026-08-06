@@ -177,6 +177,7 @@ export function toProjectDetailRecord(
       defaultCalendarId: projectHeader.defaultCalendarId,
       revision: projectHeader.revision,
       nextTaskSeq: projectHeader.nextTaskSeq,
+      nextBaselineVersion: projectHeader.nextBaselineVersion,
     },
     calendars: rows.calendars.map((row) =>
       withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
@@ -200,6 +201,7 @@ export function toProjectDetailRecord(
       (row): TaskRecord => ({
         ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
         dailyPlan: row.dailyPlan as Record<string, number>,
+        datedActuals: row.datedActuals as Record<string, number>,
       }),
     ),
     dependencies: rows.dependencies.map(

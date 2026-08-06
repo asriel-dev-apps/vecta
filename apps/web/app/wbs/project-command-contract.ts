@@ -62,6 +62,11 @@ export const MemberSchema = z.object({
   name: z.string().trim().min(1).max(200),
   calendarId: CalendarIdSchema,
   dailyCapacityMinutes: z.number().int().min(1).max(1_440),
+  // Design 0010. Minor units per person-hour; `null` is "not recorded" and is
+  // NOT the same as zero — zero would price a member's work at nothing and be
+  // summed in silence. The cap is arbitrary but finite: an unbounded integer on
+  // a write surface is a way to make a later sum overflow into nonsense.
+  costRateMinorPerHour: z.number().int().min(0).max(100_000_000).nullable(),
 }).strict();
 
 export const MemberChangesSchema = MemberSchema.omit({ id: true })
@@ -143,6 +148,16 @@ export const ApiCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("template.add"), template: TemplateSchema }),
   z.object({ type: z.literal("template.update"), templateId: UuidSchema, changes: TemplateChangesSchema }),
   z.object({ type: z.literal("template.delete"), templateId: UuidSchema }),
+  // Design 0009. It rides the same command envelope as everything else so it
+  // inherits the revision pin, the idempotency receipt and the audit actor
+  // rather than growing a second write path — the same reasoning that kept the
+  // assistant off one. `acknowledgeUnplottedTasks` is the human's answer to
+  // "these leaves would be frozen at zero budget"; it is optional because the
+  // question is only asked when there are such leaves.
+  z.object({
+    type: z.literal("baseline.publish"),
+    acknowledgeUnplottedTasks: z.boolean().optional(),
+  }),
 ]);
 
 // ADR 0012 Step 4b — the write-path batch envelope. The client posts a whole
@@ -200,6 +215,10 @@ function toTask(task: z.infer<typeof TaskSchema>): Omit<ProjectTask, "seq"> {
     actualEffortMinutes: task.actualEffortMinutes,
     prorationWeightBp: task.prorationWeightBp,
     dailyPlan: { ...task.dailyPlan },
+    // Never from the wire. Dated actuals exist only through the timesheet
+    // import, whose command is built server-side from a parsed CSV — so a new
+    // task starts with none and no client can post any (Design 0011 §6.1).
+    datedActuals: {},
     actualStart: task.actualStart,
     actualFinish: task.actualFinish,
     dependencies: task.dependencies.map((dependency) => ({ ...dependency })),
@@ -290,6 +309,11 @@ function cloneTemplateChanges(changes: TemplateChangesInput) {
 }
 
 export function toCommand(command: z.infer<typeof ApiCommandSchema>): ProjectCommand {
+  if (command.type === "baseline.publish") {
+    return command.acknowledgeUnplottedTasks === undefined
+      ? { type: command.type }
+      : { type: command.type, acknowledgeUnplottedTasks: command.acknowledgeUnplottedTasks };
+  }
   if (command.type === "task.add") {
     return { type: command.type, task: toTask(command.task) };
   }
@@ -317,6 +341,9 @@ export function toCommand(command: z.infer<typeof ApiCommandSchema>): ProjectCom
         ...(command.changes.dailyCapacityMinutes === undefined
           ? {}
           : { dailyCapacityMinutes: command.changes.dailyCapacityMinutes }),
+        ...(command.changes.costRateMinorPerHour === undefined
+          ? {}
+          : { costRateMinorPerHour: command.changes.costRateMinorPerHour }),
       },
     };
   }
@@ -421,6 +448,19 @@ function fromTaskChanges(
 }
 
 export function fromCommand(command: ProjectCommand): z.infer<typeof ApiCommandSchema> {
+  if (command.type === "actuals.import") {
+    // Deliberately absent from `ApiCommandSchema`, so there is nothing to convert
+    // it to. A timesheet import is built server-side from a parsed CSV by the
+    // `/projects/:id/timesheet` action (Design 0011 §6.1); putting it on the wire
+    // command surface would let a client post arbitrary resolved actuals and skip
+    // every rejection the importer exists to make.
+    throw new Error("actuals.import is not a wire command");
+  }
+  if (command.type === "baseline.publish") {
+    return command.acknowledgeUnplottedTasks === undefined
+      ? { type: command.type }
+      : { type: command.type, acknowledgeUnplottedTasks: command.acknowledgeUnplottedTasks };
+  }
   if (command.type === "task.add") {
     return { type: command.type, task: fromTask(command.task) };
   }

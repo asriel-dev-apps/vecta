@@ -1,0 +1,21 @@
+-- Design 0011 — timesheet import (dated actuals).
+--
+-- EXPAND ONLY, and about as small as an expand gets: one column with a default,
+-- no existing column, constraint, index or trigger touched. The OLD Worker keeps
+-- working against this schema (it simply never selects the column), so a Worker
+-- rollback needs no schema rollback — which matters because
+-- `operations/release-and-rollback.md` is forward-only and there is no down
+-- migration.
+--
+-- Why a jsonb map on `tasks` and not a `task_actuals` table: the command unit of
+-- work rewrites EVERY task row on EVERY command, `actual_effort_minutes` among
+-- them, taken from the in-memory ProjectState. So the total has to live in the
+-- state; so the rows it is summed from have to live there too; so reconciling
+-- them from a separate table would mean deleting and re-inserting thousands of
+-- rows on every keystroke-sized save. `daily_plan` already solved this exact
+-- problem for the plan side, and this is its mirror on the actuals side.
+--
+-- Keys are `"YYYY-MM-DD|<member uuid>"`. `|` is a safe separator because neither
+-- an ISO date nor a UUID can contain one; encoding and decoding live in
+-- `packages/application/src/dated-actuals.ts` so that claim has one home.
+ALTER TABLE "tasks" ADD COLUMN "dated_actuals" jsonb DEFAULT '{}'::jsonb NOT NULL;

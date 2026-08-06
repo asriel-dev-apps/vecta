@@ -1,11 +1,20 @@
 import type { DependencyType } from "@vecta/domain";
 import {
+  datedActualKey,
+  datedActualTotalMinutes,
+  parseDatedActualKey,
+  replaceDatedActualPartitions,
+  touchesDatedActualPartitions,
+  type DatedActualEntry,
+  type DatedActualKeyParts,
+} from "./dated-actuals.js";
+import {
   deriveSubtaskId,
   prorateLargestRemainder,
   type SubtaskTemplate,
 } from "./subtask-templates.js";
 
-export type { DependencyType, SubtaskTemplate };
+export type { DependencyType, SubtaskTemplate, DatedActualEntry };
 
 export interface ProjectCalendar {
   readonly id: string;
@@ -19,6 +28,20 @@ export interface ProjectMember {
   readonly name: string;
   readonly calendarId: string;
   readonly dailyCapacityMinutes: number;
+  /**
+   * Cost rate in the project's currency's minor unit, per PERSON-HOUR, or `null`
+   * when none has been recorded (Design 0010).
+   *
+   * `null` is not zero, and the difference is the whole point: a zero rate would
+   * make a member's work cost nothing and be summed silently, while `null` means
+   * "not known" and takes that member's leaves OUT of the money aggregate with a
+   * visible count. Same failure shape as the empty daily plot in Design 0009 §3.1.
+   *
+   * SENSITIVE (ADR 0011 Decision 7). It is removed from the GENERAL read model at
+   * the structure level by `stripSensitiveMemberFields`, so a viewer never
+   * receives the key at all.
+   */
+  readonly costRateMinorPerHour: number | null;
 }
 
 /** Project-scoped 工程 master (name-only). Supplies the grid's 工程 dropdown. */
@@ -69,6 +92,16 @@ export interface ProjectTask {
    */
   readonly prorationWeightBp: number | null;
   readonly dailyPlan: Readonly<Record<string, number>>;
+  /**
+   * Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → person-minutes.
+   *
+   * The actuals side's `dailyPlan`. Empty for every task that has never been
+   * imported — which is all of production — and while it is empty this task's AC
+   * behaves exactly as before. When it has entries,
+   * {@link ProjectTask.actualEffortMinutes} is their sum, maintained by the
+   * import; see `dated-actuals.ts` for why the detail lives in the state.
+   */
+  readonly datedActuals: Readonly<Record<string, number>>;
   readonly actualStart: string | null;
   readonly actualFinish: string | null;
   readonly dependencies: readonly ProjectDependency[];
@@ -94,6 +127,12 @@ export interface ProjectState {
    * numbers and a delete never rewinds it (gaps persist).
    */
   readonly nextTaskSeq: number;
+  /**
+   * Next baseline version to hand out (Design 0009). Same shape and the same
+   * reasoning as `nextTaskSeq`: a counter advanced inside the command's own
+   * transaction rather than a database sequence.
+   */
+  readonly nextBaselineVersion: number;
 }
 
 /**
@@ -199,7 +238,52 @@ export interface DeleteTemplateCommand {
   readonly templateId: string;
 }
 
+/**
+ * Freeze the current plan as an approved baseline (Design 0009).
+ *
+ * It is a ProjectCommand rather than a separate endpoint so that it inherits the
+ * revision pin, the idempotency receipt and the audit actor unchanged — the same
+ * reasoning that kept the assistant off a second write path. The STATE transition
+ * is only the counter; the snapshot rows are written by the unit of work in the
+ * same transaction, from the state this command was applied to.
+ *
+ * `acknowledgeUnplottedTasks` exists because BAC and PV come from the daily plot,
+ * not from the estimate (measured 2026-08-05): a task with an estimate and an
+ * empty plot contributes ZERO, and freezing that bakes the hole in permanently —
+ * every later SV is that much kinder. Publishing such a plan is allowed, but not
+ * by accident.
+ */
+export interface PublishBaselineCommand {
+  readonly type: "baseline.publish";
+  /**
+   * Set only after a human has been shown the count of leaves whose plot is empty
+   * or disagrees with their estimate. Absent or false with such leaves present is
+   * rejected.
+   */
+  readonly acknowledgeUnplottedTasks?: boolean;
+}
+
+/**
+ * Import dated actuals from a timesheet (Design 0011).
+ *
+ * The entries are ALREADY resolved to task and member ids: the CSV, its header
+ * names and every rejection live in `timesheet-import.ts`, which runs before a
+ * command exists. This command is therefore about data, not about a file — the
+ * same reason `task.update` carries values rather than keystrokes.
+ *
+ * The replacement unit is one person's one day, computed across the whole batch
+ * and applied to EVERY task. It has to be project-wide: if a corrected file moves
+ * someone's Tuesday from task X to task Y, X's row for that person-day must go,
+ * and X is not in the file.
+ */
+export interface ImportActualsCommand {
+  readonly type: "actuals.import";
+  readonly entries: readonly DatedActualEntry[];
+}
+
 export type ProjectCommand =
+  | PublishBaselineCommand
+  | ImportActualsCommand
   | AddTaskCommand
   | UpdateTaskCommand
   | DeleteTaskCommand
@@ -251,6 +335,14 @@ function validateMembers(project: ProjectState): void {
       member.dailyCapacityMinutes > 1_440
     ) {
       throw new Error(`Member ${member.id} daily capacity must be a whole number from 1 to 1440`);
+    }
+    // Minor units, so a whole number — money must not carry a binary fraction
+    // into a sum (Design 0010 §2). `null` is "not recorded" and is allowed.
+    if (
+      member.costRateMinorPerHour !== null &&
+      (!Number.isInteger(member.costRateMinorPerHour) || member.costRateMinorPerHour < 0)
+    ) {
+      throw new Error(`Member ${member.id} cost rate must be a whole non-negative amount`);
     }
   }
 }
@@ -417,6 +509,26 @@ function validateProject(project: ProjectState): void {
         throw new Error(`Task ${task.id} daily plan values must be finite and >= 0`);
       }
     }
+    // Dated actuals (Design 0011). Validated the same way as `dailyPlan` — same
+    // shape, same reasons — plus the one thing the map alone cannot carry: its
+    // key must decode to a real date and a member of THIS project.
+    //
+    // Deliberately NOT validated: that the entries sum to column W. The import
+    // sets them equal, but W is an Input column of the reference spreadsheet
+    // (Design 0002 §2), and making it conditionally read-only would be exactly
+    // the kind of unrequested behaviour change Design 0003 §B-1 exists to
+    // forbid. A later hand edit is allowed to disagree, and the grid flags it —
+    // the same treatment the existing `estimateVsDailyMismatch` gives L vs Σ
+    // daily, which is the same situation one column to the left.
+    for (const [key, value] of Object.entries(task.datedActuals)) {
+      const parts = parseDatedActualKey(key);
+      if (parts === null || !isIsoDate(parts.workDate) || !memberIds.has(parts.memberId)) {
+        throw new Error(`Task ${task.id} dated actuals have an invalid key: ${key}`);
+      }
+      if (!Number.isInteger(value) || value < 0) {
+        throw new Error(`Task ${task.id} dated actuals must be whole minutes >= 0`);
+      }
+    }
     if (task.actualStart !== null && !isIsoDate(task.actualStart)) {
       throw new Error(`Task ${task.id} has an invalid actual start`);
     }
@@ -500,6 +612,7 @@ function generateSubtaskTasks(
     actualEffortMinutes: 0,
     prorationWeightBp: step.weightBp,
     dailyPlan: {},
+    datedActuals: {},
     actualStart: null,
     actualFinish: null,
     dependencies:
@@ -557,12 +670,129 @@ function reprorateSubtasks(tasks: readonly ProjectTask[]): readonly ProjectTask[
   });
 }
 
+/**
+ * Leaf tasks whose daily plot would freeze a budget that is not the one the
+ * estimate claims — either empty, or disagreeing with `plannedEffortMinutes`.
+ *
+ * Measured 2026-08-05: BAC and PV are Σ dailyPlan, and `plannedEffortMinutes`
+ * never reaches either. A leaf with a 480-minute estimate and an empty plot is
+ * worth ZERO to the baseline, so freezing it makes every later SV kinder by that
+ * amount, permanently and invisibly. Summary rows are excluded because they do
+ * not roll up at all.
+ */
+export function unplottedLeafTasks(state: ProjectState): readonly ProjectTask[] {
+  // The SAME leaf predicate the rollup uses, called rather than copied. It was
+  // written out by hand here at first and agreed by transcription; a transcribed
+  // agreement is one edit away from a baseline BAC that disagrees with the
+  // rollup's, and nothing would say which is right.
+  const leaves = leafTaskIds(state.tasks);
+  return state.tasks.filter((task) => {
+    if (!leaves.has(task.id)) return false;
+    const plotted = Object.values(task.dailyPlan).reduce((sum, value) => sum + value, 0);
+    // Disagreement is the whole test. An earlier version also flagged any plot
+    // summing to zero, which is a false positive on a legitimate leaf: a task
+    // estimated at 0 minutes, plotted or not, is worth 0 to the baseline either
+    // way and hides nothing. Daily-plan validation permits zero-valued days, so
+    // `{ "2026-08-05": 0 }` against an estimate of 0 is valid input that would
+    // have raised the acknowledgement prompt for no reason — and a prompt that
+    // cries wolf is how the real case gets waved through.
+    return plotted !== task.plannedEffortMinutes;
+  });
+}
+
 export function applyProjectCommand(
   state: ProjectState,
   command: ProjectCommand,
 ): ProjectState {
   let next: ProjectState;
-  if (command.type === "task.add") {
+  if (command.type === "baseline.publish") {
+    // The state transition is ONLY the counter. The snapshot rows are written by
+    // the unit of work, in the same transaction, from the state this was applied
+    // to — so the frozen plan and the revision it is pinned to cannot disagree.
+    const unplotted = unplottedLeafTasks(state);
+    if (unplotted.length > 0 && command.acknowledgeUnplottedTasks !== true) {
+      throw new Error(
+        `Cannot publish a baseline while ${unplotted.length} leaf task(s) have an empty or ` +
+          "inconsistent daily plot: they would be frozen at zero budget. " +
+          "Acknowledge them explicitly to publish anyway.",
+      );
+    }
+    next = { ...state, nextBaselineVersion: state.nextBaselineVersion + 1 };
+  } else if (command.type === "actuals.import") {
+    // Design 0011. Two passes over the tasks, and the order matters:
+    //
+    //   1. the replacement partitions are collected across the WHOLE batch, so
+    //      moving someone's Tuesday from task X to task Y clears X even though X
+    //      never appears in the file;
+    //   2. every task then has those partitions cleared and its own entries
+    //      written, and its column W is re-derived from what is left.
+    //
+    // W is re-derived only for tasks that HAD or NOW HAVE dated rows. Touching
+    // every task would overwrite the hand-entered actuals of tasks this import
+    // says nothing about — the entire project, on the first import.
+    const leaves = leafTaskIds(state.tasks);
+    const taskById = new Map(state.tasks.map((task) => [task.id, task]));
+    const memberIds = new Set(state.members.map((member) => member.id));
+    for (const entry of command.entries) {
+      const task = taskById.get(entry.taskId);
+      if (task === undefined) {
+        throw new Error(`Actuals import references an unknown task: ${entry.taskId}`);
+      }
+      if (!leaves.has(entry.taskId)) {
+        // A summary row's effort is carried by its children, so actuals on one
+        // would be counted twice by every rollup (ADR 0011 Decision 5).
+        throw new Error(`Actuals import targets a summary task: ${entry.taskId}`);
+      }
+      if (!memberIds.has(entry.memberId)) {
+        throw new Error(`Actuals import references an unknown member: ${entry.memberId}`);
+      }
+      if (!isIsoDate(entry.workDate)) {
+        throw new Error(`Actuals import has an invalid date: ${entry.workDate}`);
+      }
+      validateWholeNonNegative(
+        entry.actualMinutes,
+        `Actuals import minutes must be whole and >= 0: ${entry.workDate}`,
+      );
+    }
+
+    const partitions: DatedActualKeyParts[] = [];
+    const seenPartitions = new Set<string>();
+    const entriesByTask = new Map<string, DatedActualEntry[]>();
+    for (const entry of command.entries) {
+      // Through `datedActualKey`, not a hand-built template. Two encodings of the
+      // same key agree only by transcription, which is what `dated-actuals.ts`
+      // exists to prevent — and this file already imports from it.
+      const partition = datedActualKey(entry.workDate, entry.memberId);
+      if (!seenPartitions.has(partition)) {
+        seenPartitions.add(partition);
+        partitions.push({ workDate: entry.workDate, memberId: entry.memberId });
+      }
+      const forTask = entriesByTask.get(entry.taskId);
+      if (forTask === undefined) entriesByTask.set(entry.taskId, [entry]);
+      else forTask.push(entry);
+    }
+
+    next = {
+      ...state,
+      tasks: state.tasks.map((task) => {
+        const mine = entriesByTask.get(task.id) ?? [];
+        // "Already has dated actuals" is the WRONG test, and using it overwrote a
+        // hand edit on a task the import never mentioned (found by review,
+        // 2026-08-06). The affected set is what Design 0011 §4 says: tasks with
+        // rows inside a REPLACED partition, plus tasks named in the file. A task
+        // imported in March is untouched by an import of April.
+        if (mine.length === 0 && !touchesDatedActualPartitions(task.datedActuals, partitions)) {
+          return task;
+        }
+        const datedActuals = replaceDatedActualPartitions(task.datedActuals, partitions, mine);
+        return {
+          ...task,
+          datedActuals,
+          actualEffortMinutes: datedActualTotalMinutes(datedActuals),
+        };
+      }),
+    };
+  } else if (command.type === "task.add") {
     // Assign the immutable display No. from the project counter, then advance it
     // (Design 0003 §F-1). Server-authoritative: any client-supplied value is
     // impossible (AddTaskCommand.task omits `seq`), and the optimistic client
@@ -628,6 +858,21 @@ export function applyProjectCommand(
     }
     if (state.tasks.some((task) => task.assigneeMemberId === command.memberId)) {
       throw new Error(`Member ${command.memberId} is assigned to a task`);
+    }
+    // Imported actuals reference the member by id, and validation requires every
+    // dated-actual key to name a live member — so without this the delete failed
+    // deep inside `validateProject` with an internal key string as the message,
+    // and there was no way to clear the rows either (found by review, 2026-08-06).
+    // Refusing here, in the same shape as the assignee guard, is what Design 0011
+    // §3 already chose for the equivalent foreign key: restrict, not cascade.
+    if (
+      state.tasks.some((task) =>
+        Object.keys(task.datedActuals).some(
+          (key) => parseDatedActualKey(key)?.memberId === command.memberId,
+        ),
+      )
+    ) {
+      throw new Error(`Member ${command.memberId} has imported actuals`);
     }
     next = {
       ...state,

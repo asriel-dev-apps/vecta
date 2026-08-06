@@ -5,6 +5,7 @@ import { runCommandAction } from "~/server/project/command-action.server";
 import { skipRevalidationOnSelfSave } from "~/routing/self-save-revalidation";
 import { MasterRoute } from "~/masters/master-route";
 import { MemberList } from "~/masters/member-list";
+import { projectTitle } from "~/shell/document-title";
 import masterStyles from "~/wbs/styles.css?url";
 
 // ADR 0012 Step 4c-1 — `/projects/:id/members` hosts ONLY the SPA's existing
@@ -13,6 +14,10 @@ import masterStyles from "~/wbs/styles.css?url";
 // overloaded with 工程/プロダクト now (those live on `/masters`). The richer member
 // UI is a future feature — deliberately NOT built here (spec-parity).
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: masterStyles }];
+
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: projectTitle("メンバー", loaderData.stateView.name) }];
+}
 
 export async function loader({ context }: Route.LoaderArgs) {
   return loadProjectView(context);

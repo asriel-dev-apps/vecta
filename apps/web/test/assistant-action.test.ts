@@ -34,7 +34,7 @@ const project: ProjectState = createDemoProject({
   subtasksPerParent: 2,
   memberCount: 3,
 });
-const workspace: ProjectWorkspaceRecord = { revision: 7n, current: project };
+const workspace: ProjectWorkspaceRecord = { revision: 7n, current: project , baseline: null };
 
 function fakeModel(answer: unknown): ProposalModel & { prompts: ProposalPrompt[] } {
   const prompts: ProposalPrompt[] = [];

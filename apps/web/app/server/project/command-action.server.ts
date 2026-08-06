@@ -24,7 +24,15 @@ import { CommandBatchSchema, toCommand } from "~/wbs/project-command-contract";
  */
 
 /** The self-save success discriminants (also the `shouldRevalidate` skip set). */
-export type SaveKind = "wbs-save" | "masters-save" | "members-save" | "templates-save";
+export type SaveKind =
+  | "wbs-save"
+  | "masters-save"
+  | "members-save"
+  | "templates-save"
+  // Design 0009. It goes through the SAME action as every other write, so
+  // publishing inherits the revision pin, the idempotency receipt and the audit
+  // actor rather than growing a write path of its own.
+  | "baseline-publish";
 
 export interface CommandActionArgs {
   readonly request: Request;

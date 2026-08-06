@@ -23,6 +23,7 @@ function makeTask(overrides: Partial<ProjectTask> & Pick<ProjectTask, "id">): Pr
     actualEffortMinutes: 0,
     prorationWeightBp: null,
     dailyPlan: {},
+    datedActuals: {},
     actualStart: null,
     actualFinish: null,
     dependencies: [],
@@ -41,7 +42,7 @@ const project: ProjectState = {
     { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
   ],
   members: [
-    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
   ],
   processes: [],
   products: [],
@@ -63,6 +64,7 @@ const project: ProjectState = {
     }),
   ],
   nextTaskSeq: 3,
+  nextBaselineVersion: 1,
 };
 
 describe("applyProjectCommand", () => {
@@ -156,6 +158,7 @@ describe("applyProjectCommand", () => {
       ],
       tasks: [makeTask({ id: "parent-1", sortOrder: 0, seq: 1, name: "Parent" })],
       nextTaskSeq: 2,
+      nextBaselineVersion: 1,
     };
     const generated = applyProjectCommand(seedProject, {
       type: "task.generateSubtasks",

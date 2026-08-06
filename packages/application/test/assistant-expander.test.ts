@@ -122,7 +122,7 @@ describe("expander — the model's hours and names become the contract's minutes
           id: "00000000-0000-4000-8000-000000000000",
           name: "Member 07",
           calendarId: "standard",
-          dailyCapacityMinutes: 450,
+          dailyCapacityMinutes: 450, costRateMinorPerHour: null,
         },
       },
     ]);
@@ -258,12 +258,13 @@ describe("expander — the expansion is a valid project edit (A1, domain half)",
     calendars: [
       { id: "standard", name: "標準", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
     ],
-    members: [{ id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 }],
+    members: [{ id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null }],
     processes: [{ id: "process-1", name: "設計", sortOrder: 0 }],
     products: [{ id: "product-1", name: "認証", sortOrder: 0 }],
     templates: [],
     tasks: [],
     nextTaskSeq: 1,
+    nextBaselineVersion: 1,
   };
   const projectView: AssistantProjectView = {
     defaultCalendarId: project.defaultCalendarId,

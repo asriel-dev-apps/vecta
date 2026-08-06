@@ -12,6 +12,7 @@ import {
 import type { Route } from "./+types/root";
 import { appContext, dbSessionContext } from "~/server/context.server";
 import { createDbSession } from "~/server/db-session.server";
+import { appTitle } from "~/shell/document-title";
 import { NoticeScreen } from "~/shell/notice-screen";
 import appStyles from "~/wbs/styles.css?url";
 
@@ -20,6 +21,12 @@ import appStyles from "~/wbs/styles.css?url";
 // own `links` are applied used to leave an unstyled white page. React Router
 // dedupes the identical href against the screens that also link it.
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: appStyles }];
+
+// The fallback title. `<Meta />` renders the deepest route that exports `meta`,
+// so this is what a route without one gets — including the error boundary.
+export function meta() {
+  return [{ title: appTitle("プロジェクト管理") }];
+}
 
 /**
  * Root middleware (ADR 0012 §4-pre): install a per-request database session and

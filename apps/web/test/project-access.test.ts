@@ -35,6 +35,7 @@ const PROJECT_NAME = "Project 1";
 // reads the project's name and id from.
 const WORKSPACE: ProjectWorkspaceRecord = {
   revision: 5n,
+  baseline: null,
   current: {
     ...createDemoProject({ parentCount: 1, subtasksPerParent: 1, memberCount: 1 }),
     id: PROJECT_ID,

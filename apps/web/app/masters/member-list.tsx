@@ -38,6 +38,9 @@ export function MemberList({
       name: trimmed,
       calendarId: defaultCalendarId,
       dailyCapacityMinutes: 480,
+      // A new member starts with NO rate: `null` is "not recorded", and it is not
+      // zero (Design 0010 §2). Whoever adds them types the rate afterwards.
+      costRateMinorPerHour: null,
     });
     setName("");
   };
@@ -94,6 +97,41 @@ export function MemberList({
               }}
             />
             <span className="master-unit">h/日</span>
+            {/* Design 0010. Rendered only when the field REACHED this client: the
+                role projection removes it for a general viewer, so the absence of
+                the key — not a role check here — is what hides the control. A
+                UI-side check would be a second place for the rule to live, and
+                the wrong place, since the data would already have been sent. */}
+            {"costRateMinorPerHour" in member ? (
+              <>
+                <input
+                  className="master-input master-input--rate"
+                  type="number"
+                  min={0}
+                  step={100}
+                  defaultValue={member.costRateMinorPerHour ?? ""}
+                  disabled={!editable}
+                  aria-label="単価(円/時間)"
+                  data-testid="member-rate"
+                  onBlur={(event) => {
+                    const raw = event.target.value.trim();
+                    // Empty is "not recorded", which is NOT zero: a zero rate
+                    // prices this member's work at nothing and sums it silently,
+                    // while null takes their tasks out of the money figures with
+                    // a visible count (Design 0010 §4).
+                    const next = raw === "" ? null : Math.round(Number(raw));
+                    if (next !== null && (!Number.isFinite(next) || next < 0)) {
+                      event.target.value = String(member.costRateMinorPerHour ?? "");
+                      return;
+                    }
+                    if (next !== member.costRateMinorPerHour) {
+                      onUpdate(member.id, { costRateMinorPerHour: next });
+                    }
+                  }}
+                />
+                <span className="master-unit">円/時</span>
+              </>
+            ) : null}
             <button
               type="button"
               className="master-delete"

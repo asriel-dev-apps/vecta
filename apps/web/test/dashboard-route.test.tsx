@@ -35,6 +35,7 @@ function makeTask(overrides: Partial<ProjectTask> & Pick<ProjectTask, "id">): Pr
     actualEffortMinutes: 0,
     prorationWeightBp: null,
     dailyPlan: {},
+    datedActuals: {},
     actualStart: null,
     actualFinish: null,
     dependencies: [],
@@ -59,8 +60,8 @@ const seed: ProjectState = {
     { id: "standard", name: "Standard", workingWeekdays: [1, 2, 3, 4, 5], nonWorkingDates: [] },
   ],
   members: [
-    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
-    { id: "member-2", name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480 },
+    { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
+    { id: "member-2", name: "Member 02", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
   ],
   processes: [],
   products: [],
@@ -101,6 +102,7 @@ const seed: ProjectState = {
     }),
   ],
   nextTaskSeq: 5,
+  nextBaselineVersion: 1,
 };
 
 function mount(project: ProjectState = seed): void {
@@ -113,6 +115,8 @@ function mount(project: ProjectState = seed): void {
         stateView: project,
         projectionRole: "PRIVILEGED" as const,
         today: AS_OF,
+        baseline: null,
+        unplottedLeafCount: 0,
       }),
     },
   ]);

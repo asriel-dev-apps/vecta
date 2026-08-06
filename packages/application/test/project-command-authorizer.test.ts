@@ -124,10 +124,61 @@ describe("ProjectCommandAuthorizer", () => {
         projectId: "10000000-0000-4000-8000-000000000001",
         command: {
           type: "member.add",
-          member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+          member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
         },
       }),
     ).rejects.toBeInstanceOf(AgentPlanApprovalRequiredError);
+  });
+
+  it("requires human approval to publish a baseline (Design 0009, ADR 0007)", async () => {
+    // An approved baseline is a plan decision, and ADR 0007 makes publishing a
+    // HUMAN command. Today that holds by DEFAULT rather than by intent:
+    // `isAgentPlanChange` treats everything that is not a narrowly-scoped
+    // `task.update` as a plan change, so a new command type is fail-closed the
+    // moment it is added. This pins it, because the day someone loosens that
+    // default is the day publishing silently opens to agents — and nothing else in
+    // the suite would notice.
+    const authorizer = createProjectCommandAuthorizer({
+      resolve: async () => ({
+        principalId: "90000000-0000-4000-8000-000000000003",
+        principalType: "AGENT",
+        projectRole: "OWNER", // even the highest project role does not help
+        allowedScopes: ["project:progress:write", "project:actuals:write"],
+      }),
+    });
+
+    await expect(
+      authorizer.authorize({
+        identity: {
+          issuer: "https://identity.example.test/",
+          subject: "planning-agent",
+          scopes: ["project:progress:write", "project:actuals:write"],
+        },
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        projectId: "10000000-0000-4000-8000-000000000001",
+        command: { type: "baseline.publish" },
+      }),
+    ).rejects.toBeInstanceOf(AgentPlanApprovalRequiredError);
+  });
+
+  it("CONTROL: a HUMAN owner may publish, so the rejection above is about the agent", async () => {
+    const authorizer = createProjectCommandAuthorizer({
+      resolve: async () => ({
+        principalId: "90000000-0000-4000-8000-000000000004",
+        principalType: "HUMAN",
+        projectRole: "OWNER",
+        allowedScopes: [],
+      }),
+    });
+
+    await expect(
+      authorizer.authorize({
+        identity: { issuer: "https://identity.example.test/", subject: "human", scopes: [] },
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        projectId: "10000000-0000-4000-8000-000000000001",
+        command: { type: "baseline.publish" },
+      }),
+    ).resolves.toEqual({ type: "HUMAN", id: "90000000-0000-4000-8000-000000000004" });
   });
 
   it("denies an agent when the token omits a scope allowed by its stored grant", async () => {

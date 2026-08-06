@@ -280,3 +280,174 @@
 
 .evm-curve__ev--ok { fill: var(--ok); }
 .evm-curve__ev--risk { fill: var(--risk); }
+
+/* Design 0009 — where PV comes from, and the control that freezes it.
+   Above the table, not beside it: an SPI read without knowing its baseline is a
+   different claim from one read with it, so the answer has to arrive first. */
+.evm-baseline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, transparent);
+}
+.evm-baseline__source {
+  margin: 0;
+  flex: 1 1 22rem;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.evm-baseline__metrics {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+}
+.evm-baseline__metrics div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.evm-baseline__metrics dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.evm-baseline__metrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.evm-baseline__publish {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+.evm-baseline__ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 30rem;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.evm-baseline__button {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, transparent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.evm-baseline__button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.evm-baseline__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger, #c8342b);
+}
+
+/* The project trend (Design 0013). One chart, above the table, sharing its
+   palette: PV green, AC orange, EV magenta — the same band colours the table's
+   column headers use, so a line and a column mean the same thing. */
+
+.evm-trend {
+  margin: 0 20px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.evm-trend__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.evm-trend__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.evm-trend__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.evm-trend__key::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.evm-trend__key--pv::before { background: var(--band-pv-ink); }
+.evm-trend__key--ac::before { background: var(--band-ac-ink); }
+.evm-trend__key--ev::before { background: var(--band-ev-ink); height: 6px; width: 6px; border-radius: 50%; }
+
+.evm-trend__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.evm-trend__grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.evm-trend__tick {
+  fill: var(--faint);
+  font-size: 9px;
+}
+
+.evm-trend__asof {
+  stroke: var(--faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.evm-trend__pv {
+  fill: none;
+  stroke: var(--band-pv-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.evm-trend__ac {
+  fill: none;
+  stroke: var(--band-ac-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.evm-trend__ev {
+  fill: var(--band-ev-ink);
+}
+
+.evm-trend__note,
+.evm-trend__empty {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}

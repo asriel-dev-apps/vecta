@@ -32,22 +32,24 @@ const project: ProjectState = {
       actualEffortMinutes: 0,
       prorationWeightBp: null,
       dailyPlan: {},
+      datedActuals: {},
       actualStart: null,
       actualFinish: null,
       dependencies: [],
     },
   ],
   nextTaskSeq: 2,
+  nextBaselineVersion: 1,
 };
 
 describe("member commands", () => {
   it("adds a member that references a configured calendar", () => {
     const next = applyProjectCommand(project, {
       type: "member.add",
-      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     });
     expect(next.members).toEqual([
-      { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+      { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     ]);
   });
 
@@ -55,7 +57,7 @@ describe("member commands", () => {
     expect(() =>
       applyProjectCommand(project, {
         type: "member.add",
-        member: { id: "member-1", name: " ", calendarId: "standard", dailyCapacityMinutes: 480 },
+        member: { id: "member-1", name: " ", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
       }),
     ).toThrow("Member member-1 requires a name");
   });
@@ -64,7 +66,7 @@ describe("member commands", () => {
     expect(() =>
       applyProjectCommand(project, {
         type: "member.add",
-        member: { id: "member-1", name: "Member 01", calendarId: "missing", dailyCapacityMinutes: 480 },
+        member: { id: "member-1", name: "Member 01", calendarId: "missing", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
       }),
     ).toThrow("unknown calendar");
   });
@@ -72,7 +74,7 @@ describe("member commands", () => {
   it("rejects an empty member update", () => {
     const withMember = applyProjectCommand(project, {
       type: "member.add",
-      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     });
     expect(() =>
       applyProjectCommand(withMember, { type: "member.update", memberId: "member-1", changes: {} }),
@@ -82,7 +84,7 @@ describe("member commands", () => {
   it("does not delete a member while it is assigned to a task", () => {
     const withMember = applyProjectCommand(project, {
       type: "member.add",
-      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     });
     const assigned = applyProjectCommand(withMember, {
       type: "task.update",
@@ -97,7 +99,7 @@ describe("member commands", () => {
   it("deletes an unassigned member", () => {
     const withMember = applyProjectCommand(project, {
       type: "member.add",
-      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480 },
+      member: { id: "member-1", name: "Member 01", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
     });
     const next = applyProjectCommand(withMember, { type: "member.delete", memberId: "member-1" });
     expect(next.members).toEqual([]);

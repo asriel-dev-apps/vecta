@@ -113,6 +113,19 @@ export function createSeedProjectRecord(
     },
   ];
 
+  // Synthetic cost rates (Design 0010). Deliberately SPREAD — 3,000 to 8,500 yen
+  // per person-hour in 500-yen steps — because a seed where every rate is equal
+  // makes the money EVM a constant multiple of the effort EVM, so SPI$ and CPI$
+  // come out identical to SPI and CPI and the cost layer looks like it is not
+  // wired. The whole point of the layer is that those ratios separate when a
+  // high-rate person is the one slipping.
+  //
+  // The last member is left with NO rate on purpose, so the seed also exercises
+  // the "unpriced leaf" path: those tasks are excluded from the money figures and
+  // counted on screen, rather than being summed as zero.
+  //
+  // Generic and invented, like every other value in this seed. Real rates are
+  // entered through the members screen and never live in the repository.
   const members: MemberRecord[] = Array.from({ length: memberCount }, (_, index) => ({
     id: makeUuid("c", index + 1),
     tenantId,
@@ -120,6 +133,8 @@ export function createSeedProjectRecord(
     name: `Member ${(index + 1).toString().padStart(2, "0")}`,
     calendarId: "standard",
     dailyCapacityMinutes: 480,
+    costRateMinorPerHour:
+      index === memberCount - 1 ? null : 3_000 + (index % 12) * 500,
   }));
 
   // 工程 / プロダクト masters: one row per distinct synthetic phase/product used
@@ -184,6 +199,7 @@ export function createSeedProjectRecord(
       actualEffortMinutes: 0,
       prorationWeightBp: null,
       dailyPlan: {},
+      datedActuals: {},
       actualStart: null,
       actualFinish: null,
     });
@@ -226,6 +242,10 @@ export function createSeedProjectRecord(
         actualEffortMinutes,
         prorationWeightBp: null,
         dailyPlan,
+        // Design 0011. The seed carries no timesheet: dated actuals arrive only
+        // through an import, and a synthetic one would make AC look like it had
+        // a time axis everywhere it does not.
+        datedActuals: {},
         actualStart,
         actualFinish,
       });
@@ -273,6 +293,7 @@ export function createSeedProjectRecord(
       defaultCalendarId: "standard",
       revision: 1n,
       nextTaskSeq: nextSeq,
+      nextBaselineVersion: 1,
     },
     calendars,
     members,

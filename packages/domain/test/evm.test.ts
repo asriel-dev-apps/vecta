@@ -193,6 +193,41 @@ describe("calculateEffortEvm", () => {
       cpi: "-",
     });
   });
+
+  it("does NOT cap SPI when PV is merely small — the ratio is reported as it is", () => {
+    // A real fixture produced SPI 41.41 (PV 0.3, EV 10.4) and it was queried as a
+    // possible missing guard. It is not: `ratio` already returns "-" at PV 0, and
+    // it does so for SPI and CPI through the SAME helper, so the two are symmetric
+    // (the test above pins that). What is left is correct arithmetic on a task
+    // whose plan has barely started while its progress has not.
+    //
+    // Capping or thresholding it would DEVIATE FROM THE FORMULA MAP, which ADR 0011
+    // Decision 1 makes the spec: "No rounding is applied; division by zero yields
+    // `-`". The spreadsheet is the only spec for these columns, so an invented
+    // ceiling would be exactly the unrequested behaviour the project forbids.
+    // This test exists so the next reader treats the large number as decided
+    // rather than as an oversight to fix.
+    const result = calculateEffortEvm({
+      statusDate: "2026-08-05",
+      tasks: [
+        {
+          id: "barely-planned",
+          plannedEffortMinutes: 480,
+          progressBasisPoints: 10_000,
+          actualEffortMinutes: 100,
+          dailyPlan: { "2026-08-01": 1, "2026-09-01": 479 },
+        },
+      ],
+    });
+    // This is what discriminates: a ceiling of any kind makes it fail. Verified by
+    // adding one — clamping the ratio to `Math.min(r, 10)` turns this test red and
+    // leaves the other 38 green. The zero-denominator half of the behaviour is
+    // pinned by the test above and deliberately not repeated here; asserting it
+    // again would not distinguish a capped SPI from an uncapped one, which is the
+    // only thing this test is for.
+    expect(typeof result.rollup.spi).toBe("number");
+    expect(result.rollup.spi as number).toBeGreaterThan(100);
+  });
 });
 
 describe("effortForecast", () => {

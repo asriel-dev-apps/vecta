@@ -147,6 +147,11 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
       name: `Member ${(index + 1).toString().padStart(2, "0")}`,
       calendarId: paidLeaveCalendarByMemberId.get(id) ?? "standard",
       dailyCapacityMinutes: 480,
+      // Mirrors the persistence seed (Design 0010): spread rates, and the LAST
+      // member deliberately unpriced. Equal rates would make the money EVM a
+      // constant multiple of the effort EVM and hide the only thing the cost
+      // layer adds.
+      costRateMinorPerHour: index === memberCount - 1 ? null : 3_000 + (index % 12) * 500,
     };
   });
 
@@ -206,6 +211,7 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
       actualEffortMinutes: 0,
       prorationWeightBp: null,
       dailyPlan: {},
+      datedActuals: {},
       actualStart: null,
       actualFinish: null,
       dependencies: [],
@@ -254,6 +260,7 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
         actualEffortMinutes,
         prorationWeightBp: null,
         dailyPlan,
+        datedActuals: {},
         actualStart: showcaseDemo ? SHOWCASE_DEMO_START : actualStart,
         actualFinish: showcaseDemo ? null : actualFinish,
         dependencies,
@@ -291,5 +298,6 @@ export function createDemoProject(options: DemoProjectOptions = {}): ProjectStat
     templates,
     tasks,
     nextTaskSeq: nextSeq,
+    nextBaselineVersion: 1,
   };
 }

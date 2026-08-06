@@ -183,7 +183,7 @@ describe("ProjectMembers — the MemberList panel", () => {
   it("dispatches member.delete for an unassigned member", async () => {
     // The demo's members are all task assignees (member.delete of an assignee is
     // rejected by the domain), so delete a spare member with no task references.
-    const spare = { id: "d0000000-0000-4000-8000-00000000dead", name: "Spare member", calendarId: "standard", dailyCapacityMinutes: 480 };
+    const spare = { id: "d0000000-0000-4000-8000-00000000dead", name: "Spare member", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null };
     const withSpare: ProjectState = { ...seed, members: [...seed.members, spare] };
     const server = mount(withSpare);
     await ready();
@@ -228,7 +228,7 @@ describe("ProjectMembers — the MemberList panel", () => {
       ...seed,
       members: [
         ...seed.members,
-        { id: "d0000000-0000-4000-8000-0000000000ff", name: "Server-added member", calendarId: "standard", dailyCapacityMinutes: 480 },
+        { id: "d0000000-0000-4000-8000-0000000000ff", name: "Server-added member", calendarId: "standard", dailyCapacityMinutes: 480, costRateMinorPerHour: null },
       ],
     };
     await ready();

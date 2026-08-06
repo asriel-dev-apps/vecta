@@ -3,6 +3,7 @@ import {
   type EffortRollup,
   type TaskStatus,
 } from "@vecta/domain";
+import { datedActualsByDate, datedActualTotalMinutes } from "./dated-actuals.js";
 import type { ProjectRole } from "./project-command-authorizer.js";
 import { leafTaskIds, type ProjectMember, type ProjectState } from "./project-state.js";
 
@@ -30,7 +31,10 @@ export function projectionRoleForProjectRole(projectRole: ProjectRole): Projecti
  * (and future rate/productivity) is absent from the type, so it cannot be
  * emitted downstream. PRIVILEGED keeps the full {@link ProjectMember}.
  */
-export type GeneralProjectMember = Omit<ProjectMember, "dailyCapacityMinutes">;
+export type GeneralProjectMember = Omit<
+  ProjectMember,
+  "dailyCapacityMinutes" | "costRateMinorPerHour"
+>;
 export type ProjectMemberView = ProjectMember | GeneralProjectMember;
 
 /** Project read model with members narrowed to whatever the role may read. */
@@ -44,6 +48,10 @@ export interface ProjectStateView extends Omit<ProjectState, "members"> {
  * place that enumerates the general-visible member fields.
  */
 function stripSensitiveMemberFields(member: ProjectMember): GeneralProjectMember {
+  // An ALLOW-list, not a delete-list: a field added to `ProjectMember` is absent
+  // from the general view until someone writes it here on purpose. The cost rate
+  // (Design 0010) is the first field where getting that backwards would leak
+  // something commercially sensitive rather than merely operational.
   return { id: member.id, name: member.name, calendarId: member.calendarId };
 }
 
@@ -92,6 +100,15 @@ export interface WbsGridTaskRow {
   readonly parentEffortMismatch: boolean;
   /** Leaf task whose L ≠ Σ of its daily-plan minutes. */
   readonly estimateVsDailyMismatch: boolean;
+  /**
+   * Task carrying imported dated actuals whose W no longer equals their sum
+   * (Design 0011 §4). The import sets the two equal; a later hand edit of W is
+   * allowed — W is an Input column of the reference spreadsheet — so the two can
+   * disagree, and AC then follows the DATED rows. Exactly the situation
+   * `estimateVsDailyMismatch` describes one band to the left, so it gets the same
+   * treatment: surfaced as a row warning, never silently corrected.
+   */
+  readonly actualVsDatedMismatch: boolean;
   // Derived columns K/M/N/O/P/Q/T/U/V/W(hours)/X (from the effort EVM module).
   readonly plannedEffortDays: number;
   readonly plannedEffortHours: number;
@@ -165,6 +182,12 @@ export function projectWbsGrid(
       progressBasisPoints: task.progressBasisPoints,
       actualEffortMinutes: task.actualEffortMinutes,
       dailyPlan: task.dailyPlan,
+      // Design 0011. The stored map is keyed by date AND member; the EVM module
+      // wants dates only, and the two are collapsed HERE rather than passed
+      // through, because `Record<string, number>` would satisfy the domain's type
+      // either way and a composite key would silently compare wrong against the
+      // status date.
+      datedActualsByDate: datedActualsByDate(task.datedActuals),
       isLeaf: leaves.has(task.id),
     })),
   });
@@ -209,6 +232,9 @@ export function projectWbsGrid(
           !isLeaf &&
           task.plannedEffortMinutes !== (directChildEffortByParent.get(task.id) ?? 0),
         estimateVsDailyMismatch: isLeaf && task.plannedEffortMinutes !== dailyPlanMinutes,
+        actualVsDatedMismatch:
+          Object.keys(task.datedActuals).length > 0 &&
+          task.actualEffortMinutes !== datedActualTotalMinutes(task.datedActuals),
         plannedEffortDays: metrics.plannedEffortDays,
         plannedEffortHours: metrics.plannedEffortHours,
         plannedEarnedHours: metrics.plannedEarnedHours,

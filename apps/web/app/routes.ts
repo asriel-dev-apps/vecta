@@ -26,6 +26,7 @@ export default [
       index("routes/project.index.tsx"),
       route("wbs", "routes/project.wbs.tsx"),
       route("dashboard", "routes/project.dashboard.tsx"),
+      route("timesheet", "routes/project.timesheet.tsx"),
       route("masters", "routes/project.masters.tsx"),
       route("members", "routes/project.members.tsx"),
       route("templates", "routes/project.templates.tsx"),

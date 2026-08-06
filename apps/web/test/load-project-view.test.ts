@@ -52,7 +52,7 @@ function workspaceReturning(record: ProjectWorkspaceRecord) {
 describe("loadProjectView — the shared role-scoped view loader (D18)", () => {
   it("strips dailyCapacityMinutes from a GENERAL (VIEWER) membership payload", async () => {
     const payload = await loadProjectView(
-      contextFor("VIEWER", workspaceReturning({ revision: 7n, current: project })),
+      contextFor("VIEWER", workspaceReturning({ revision: 7n, current: project , baseline: null })),
     );
 
     expect(payload.projectionRole).toBe("GENERAL");
@@ -67,7 +67,7 @@ describe("loadProjectView — the shared role-scoped view loader (D18)", () => {
 
   it("keeps dailyCapacityMinutes for a PRIVILEGED (OWNER/EDITOR) membership", async () => {
     const payload = await loadProjectView(
-      contextFor("OWNER", workspaceReturning({ revision: 12n, current: project })),
+      contextFor("OWNER", workspaceReturning({ revision: 12n, current: project , baseline: null })),
     );
 
     expect(payload.projectionRole).toBe("PRIVILEGED");

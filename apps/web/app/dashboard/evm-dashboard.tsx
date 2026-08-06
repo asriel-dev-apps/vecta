@@ -1,12 +1,16 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { EffortRatio } from "@vecta/domain";
+import { useFetcher } from "react-router";
+import { calculateBaselineEvm, type EffortRatio } from "@vecta/domain";
 import {
   projectEvmDashboard,
+  projectEvmTrend,
   type EvmDashboardProjection,
   type EvmDashboardRow,
   type ProjectionRole,
   type ProjectState,
 } from "@vecta/application";
+import { EvmTrendChart } from "./evm-trend-chart";
+import type { BaselineView } from "~/server/project/load-project-view.server";
 
 /**
  * The EVM dashboard (design 0007 — Step 4). One table whose rows mean either the
@@ -21,7 +25,27 @@ import {
  */
 
 /** Rows are never sorted here. Design 0007 §2: the WBS projection owns row order. */
-export type EvmSegment = "task" | "member";
+export type EvmSegment = "task" | "member" | "change";
+
+/**
+ * The segment buttons. "変更別" groups by the first-level ancestor's NAME
+ * (ADR 0011 Decision 8), which the user confirmed on 2026-08-06 is what the
+ * reference spreadsheet does — same-named rows merge. With every name distinct
+ * it is identical to 親タスク別, and that is expected rather than a fault.
+ */
+const SEGMENTS = [
+  { key: "task", label: "親タスク別", caption: "親タスク", testId: "evm-segment-task" },
+  { key: "member", label: "人別", caption: "メンバー", testId: "evm-segment-member" },
+  { key: "change", label: "変更別", caption: "変更", testId: "evm-segment-change" },
+] as const;
+
+/**
+ * Effort or money (Design 0010). The COLUMNS do not change — the reference
+ * spreadsheet has no money column and Design 0003 §B-1 forbids inventing one —
+ * so the cost layer is a change of unit on the same ten columns, which is what
+ * ADR 0011 Decision 1 means by calling it optional.
+ */
+export type EvmUnit = "days" | "money";
 
 export interface EvmDashboardProps {
   /** The role-scoped project view the route loaded. */
@@ -29,6 +53,16 @@ export interface EvmDashboardProps {
   readonly projectionRole: ProjectionRole;
   /** Today, resolved server-side (see `as-of-date.ts`) — the initial as-of date. */
   readonly today: string;
+  /** The latest published baseline, or `null` if the plan has never been frozen. */
+  readonly baseline: BaselineView | null;
+  /** The project revision the view was loaded at — the publish command's pin. */
+  readonly revision: string;
+  /**
+   * Leaves whose daily plot disagrees with their estimate. Publishing freezes them
+   * at whatever the PLOT says (BAC comes from the plot, not the estimate), so the
+   * count is shown before the button can be used — see Design 0009 §3.1.
+   */
+  readonly unplottedLeafCount: number;
 }
 
 /**
@@ -69,6 +103,31 @@ function formatDayForecast(value: EffortRatio): string {
   return value === "-" ? "—" : formatDays(value);
 }
 
+/**
+ * Money, in the project currency's MINOR UNIT, grouped in threes.
+ *
+ * Deliberately not `Intl.NumberFormat`: this table is rendered on the server and
+ * hydrated on the client, and node's ICU and workerd's need not agree on
+ * grouping or symbols — a mismatch would be a hydration error in production and
+ * nowhere else. There is no per-currency decimal table either; JPY's minor unit
+ * is the yen, and a table nobody exercises is a table nobody checks.
+ */
+function formatMinor(value: number): string {
+  const rounded = Math.round(value);
+  const sign = rounded < 0 ? "-" : "";
+  const digits = Math.abs(rounded).toString();
+  let grouped = "";
+  for (let index = 0; index < digits.length; index += 1) {
+    if (index > 0 && (digits.length - index) % 3 === 0) grouped += ",";
+    grouped += digits[index];
+  }
+  return `${sign}${grouped}`;
+}
+
+function formatMoneyForecast(value: EffortRatio): string {
+  return value === "-" ? "—" : formatMinor(value);
+}
+
 /** −1 / 0 / +1 of the DISPLAYED value, so the marker agrees with the digits. */
 function displayedSign(value: number): number {
   return Math.sign(Math.round(value * 10) / 10);
@@ -81,9 +140,12 @@ function displayedSign(value: number): number {
  */
 function VarianceCell({
   value,
+  format,
   group = false,
 }: {
   readonly value: number;
+  /** Person-days or minor units — the sign logic is identical, the digits are not. */
+  readonly format: (value: number) => string;
   /** Starts the variance group — draws the hairline that separates it. */
   readonly group?: boolean;
 }): ReactNode {
@@ -98,7 +160,7 @@ function VarianceCell({
       </span>
       <span className="evm-variance__value">
         {sign > 0 ? "+" : ""}
-        {formatDays(value)}
+        {format(value)}
       </span>
     </td>
   );
@@ -208,14 +270,24 @@ function MetricRow({
   row,
   projection,
   caption,
+  unit,
 }: {
   readonly row: EvmDashboardRow;
   readonly projection: EvmDashboardProjection;
   readonly caption: string;
+  readonly unit: EvmUnit;
 }): ReactNode {
+  // In money, the row IS its money block. A row with nothing priced has none,
+  // and renders em dashes rather than zeroes — "nobody said what this costs" is
+  // not "this costs nothing" (Design 0010 §4).
+  const money = unit === "money" ? row.money : null;
+  const shown = money ?? row;
+  const priced = unit === "days" || money !== null;
+  const format = unit === "days" ? formatDays : formatMinor;
+  const formatForecast = unit === "days" ? formatDayForecast : formatMoneyForecast;
   const atRisk =
-    (row.cpi !== "-" && row.cpi < RISK_INDEX_THRESHOLD) ||
-    (row.spi !== "-" && row.spi < RISK_INDEX_THRESHOLD);
+    (shown.cpi !== "-" && shown.cpi < RISK_INDEX_THRESHOLD) ||
+    (shown.spi !== "-" && shown.spi < RISK_INDEX_THRESHOLD);
   return (
     <tr
       className={`evm-row evm-row--${row.kind}${atRisk ? " evm-row--risk" : ""}`}
@@ -226,15 +298,28 @@ function MetricRow({
       </th>
       {DAY_COLUMNS.map((column) => (
         <td key={column.key} className="evm-cell evm-cell--num">
-          {formatDays(row[column.key])}
+          {priced ? format(shown[column.key]) : "—"}
         </td>
       ))}
-      <VarianceCell value={row.sv} group />
-      <VarianceCell value={row.cv} />
-      <IndexCell value={row.cpi} />
-      <IndexCell value={row.spi} />
-      <td className="evm-cell evm-cell--num evm-cell--group">{formatDayForecast(row.eac)}</td>
-      <td className="evm-cell evm-cell--num">{formatDayForecast(row.etc)}</td>
+      {priced ? (
+        <>
+          <VarianceCell value={shown.sv} format={format} group />
+          <VarianceCell value={shown.cv} format={format} />
+        </>
+      ) : (
+        <>
+          <td className="evm-cell evm-cell--num evm-cell--muted evm-cell--group">—</td>
+          <td className="evm-cell evm-cell--num evm-cell--muted">—</td>
+        </>
+      )}
+      <IndexCell value={priced ? shown.cpi : "-"} />
+      <IndexCell value={priced ? shown.spi : "-"} />
+      <td className="evm-cell evm-cell--num evm-cell--group">
+        {priced ? formatForecast(shown.eac) : "—"}
+      </td>
+      <td className="evm-cell evm-cell--num">{priced ? formatForecast(shown.etc) : "—"}</td>
+      {/* The sparkline is the PLAN's shape and stays in effort in both units: it
+          is drawn from the daily plot, which has no money in it. */}
       <Sparkline row={row} projection={projection} />
     </tr>
   );
@@ -244,22 +329,89 @@ export function EvmDashboard({
   project,
   projectionRole,
   today,
+  baseline,
+  revision,
+  unplottedLeafCount,
 }: EvmDashboardProps): ReactNode {
   const [asOf, setAsOf] = useState(today);
   const [segment, setSegment] = useState<EvmSegment>("task");
+  const [unit, setUnit] = useState<EvmUnit>("days");
+  const [acknowledged, setAcknowledged] = useState(false);
+  // The same fetcher the grid saves through, posting the same command envelope to
+  // the same action — publishing is not a special transport, only a special
+  // command (Design 0009 §5).
+  const publisher = useFetcher<{ ok: boolean; message?: string }>();
+  const publishError =
+    publisher.data === undefined || publisher.data.ok
+      ? null
+      : (publisher.data.message ?? "ベースラインを凍結できませんでした");
 
   const projection = useMemo(
     () => projectEvmDashboard(project, { statusDate: asOf, role: projectionRole }),
     [project, asOf, projectionRole],
   );
-  const rows = segment === "task" ? projection.byParentTask : projection.byMember;
+
+  // Schedule variance against the APPROVED plan (Design 0009). Both terms come
+  // from the baseline scope — `M_baseline × T_current` — so a task added after
+  // publishing cannot flatter SPI by entering EV without entering PV.
+  const baselineEvm = useMemo(
+    () =>
+      baseline === null
+        ? null
+        : calculateBaselineEvm({
+            statusDate: asOf,
+            baselineTasks: baseline.tasks.map((task) => ({
+              id: task.taskId,
+              dailyPlan: task.dailyPlan,
+            })),
+            progressByTaskId: Object.fromEntries(
+              project.tasks.map((task) => [task.id, task.progressBasisPoints]),
+            ),
+          }),
+    [baseline, project.tasks, asOf],
+  );
+  // Design 0013. Derived on both sides from the same props as the table, so the
+  // chart is server-rendered and hydrates to identical SVG.
+  const trend = useMemo(
+    () =>
+      projectEvmTrend(project, {
+        statusDate: asOf,
+        ...(baseline === null
+          ? {}
+          : {
+              baselineTasks: baseline.tasks.map((task) => ({
+                id: task.taskId,
+                dailyPlan: task.dailyPlan,
+              })),
+            }),
+      }),
+    [project, baseline, asOf],
+  );
+  const rows =
+    segment === "task"
+      ? projection.byParentTask
+      : segment === "member"
+        ? projection.byMember
+        : projection.byChange;
+  const segmentCaption = SEGMENTS.find((option) => option.key === segment)?.caption ?? "";
+  /**
+   * The unit is written ONCE, in the header (design 0007 §5 A-3: a unit inside a
+   * cell breaks the digit alignment A-1 buys) — so when the unit switches, the
+   * header is the only thing that can say so. Found by review: the cells showed
+   * 176,000 under a header that still read 人日, which is a header actively
+   * lying rather than merely omitting.
+   *
+   * CPI and SPI keep no unit in either mode; they are ratios.
+   */
+  const unitLabel = unit === "days" ? "人日" : project.currency;
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <p className="app-subtitle">
           {project.name ? `${project.name} · ` : ""}EVM · 基準日 {asOf} ·{" "}
-          {segment === "task" ? "親タスク" : "メンバー"} {rows.length} 行
+          {unit === "days" ? "人日" : "金額"} ·{" "}
+          {segmentCaption} {rows.length} 行
         </p>
         <div className="app-header__actions">
           <label className="evm-asof">
@@ -279,28 +431,191 @@ export function EvmDashboard({
           {/* §5 C-7 — a segmented control, not tabs: the same table with the same
               columns, only the meaning of a row changes, so nothing should suggest
               a move to another page. */}
+          {/* Design 0010. Rendered only when a rate actually reached this client:
+              `ratedLeafCount` is zero for a general viewer because the projection
+              removed the rates, and zero for a project nobody has priced. Either
+              way there is nothing to show, so there is no control. */}
+          {projection.ratedLeafCount > 0 ? (
+            <div className="evm-segment" role="group" aria-label="表示する単位">
+              <button
+                type="button"
+                className={`evm-segment__option${unit === "days" ? " evm-segment__option--on" : ""}`}
+                aria-pressed={unit === "days"}
+                data-testid="evm-unit-days"
+                onClick={() => setUnit("days")}
+              >
+                人日
+              </button>
+              <button
+                type="button"
+                className={`evm-segment__option${unit === "money" ? " evm-segment__option--on" : ""}`}
+                aria-pressed={unit === "money"}
+                data-testid="evm-unit-money"
+                onClick={() => setUnit("money")}
+              >
+                金額
+              </button>
+            </div>
+          ) : null}
           <div className="evm-segment" role="group" aria-label="集計の単位">
-            <button
-              type="button"
-              className={`evm-segment__option${segment === "task" ? " evm-segment__option--on" : ""}`}
-              aria-pressed={segment === "task"}
-              data-testid="evm-segment-task"
-              onClick={() => setSegment("task")}
-            >
-              親タスク別
-            </button>
-            <button
-              type="button"
-              className={`evm-segment__option${segment === "member" ? " evm-segment__option--on" : ""}`}
-              aria-pressed={segment === "member"}
-              data-testid="evm-segment-member"
-              onClick={() => setSegment("member")}
-            >
-              人別
-            </button>
+            {SEGMENTS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`evm-segment__option${segment === option.key ? " evm-segment__option--on" : ""}`}
+                aria-pressed={segment === option.key}
+                data-testid={option.testId}
+                onClick={() => setSegment(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
       </header>
+
+      {/* Where PV comes from, always — not only when a baseline exists. An
+          unlabelled SPI cannot be read: against the approved plan and against a
+          plan someone edited this morning are different claims. */}
+      <div className="evm-baseline" data-testid="evm-baseline-source">
+        {baseline === null ? (
+          <p className="evm-baseline__source">
+            <b>PV: 現在計画（未凍結・参考値）</b> — ベースラインがまだありません。
+            計画を編集すると過去の SV・SPI も変わります。
+          </p>
+        ) : (
+          <p className="evm-baseline__source">
+            <b>
+              PV: ベースライン v{baseline.version}（公開 {baseline.publishedAt.slice(0, 10)}）
+            </b>{" "}
+            — SV・SPI はこの承認済み計画に対する差です。
+          </p>
+        )}
+        {baselineEvm === null ? null : (
+          <dl className="evm-baseline__metrics" data-testid="evm-baseline-metrics">
+            <div>
+              <dt>BAC</dt>
+              <dd data-testid="baseline-bac">{formatDays(baselineEvm.bac)}</dd>
+            </div>
+            <div>
+              <dt>PV</dt>
+              <dd data-testid="baseline-pv">{formatDays(baselineEvm.pv)}</dd>
+            </div>
+            <div>
+              <dt>SV</dt>
+              <dd data-testid="baseline-sv">{formatDays(baselineEvm.sv)}</dd>
+            </div>
+            <div>
+              <dt>SPI</dt>
+              <dd data-testid="baseline-spi">
+                {baselineEvm.spi === "-" ? "—" : baselineEvm.spi.toFixed(2)}
+              </dd>
+            </div>
+          </dl>
+        )}
+        <div className="evm-baseline__publish">
+          {/* The count is rendered BEFORE the checkbox that waives it. The gate is
+              only meaningful if the number was in front of the person who ticked
+              it — a checkbox with nothing beside it is a formality. */}
+          {unplottedLeafCount > 0 ? (
+            <label className="evm-baseline__ack">
+              <input
+                type="checkbox"
+                data-testid="evm-acknowledge-unplotted"
+                checked={acknowledged}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <span data-testid="evm-unplotted-count">
+                日次計画が見積りと合わない末端タスクが {unplottedLeafCount} 件あります。
+                そのまま凍結すると、その分の予算は 0 として固定されます。
+              </span>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="evm-baseline__button"
+            data-testid="evm-publish-baseline"
+            disabled={publisher.state !== "idle"}
+            onClick={() => {
+              // `void`, not `await`: the fetcher owns the lifecycle and re-renders
+              // with its own state; awaiting here would only hold the handler open.
+              // Marked explicitly because `no-floating-promises` is one of the
+              // rules this repo keeps for the authorization case it also catches.
+              void publisher.submit(
+                {
+                  expectedRevision: revision,
+                  commands: [
+                    {
+                      command: acknowledged
+                        ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
+                        : { type: "baseline.publish" },
+                      // Client-minted, and unique per attempt. The batch schema
+                      // requires it, and it is what makes a double-click one
+                      // publish rather than two — a duplicate key replays the
+                      // first receipt instead of executing again.
+                      idempotencyKey: `baseline-publish-${revision}-${
+                        acknowledged ? "ack" : "plain"
+                      }`,
+                    },
+                  ],
+                },
+                { method: "post", encType: "application/json" },
+              );
+            }}
+          >
+            {publisher.state === "idle" ? "現在の計画をベースラインとして凍結" : "凍結中…"}
+          </button>
+          {publishError === null ? null : (
+            <p className="evm-baseline__error" role="alert" data-testid="evm-publish-error">
+              {publishError}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <section className="evm-trend" data-testid="evm-trend">
+        <div className="evm-trend__head">
+          <h2 className="evm-trend__title">推移（人日・累積）</h2>
+          <ul className="evm-trend__legend">
+            <li className="evm-trend__key evm-trend__key--pv">
+              PV{trend.pvSource === "baseline" ? "（ベースライン）" : "（現在計画）"}
+            </li>
+            <li className="evm-trend__key evm-trend__key--ac">AC（日付つき実績）</li>
+            <li className="evm-trend__key evm-trend__key--ev">EV（基準日の 1 点）</li>
+          </ul>
+        </div>
+        <EvmTrendChart trend={trend} />
+        {/* EV is a point and not a line, and the reason has to be on the screen:
+            a missing line reads as a bug unless it is named as a limit. */}
+        <p className="evm-trend__note">
+          EV は<b>線になりません</b>。進捗は現在値だけを保持していて履歴が無いため、
+          基準日の 1 点として描いています。
+          {trend.undatedActualDays > 0 ? (
+            <>
+              {" "}
+              また AC の曲線には<b>日付つきの実績だけ</b>が入ります。日付の無い実績{" "}
+              <b data-testid="evm-trend-undated">{formatDays(trend.undatedActualDays)}</b>{" "}
+              人日は、下の表の AC には含まれますが曲線には現れません（いつ使ったかが分からないため）。
+            </>
+          ) : null}
+        </p>
+      </section>
+
+      {unit === "money" ? (
+        <p className="evm-note" data-testid="evm-money-note">
+          金額は<b>単価 × 工数</b>の導出値で、どこにも保存していません（単位は
+          {project.currency} の最小単位）。
+          {projection.unratedLeafCount > 0 ? (
+            <>
+              {" "}
+              単価の分からない末端タスクが{" "}
+              <b data-testid="evm-unrated-count">{projection.unratedLeafCount}</b>{" "}
+              件あり、<b>金額の集計から外しています</b>（0 円として足すと、
+              費用が少なく出たことが画面から読めなくなるため）。
+            </>
+          ) : null}
+        </p>
+      ) : null}
 
       {/* Says plainly what the as-of date does. Without it an earlier date reads
           as a historical snapshot, and it is not one: only PV is recomputed. */}
@@ -315,7 +630,7 @@ export function EvmDashboard({
           <thead>
             <tr>
               <th scope="col" className="evm-head evm-head--name">
-                {segment === "task" ? "親タスク" : "メンバー"}
+                {segmentCaption}
               </th>
               {/* §5 A-3 — the unit is written once, here, and never in a cell:
                   a unit inside a cell breaks the digit alignment A-1 buys. */}
@@ -326,14 +641,14 @@ export function EvmDashboard({
                   className={`evm-head evm-head--num evm-head--band-${column.band}`}
                 >
                   {column.label}
-                  <span className="evm-head__unit">人日</span>
+                  <span className="evm-head__unit">{unitLabel}</span>
                 </th>
               ))}
               <th scope="col" className="evm-head evm-head--num evm-head--group">
-                SV<span className="evm-head__unit">人日</span>
+                SV<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
-                CV<span className="evm-head__unit">人日</span>
+                CV<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
                 CPI
@@ -342,10 +657,10 @@ export function EvmDashboard({
                 SPI
               </th>
               <th scope="col" className="evm-head evm-head--num evm-head--group">
-                EAC<span className="evm-head__unit">人日</span>
+                EAC<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
-                ETC<span className="evm-head__unit">人日</span>
+                ETC<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--curve">
                 推移
@@ -355,13 +670,19 @@ export function EvmDashboard({
           <tbody>
             {/* §5 A-2 — the project total stays pinned under the header, so a row
                 far down the table can always be read against the whole. */}
-            <MetricRow row={projection.total} projection={projection} caption="プロジェクト合計" />
+            <MetricRow
+              row={projection.total}
+              projection={projection}
+              caption="プロジェクト合計"
+              unit={unit}
+            />
             {rows.map((row) => (
               <MetricRow
                 key={row.key}
                 row={row}
                 projection={projection}
                 caption={row.kind === "unassigned" ? "未割当" : row.label}
+                unit={unit}
               />
             ))}
           </tbody>

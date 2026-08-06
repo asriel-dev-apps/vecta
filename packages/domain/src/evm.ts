@@ -21,6 +21,20 @@ export interface EffortTaskInput {
   /** Daily planned-value plot: sparse ISO-date → person-minutes map. */
   readonly dailyPlan: Readonly<Record<string, number>>;
   /**
+   * Dated expended effort: sparse ISO-date → person-minutes (Design 0011).
+   *
+   * When this map has ANY entry, W is read from it as of the status date and
+   * {@link EffortTaskInput.actualEffortMinutes} is ignored — the import keeps the
+   * two in agreement at the file's last date, and the dated rows are the ones
+   * that carry a time axis. When it is empty or absent, W is the stored current
+   * value exactly as before, which is why importing nothing moves no number.
+   *
+   * This is the mirror of `dailyPlan`: one gives the plan a time axis, the other
+   * gives the actuals one. AC was the metric that had none — measured 2026-08-05,
+   * three status dates over one fixture left AC at 0.625 and CPI a constant 0.8.
+   */
+  readonly datedActualsByDate?: Readonly<Record<string, number>>;
+  /**
    * Whether this task is a leaf — a task no other task names as its parent.
    * Only leaves contribute to the project rollup; non-leaf summary rows (`false`)
    * aggregate their children and would otherwise double-count. Absent means leaf,
@@ -159,9 +173,22 @@ export function calculateTaskEffort(
     }
   }
 
+  // W as of the status date. A task with dated actuals is read from them; a task
+  // without keeps the single stored figure, which has no time axis and therefore
+  // cannot be filtered by one. Both branches are needed: production has no dated
+  // actuals at all, and its numbers must not move when this arrives.
+  let datedMinutes = 0;
+  let hasDatedActuals = false;
+  for (const [date, value] of Object.entries(task.datedActualsByDate ?? {})) {
+    hasDatedActuals = true;
+    if (date <= statusDate) datedMinutes += value;
+  }
+
   const plannedEffortHours = minutesToHours(plannedMinutes); // M
   const plannedEarnedHours = minutesToHours(earnedMinutes); // N
-  const actualEffortHours = minutesToHours(task.actualEffortMinutes); // W
+  const actualEffortHours = minutesToHours(
+    hasDatedActuals ? datedMinutes : task.actualEffortMinutes,
+  ); // W
   const earnedEffortHours = plannedEffortHours * progress; // V = M × T
 
   return {

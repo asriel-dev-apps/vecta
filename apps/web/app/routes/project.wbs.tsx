@@ -15,6 +15,7 @@ import type {
   AssistantProposalRequest,
 } from "~/assistant/proposal-contract";
 import { fromCommand } from "~/wbs/project-command-contract";
+import { projectTitle } from "~/shell/document-title";
 import wbsStyles from "~/wbs/styles.css?url";
 import assistantStyles from "~/assistant/assistant.css?url";
 
@@ -27,6 +28,10 @@ export const links: LinksFunction = () => [
   { rel: "stylesheet", href: wbsStyles },
   { rel: "stylesheet", href: assistantStyles },
 ];
+
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: projectTitle("WBS", loaderData.stateView.name) }];
+}
 
 // SSR loader for `/projects/:id/wbs`. The access gate (parent `/projects/:id`
 // middleware) has already validated the id + membership; the shared

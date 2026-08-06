@@ -1,6 +1,8 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
+  baselineTasks,
+  projectBaselines,
   members,
   processes,
   products,
@@ -47,6 +49,7 @@ export function projectHeaderQuery(
       defaultCalendarId: projects.defaultCalendarId,
       revision: projects.revision,
       nextTaskSeq: projects.nextTaskSeq,
+      nextBaselineVersion: projects.nextBaselineVersion,
     })
     .from(projects)
     .innerJoin(tenants, eq(tenants.id, projects.tenantId))
@@ -121,5 +124,30 @@ export function projectDetailQueries(
         asc(taskDependencies.predecessorTaskId),
         asc(taskDependencies.type),
       ),
+    // Design 0009. In the SAME batch, so the baseline costs no extra round trip —
+    // and a second batch for the dashboard alone WOULD be one, which the 2026-07-26
+    // round-trip fold exists to prevent. The rows are read on every project screen,
+    // including ones that do not show them; that is bytes, not latency, and a
+    // project's baseline is one header plus its leaves.
+    baseline: database
+      .select()
+      .from(projectBaselines)
+      .where(
+        and(
+          eq(projectBaselines.tenantId, tenantId),
+          eq(projectBaselines.projectId, projectId),
+        ),
+      )
+      // Newest first: the read path takes max(version), and ordering here means the
+      // caller never has to sort to find it.
+      .orderBy(desc(projectBaselines.version))
+      .limit(1),
+    baselineTasks: database
+      .select()
+      .from(baselineTasks)
+      .where(
+        and(eq(baselineTasks.tenantId, tenantId), eq(baselineTasks.projectId, projectId)),
+      )
+      .orderBy(desc(baselineTasks.version), asc(baselineTasks.seq)),
   };
 }

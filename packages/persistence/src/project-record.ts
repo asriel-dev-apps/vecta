@@ -17,6 +17,8 @@ export interface ProjectRecord {
   readonly revision: bigint;
   /** Next per-project display No. to hand out (Design 0003 §F-1). */
   readonly nextTaskSeq: number;
+  /** Next baseline version to hand out (Design 0009). */
+  readonly nextBaselineVersion: number;
 }
 
 export interface ProjectCalendarRecord {
@@ -35,6 +37,8 @@ export interface MemberRecord {
   readonly name: string;
   readonly calendarId: string;
   readonly dailyCapacityMinutes: number;
+  /** Design 0010: minor units per person-hour, or null when none is recorded. */
+  readonly costRateMinorPerHour: number | null;
 }
 
 export interface ProcessRecord {
@@ -92,6 +96,8 @@ export interface TaskRecord {
   /** Basis-point proration weight (0–10000) for template-generated subtasks; null otherwise. */
   readonly prorationWeightBp: number | null;
   readonly dailyPlan: Readonly<Record<string, number>>;
+  /** Design 0011: `"YYYY-MM-DD|<memberId>"` → person-minutes. */
+  readonly datedActuals: Readonly<Record<string, number>>;
   readonly actualStart: string | null;
   readonly actualFinish: string | null;
 }

@@ -53,11 +53,13 @@ describe("persistence migrations", () => {
     );
     expect(result.rows.map((row) => row.table_name)).toEqual([
       "audit_events",
+      "baseline_tasks",
       "command_receipts",
       "members",
       "principals",
       "processes",
       "products",
+      "project_baselines",
       "project_calendars",
       "project_memberships",
       "projects",
