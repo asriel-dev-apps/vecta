@@ -224,13 +224,24 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       actor: { type: "HUMAN", id: "user-001" },
       command: {
         type: "member.add",
-        member: { id: memberId, name: "Member 99", calendarId: "standard", dailyCapacityMinutes: 420, costRateMinorPerHour: null },
+        // A REAL rate, not null. The field was missing from the write path
+        // entirely until 2026-08-07, and this assertion passed throughout —
+        // because null is also what a dropped column reads back as. A value that
+        // cannot distinguish "written" from "not written" is not a check.
+        member: {
+          id: memberId,
+          name: "Member 99",
+          calendarId: "standard",
+          dailyCapacityMinutes: 420,
+          costRateMinorPerHour: 7_350,
+        },
       },
     });
     let reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.find((member) => member.id === memberId)).toMatchObject({
       name: "Member 99",
-      dailyCapacityMinutes: 420, costRateMinorPerHour: null,
+      dailyCapacityMinutes: 420,
+      costRateMinorPerHour: 7_350,
     });
 
     await service().execute({

@@ -198,6 +198,7 @@ describe("§0 GENERAL: the write path is server-denied (no equivalence assertion
       read: () => ({}) as never,
       database: () => ({}) as never,
       close: async () => undefined,
+      timings: () => ({ readCount: 0, readMs: 0, writeCount: 0, writeMs: 0 }),
     };
     const result = await applyCommands(
       {

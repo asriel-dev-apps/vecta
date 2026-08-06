@@ -105,6 +105,7 @@ export function fakeSession(overrides: Partial<DbSession> = {}): DbSession {
     read: () => ({}) as never,
     database: () => ({}) as never,
     close: async () => undefined,
+    timings: () => ({ readCount: 0, readMs: 0, writeCount: 0, writeMs: 0 }),
     ...overrides,
   };
 }

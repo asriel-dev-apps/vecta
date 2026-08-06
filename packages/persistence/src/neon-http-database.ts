@@ -33,11 +33,45 @@ export type NeonHttpReadDatabase = NeonHttpDatabase<typeof schema>;
  * ONLY is a guard: this handle is for reads, and the server now enforces that.
  * Both headers apply to batches only, so single-statement reads are unaffected.
  */
+
+/**
+ * Called once per round trip with how long it took, in milliseconds.
+ *
+ * DURATION ONLY. It never sees the SQL, the parameters or the rows — the whole
+ * point of measuring here is to answer "how long is Tokyo→Singapore" in
+ * production, and a hook that could carry data would make that answer cost
+ * something. `Server-Timing` is a response header on a public app.
+ */
+export type RoundTripObserver = (durationMs: number) => void;
+
 export function openNeonHttpReadDatabase(
   connectionString: string,
+  onRoundTrip?: RoundTripObserver,
 ): NeonHttpReadDatabase {
+  // Neon's client takes the `fetch` it will use, so timing a round trip needs no
+  // driver fork and no wrapper around Drizzle: the measurement sits exactly where
+  // the network call is, which is the only place it is honest.
+  const fetchFunction =
+    onRoundTrip === undefined
+      ? undefined
+      : // `Parameters<typeof fetch>` rather than naming `RequestInfo`: this package
+        // is built with the Node lib set, where that DOM type does not exist, and
+        // it runs on workerd where it does. Deriving from `fetch` itself keeps the
+        // signature correct in both without importing a lib for one alias.
+        async (...args: Parameters<typeof fetch>): Promise<Response> => {
+          const startedAt = Date.now();
+          try {
+            return await fetch(...args);
+          } finally {
+            onRoundTrip(Date.now() - startedAt);
+          }
+        };
   return drizzle(
-    neon(connectionString, { isolationLevel: "RepeatableRead", readOnly: true }),
+    neon(connectionString, {
+      isolationLevel: "RepeatableRead",
+      readOnly: true,
+      ...(fetchFunction === undefined ? {} : { fetchFunction }),
+    }),
     { schema },
   );
 }
