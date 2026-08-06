@@ -23,6 +23,11 @@ import { sessionCookieHeader } from "./session";
 const PROJECT_ID = process.env.E2E_PROJECT_ID ?? "";
 const PRINCIPAL_ID = process.env.E2E_PRINCIPAL_ID ?? "";
 
+// The import's own round trip can exceed Playwright's 30 s default on a
+// 216-task project (see the measurement below), so this file gets a longer
+// budget. It is a statement about the write path, not about flakiness.
+test.describe.configure({ timeout: 180_000 });
+
 test.describe("timesheet import", () => {
   test.skip(
     PROJECT_ID === "" || PRINCIPAL_ID === "",
@@ -88,6 +93,15 @@ test.describe("timesheet import", () => {
     // row's number is legitimately refused and would look like a product bug.
     const seq = process.env.E2E_TIMESHEET_SEQ ?? "";
     test.skip(seq === "", "set E2E_TIMESHEET_SEQ to a LEAF task's No. in the seeded project");
+    // The WRITE runs in ONE theme only. Measured 2026-08-06: light and dark ran
+    // the same import concurrently, serialised on the project row lock the command
+    // unit of work takes, and the second one spent 2.6 minutes waiting — a test of
+    // lock contention, not of the feature. Light and dark matter for what a page
+    // LOOKS like; a POST has no theme.
+    test.skip(
+      test.info().project.name !== "light",
+      "the import is a write; one theme runs it, both themes render the rejection",
+    );
 
     await page.goto(`${base}/projects/${PROJECT_ID}/members`);
     const firstMember = await page.getByLabel("メンバー名").first().inputValue();
@@ -108,8 +122,21 @@ test.describe("timesheet import", () => {
     });
     await expect(page.getByTestId("timesheet-import")).toBeEnabled();
 
+    // MEASURED 2026-08-06 against staging: the import takes tens of seconds on a
+    // 216-task project, and the reason is the write path, not this feature. The
+    // command unit of work UPDATEs every task row one statement at a time (two
+    // passes, plus a full delete/insert of the dependency table) and staging's
+    // database is in another region — so the cost is round trips × tasks, paid by
+    // every command. The WBS grid hides it behind a background save queue; an
+    // import is a foreground button, so it is the first place a person sees it.
+    // The generous budget here is honest about that rather than pretending.
+    const startedAt = Date.now();
     await page.getByTestId("timesheet-import").click();
-    await expect(page.getByTestId("timesheet-done")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("timesheet-done")).toBeVisible({ timeout: 120_000 });
+    test.info().annotations.push({
+      type: "measured",
+      description: `import round trip: ${Math.round((Date.now() - startedAt) / 1000)}s`,
+    });
 
     await page.screenshot({
       path: `e2e/.artifacts/timesheet-imported-${test.info().project.name}.png`,

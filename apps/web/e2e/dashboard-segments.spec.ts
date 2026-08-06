@@ -30,12 +30,31 @@ test.describe("EVM dashboard — segments and units", () => {
     await page.goto(`${baseURL ?? ""}/projects/${PROJECT_ID}/dashboard`);
 
     const rows = () => page.locator("[data-testid^='evm-row-']");
+
+    /**
+     * The page is SERVER-RENDERED, so every control is visible and clickable
+     * before React has hydrated — and a click that lands first is simply lost.
+     * Measured 2026-08-06: the first worker to start hit exactly this and read
+     * "親タスク 24 行" fifteen seconds after clicking 変更別.
+     *
+     * Waiting for a fixed time would trade one flake for a slower one. Retrying
+     * the click until `aria-pressed` actually flips waits for the thing that
+     * matters — the handler being attached — and stops as soon as it is.
+     */
+    const press = async (testId: string): Promise<void> => {
+      const button = page.getByTestId(testId);
+      await expect(async () => {
+        await button.click();
+        await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 1_000 });
+      }).toPass({ timeout: 30_000 });
+    };
+
     await expect(page.getByTestId("evm-segment-task")).toBeVisible();
-    await page.getByTestId("evm-segment-task").click();
+    await press("evm-segment-task");
     const byParent = await rows().count();
     expect(byParent).toBeGreaterThan(1); // the total row plus at least one parent
 
-    await page.getByTestId("evm-segment-change").click();
+    await press("evm-segment-change");
     const byChange = await rows().count();
     // Same table, and no more rows than 親タスク別 — same-named parents merge, and
     // nothing can appear that was not already a first-level ancestor.
