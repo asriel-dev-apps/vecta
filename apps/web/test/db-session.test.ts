@@ -31,9 +31,11 @@ describe("createDbSession", () => {
 
     expect(first).toBe(FAKE_DB);
     expect(second).toBe(FAKE_DB);
-    // Two reads → exactly ONE open, against the configured URL.
+    // Two reads → exactly ONE open, against the configured URL. The second
+    // argument is the round-trip observer; what it may carry is asserted in
+    // server-timing.test.ts, so here it is only required to be attached.
     expect(open).toHaveBeenCalledTimes(1);
-    expect(open).toHaveBeenCalledWith(DATABASE_URL);
+    expect(open).toHaveBeenCalledWith(DATABASE_URL, expect.any(Function));
   });
 
   it("closes the underlying connection once after it was used", async () => {
@@ -79,7 +81,7 @@ describe("createDbSession", () => {
     expect(session.read()).toBe(FAKE_READ_DB);
 
     expect(openRead).toHaveBeenCalledTimes(1);
-    expect(openRead).toHaveBeenCalledWith(DATABASE_URL);
+    expect(openRead).toHaveBeenCalledWith(DATABASE_URL, expect.any(Function));
     // The point of the split: reading must never pay the write pool's handshake.
     expect(open).not.toHaveBeenCalled();
   });
