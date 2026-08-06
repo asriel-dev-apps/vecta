@@ -198,6 +198,23 @@ describe("EVM dashboard — cost layer", () => {
     expect(changes).toBe(parents - 1);
   });
 
+  it("REVIEW 2026-08-06: the column headers say which unit they are showing", async () => {
+    // Found by the spec review. The unit is written once, in the header — Design
+    // 0007 §5 A-3 keeps it out of the cells so the digits stay aligned — so the
+    // header is the ONLY thing that can say which unit is on screen. It said
+    // 人日 while the cells showed 176,000: a header actively lying, not merely
+    // silent. Nothing asserted header text, so nothing caught it.
+    renderDashboard(priced);
+    await screen.findByTestId("evm-unit-money");
+    const header = () => screen.getByRole("table").querySelector("thead")!.textContent ?? "";
+    expect(header()).toContain("人日");
+    expect(header()).not.toContain("JPY");
+
+    fireEvent.click(screen.getByTestId("evm-unit-money"));
+    expect(header()).toContain("JPY");
+    expect(header()).not.toContain("人日");
+  });
+
   it("does not add a column — the unit changes, the table does not", async () => {
     renderDashboard(priced);
     await screen.findByTestId("evm-unit-money");

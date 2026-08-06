@@ -394,6 +394,16 @@ export function EvmDashboard({
         ? projection.byMember
         : projection.byChange;
   const segmentCaption = SEGMENTS.find((option) => option.key === segment)?.caption ?? "";
+  /**
+   * The unit is written ONCE, in the header (design 0007 §5 A-3: a unit inside a
+   * cell breaks the digit alignment A-1 buys) — so when the unit switches, the
+   * header is the only thing that can say so. Found by review: the cells showed
+   * 176,000 under a header that still read 人日, which is a header actively
+   * lying rather than merely omitting.
+   *
+   * CPI and SPI keep no unit in either mode; they are ratios.
+   */
+  const unitLabel = unit === "days" ? "人日" : project.currency;
 
   return (
     <div className="app-shell">
@@ -631,14 +641,14 @@ export function EvmDashboard({
                   className={`evm-head evm-head--num evm-head--band-${column.band}`}
                 >
                   {column.label}
-                  <span className="evm-head__unit">人日</span>
+                  <span className="evm-head__unit">{unitLabel}</span>
                 </th>
               ))}
               <th scope="col" className="evm-head evm-head--num evm-head--group">
-                SV<span className="evm-head__unit">人日</span>
+                SV<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
-                CV<span className="evm-head__unit">人日</span>
+                CV<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
                 CPI
@@ -647,10 +657,10 @@ export function EvmDashboard({
                 SPI
               </th>
               <th scope="col" className="evm-head evm-head--num evm-head--group">
-                EAC<span className="evm-head__unit">人日</span>
+                EAC<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--num">
-                ETC<span className="evm-head__unit">人日</span>
+                ETC<span className="evm-head__unit">{unitLabel}</span>
               </th>
               <th scope="col" className="evm-head evm-head--curve">
                 推移

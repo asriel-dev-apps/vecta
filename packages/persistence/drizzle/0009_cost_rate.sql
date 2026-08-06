@@ -12,6 +12,13 @@
 -- where a silent zero baked a permanent hole into the budget.
 --
 -- SENSITIVE (ADR 0011 Decision 7). It is projected out of the GENERAL read model
--- at the structure level, and a test scans the built client bundle for the name.
+-- at the structure level: `stripSensitiveMemberFields` is an ALLOW-list, so the
+-- key is absent from a general viewer's payload rather than nulled, and a test
+-- checks that payload by name in both directions.
+--
+-- It is NOT scanned for in the built client bundle, and cannot be: the privileged
+-- screen edits this field, so its NAME necessarily ships. Design 0010 §7 asked
+-- for that check in its first draft and retracted it as unachievable. What must
+-- never reach a bundle is a VALUE, and values are runtime data.
 ALTER TABLE "members" ADD COLUMN "cost_rate_minor_per_hour" integer;--> statement-breakpoint
 ALTER TABLE "members" ADD CONSTRAINT "members_cost_rate_non_negative" CHECK ("members"."cost_rate_minor_per_hour" is null or "members"."cost_rate_minor_per_hour" >= 0);
