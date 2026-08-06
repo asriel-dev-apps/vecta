@@ -289,7 +289,7 @@ function expandMasters(
     }
 
     // op === "update" — a rename, and nothing else. The other master fields are
-    // absent from the IR by design (§7.2): `dailyCapacityMinutes: 1, costRateMinorPerHour: null` disables a
+    // absent from the IR by design (§7.2): `dailyCapacityMinutes: 1` disables a
     // member as effectively as deleting them.
     const newName = master.newName.trim();
     if (newName.length === 0) {

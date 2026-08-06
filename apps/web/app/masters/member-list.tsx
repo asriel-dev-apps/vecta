@@ -37,7 +37,10 @@ export function MemberList({
       id: crypto.randomUUID(),
       name: trimmed,
       calendarId: defaultCalendarId,
-      dailyCapacityMinutes: 480, costRateMinorPerHour: null,
+      dailyCapacityMinutes: 480,
+      // A new member starts with NO rate: `null` is "not recorded", and it is not
+      // zero (Design 0010 §2). Whoever adds them types the rate afterwards.
+      costRateMinorPerHour: null,
     });
     setName("");
   };

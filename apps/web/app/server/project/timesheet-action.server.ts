@@ -177,36 +177,16 @@ export async function runTimesheetAction({
       summary: parsed.summary,
     });
   }
+  // Every failure below goes through the same helper the early validation uses.
+  // Five hand-rolled copies of one response shape is five places for the shape to
+  // drift from what the screen parses (found by review).
   if (result.code === "VERSION_CONFLICT") {
-    return data(
-      {
-        ok: false as const,
-        code: "INVALID" as const,
-        issues: [
-          {
-            line: 1,
-            message:
-              "この画面を開いてから計画が変更されました。再読み込みしてから取り込んでください。",
-          },
-        ],
-      },
-      { status: 409 },
+    return invalid(
+      "この画面を開いてから計画が変更されました。再読み込みしてから取り込んでください。",
+      409,
     );
   }
-  if (result.code === "FORBIDDEN") {
-    return data(
-      { ok: false as const, code: "INVALID" as const, issues: [{ line: 1, message: "権限がありません" }] },
-      { status: 403 },
-    );
-  }
-  if (result.code === "NOT_FOUND") {
-    return data(
-      { ok: false as const, code: "INVALID" as const, issues: [{ line: 1, message: "プロジェクトが見つかりません" }] },
-      { status: 404 },
-    );
-  }
-  return data(
-    { ok: false as const, code: "INVALID" as const, issues: [{ line: 1, message: result.message }] },
-    { status: 422 },
-  );
+  if (result.code === "FORBIDDEN") return invalid("権限がありません", 403);
+  if (result.code === "NOT_FOUND") return invalid("プロジェクトが見つかりません", 404);
+  return invalid(result.message, 422);
 }

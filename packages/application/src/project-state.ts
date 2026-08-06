@@ -1,5 +1,6 @@
 import type { DependencyType } from "@vecta/domain";
 import {
+  datedActualKey,
   datedActualTotalMinutes,
   parseDatedActualKey,
   replaceDatedActualPartitions,
@@ -758,7 +759,10 @@ export function applyProjectCommand(
     const seenPartitions = new Set<string>();
     const entriesByTask = new Map<string, DatedActualEntry[]>();
     for (const entry of command.entries) {
-      const partition = `${entry.workDate}|${entry.memberId}`;
+      // Through `datedActualKey`, not a hand-built template. Two encodings of the
+      // same key agree only by transcription, which is what `dated-actuals.ts`
+      // exists to prevent — and this file already imports from it.
+      const partition = datedActualKey(entry.workDate, entry.memberId);
       if (!seenPartitions.has(partition)) {
         seenPartitions.add(partition);
         partitions.push({ workDate: entry.workDate, memberId: entry.memberId });
