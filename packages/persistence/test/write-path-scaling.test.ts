@@ -31,7 +31,7 @@ import { startTestDatabase, type TestDatabase } from "./database.js";
  * ## The control
  *
  * A trivial command — renaming ONE task — is run against a small project and a
- * project an order of magnitude larger, and the statement counts are compared.
+ * project several times larger, and the statement counts are compared.
  *
  * **They must be equal.** Not "close", not "sub-linear": the work of renaming one
  * task does not depend on how many other tasks exist, so any difference at all is
@@ -39,8 +39,18 @@ import { startTestDatabase, type TestDatabase } from "./database.js";
  * this test drove, the two counts differed by roughly twice the task difference.
  */
 
+// Small on purpose. This file shares one container with thirteen others, and a
+// bigger LARGE bought nothing: the claim needs an order-of-magnitude gap, not a
+// big number. Measured 2026-08-07 — a 60-task LARGE pushed eight unrelated tests
+// in other files past their timeouts under `pnpm check`, which runs the packages
+// in parallel. 4 vs 24 keeps the same 6x gap for a fraction of the seeding.
+// Both shapes must populate the SAME TABLES — only the row counts may differ.
+// With one subtask per parent the small fixture produced no dependency rows, so
+// its command skipped one guarded statement and the counts differed by exactly
+// 1 (measured: 24 vs 25). That is a presence difference, not per-row work, and
+// letting it stand would have meant loosening the assertion to hide it.
 const SMALL = { parentCount: 2, subtasksPerParent: 2, memberCount: 2 };
-const LARGE = { parentCount: 12, subtasksPerParent: 4, memberCount: 2 };
+const LARGE = { parentCount: 6, subtasksPerParent: 3, memberCount: 2 };
 
 describe("write path scaling", () => {
   let client: Client;
@@ -114,10 +124,10 @@ describe("write path scaling", () => {
     large = await statementsForOneRename(LARGE, "Renamed large");
   }, 120_000);
 
-  it("CONTROL: renaming ONE task costs the same whether the project has 6 tasks or 60", () => {
-    // The fixtures really are an order of magnitude apart — otherwise the
-    // comparison below would be vacuous.
-    expect(large.tasks).toBeGreaterThan(small.tasks * 5);
+  it("CONTROL: renaming ONE task costs the same whether the project has 6 tasks or 24", () => {
+    // The fixtures really are far apart — otherwise the comparison below would
+    // be vacuous.
+    expect(large.tasks).toBeGreaterThan(small.tasks * 3);
 
     // The claim. Any difference at all is per-row work.
     expect(large.statements, `small=${small.statements} large=${large.statements}`).toBe(
