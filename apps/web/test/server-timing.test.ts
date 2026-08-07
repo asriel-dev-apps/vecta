@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createDbSession } from "~/server/db-session.server";
 import type {
@@ -96,6 +97,27 @@ describe("database round-trip timing", () => {
     // `/login` legitimately needs nothing.
     const session = createDbSession(env, () => fakeConnection(), () => fakeRead());
     expect(session.timings()).toEqual({ readCount: 0, readMs: 0, writeCount: 0, writeMs: 0 });
+  });
+
+  it("counts a read through the REAL session — no fakes anywhere in the path", async () => {
+    // The assembly, end to end: `createDbSession` with its DEFAULT openers, the
+    // real Neon HTTP client, the real Drizzle handle. Every other case in this
+    // file injects an opener, which is precisely how a session whose observer
+    // was never wired kept them all green.
+    //
+    // The host is RFC 2606 `.invalid`, so the request fails at the network and
+    // leaves this machine alone. A failed round trip is still a round trip that
+    // was paid for, which is why the observers fire in `finally`.
+    const session = createDbSession({
+      DATABASE_URL: "postgresql://user:pw@db.example.invalid/vecta",
+    } as unknown as Env);
+
+    expect(session.timings().readCount).toBe(0);
+    await expect(session.read().execute(sql`select 1`)).rejects.toThrow();
+    expect(session.timings().readCount).toBe(1);
+    // Reading must never open the write pool, so the write side stays at zero.
+    expect(session.timings().writeCount).toBe(0);
+    await session.close();
   });
 
   it("CONTROL (privacy): the observer is given a NUMBER and nothing else", () => {
