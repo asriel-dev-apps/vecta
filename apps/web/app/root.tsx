@@ -53,10 +53,12 @@ export const middleware: Route.MiddlewareFunction[] = [
       // table name: this is a response header on a public app, and anything
       // richer would make a measurement cost something.
       //
-      // The counts matter as much as the durations. `dbw` is the write path,
-      // which issues one statement per task row — so `dbw` count rising with the
-      // size of a project is the shape of the problem, and a total alone would
-      // hide it behind "the network was slow".
+      // The counts matter as much as the durations. A count that rises with the
+      // size of a project is the shape of a per-row write path, and a total alone
+      // would hide it behind "the network was slow" — which is exactly how the
+      // per-task loop stayed invisible for as long as it did. Now that the write
+      // path is batched, `dbw` count staying flat as a project grows is the
+      // property this header exists to keep honest.
       const { readCount, readMs, writeCount, writeMs } = session.timings();
       response.headers.append(
         "Server-Timing",

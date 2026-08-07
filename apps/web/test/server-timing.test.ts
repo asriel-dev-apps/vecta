@@ -24,6 +24,15 @@ import type {
  *      and nothing else, so there is no statement, parameter, row or table name
  *      for the header to carry. That is a property of the TYPE, and this asserts
  *      it against the real session rather than trusting the shape.
+ *
+ * **What this file deliberately does NOT check, and once wrongly appeared to.**
+ * Every test here injects fake openers, so it exercises the ACCUMULATOR and never
+ * the wiring between a driver and the observer. Both observers shipped inert —
+ * the read client was handed an option `neon()` does not accept, and the write
+ * pool was wrapped where Drizzle's transactions do not go — and every case below
+ * stayed green throughout. That seam is now covered where the drivers are, in
+ * `packages/persistence/test/round-trip-timing.test.ts`, which drives the real
+ * clients and reproduces both defects as controls.
  */
 
 function fakeRead(): NeonHttpReadDatabase {
