@@ -521,6 +521,17 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       // An upsert rather than update-or-insert: whether a row already exists
       // becomes Postgres' question, asked once for the set, instead of ours asked
       // per row.
+      //
+      // The conflict target is the COMPOSITE `tasks_tenant_project_id_unique`,
+      // not the `id` primary key, and that is the tenancy fence. Task ids are
+      // supplied by the client (`AddTaskCommand.task` carries `id`), so a request
+      // scoped to project A can name a task id that lives in project B. Targeting
+      // `id` alone made that a silent cross-project UPDATE: `tenant_id` and
+      // `project_id` are absent from the `set` list, so the victim's row stayed
+      // where it was and took this project's name, seq, plan and a nulled parent.
+      // Against the composite the row is not a conflict at all, so Postgres
+      // attempts the INSERT and `tasks_pkey` rejects it — which is exactly what
+      // the per-row loop this replaced did. Fail closed, as before.
       const taskValues = next.tasks.map((task) => ({
         id: task.id,
         tenantId: request.tenantId,
@@ -556,7 +567,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           .insert(tasks)
           .values(taskValues)
           .onConflictDoUpdate({
-            target: tasks.id,
+            target: [tasks.tenantId, tasks.projectId, tasks.id],
             set: {
               parentTaskId: sql`null`,
               sortOrder: sql`excluded.sort_order`,

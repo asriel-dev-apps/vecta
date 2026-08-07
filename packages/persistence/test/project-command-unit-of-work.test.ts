@@ -256,6 +256,60 @@ describe("PostgresProjectCommandUnitOfWork", () => {
     expect(reloaded?.members.some((member) => member.id === memberId)).toBe(false);
   });
 
+  it("round-trips a cost rate typed on an EXISTING member", async () => {
+    // The path the production defect actually lived on. `member.add` sends the
+    // whole record, so it would have survived a write list missing one column;
+    // the members SCREEN types a rate into a row that already exists and sends
+    // `member.update` with that field alone (`member-list.tsx` → `onUpdate(member.id,
+    // { costRateMinorPerHour: next })`). Adding a member is not a substitute for it.
+    const existing = demoProjectRecord.members[0]!;
+    expect(existing.costRateMinorPerHour).not.toBe(9_100);
+
+    await service().execute({
+      tenantId: demoProjectRecord.tenant.id,
+      projectId: demoProjectRecord.project.id,
+      expectedRevision: 1n,
+      idempotencyKey: "set-cost-rate",
+      actor: { type: "HUMAN", id: "user-001" },
+      command: {
+        type: "member.update",
+        memberId: existing.id,
+        changes: { costRateMinorPerHour: 9_100 },
+      },
+    });
+
+    const reloaded = await repository.load(
+      demoProjectRecord.tenant.id,
+      demoProjectRecord.project.id,
+    );
+    expect(reloaded?.members.find((member) => member.id === existing.id)).toMatchObject({
+      name: existing.name,
+      costRateMinorPerHour: 9_100,
+    });
+
+    // Clearing it must reach the database too — `null` here is a real value the
+    // screen can send, not the absence the dropped column used to produce.
+    await service().execute({
+      tenantId: demoProjectRecord.tenant.id,
+      projectId: demoProjectRecord.project.id,
+      expectedRevision: 2n,
+      idempotencyKey: "clear-cost-rate",
+      actor: { type: "HUMAN", id: "user-001" },
+      command: {
+        type: "member.update",
+        memberId: existing.id,
+        changes: { costRateMinorPerHour: null },
+      },
+    });
+    const cleared = await repository.load(
+      demoProjectRecord.tenant.id,
+      demoProjectRecord.project.id,
+    );
+    expect(
+      cleared?.members.find((member) => member.id === existing.id)?.costRateMinorPerHour,
+    ).toBeNull();
+  });
+
   it("adds, renames, and removes a process master", async () => {
     const processId = "70000000-0000-4000-8000-0000000000ff";
     await service().execute({
