@@ -59,6 +59,7 @@ function fakeReadSession(batchResults: readonly unknown[]) {
       throw new Error("the read path must never open the write pool");
     },
     close: async () => undefined,
+    timings: () => ({ readCount: 0, readMs: 0, writeCount: 0, writeMs: 0 }),
   } satisfies DbSession;
   return { session, batches };
 }

@@ -11,7 +11,7 @@ import {
   type ProjectState,
   type SubtaskTemplateStep,
 } from "@vecta/application";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   auditEvents,
@@ -302,15 +302,14 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       } else {
         next = transitioned;
       }
+      // Only the NEXT-state maps survive. The matching `current…Ids` sets existed
+      // to answer "insert or update?" per row; every write below is now an upsert,
+      // so that question belongs to Postgres and is asked once for the whole set.
       const nextTaskById = new Map(next.tasks.map((task) => [task.id, task]));
       const nextMemberById = new Map(next.members.map((member) => [member.id, member]));
-      const currentMemberIds = new Set(memberRows.map((member) => member.id));
       const nextProcessById = new Map(next.processes.map((process) => [process.id, process]));
-      const currentProcessIds = new Set(processRows.map((process) => process.id));
       const nextProductById = new Map(next.products.map((product) => [product.id, product]));
-      const currentProductIds = new Set(productRows.map((product) => product.id));
       const nextTemplateById = new Map(next.templates.map((template) => [template.id, template]));
-      const currentTemplateIds = new Set(templateRows.map((template) => template.id));
 
       // Free all self-FK (parent), assignee, process, and product references so
       // deletes and inserts never collide with RESTRICT constraints.
@@ -330,239 +329,283 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       }
 
       // Members: insert / update present, delete removed (now unreferenced).
-      for (const member of next.members) {
-        const values = {
-          name: member.name,
-          calendarId: member.calendarId,
-          dailyCapacityMinutes: member.dailyCapacityMinutes,
-        };
-        if (currentMemberIds.has(member.id)) {
-          await transaction
-            .update(members)
-            .set({ ...values, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(members.tenantId, request.tenantId),
-                eq(members.projectId, request.projectId),
-                eq(members.id, member.id),
-              ),
-            );
-        } else {
-          await transaction.insert(members).values({
-            id: member.id,
-            tenantId: request.tenantId,
-            projectId: request.projectId,
-            ...values,
+      // One upsert, one delete — the same shape as the task write below, and for
+      // the same reason.
+      //
+      // `costRateMinorPerHour` was MISSING from this list until 2026-08-07, so a
+      // rate typed on the members screen was accepted, applied optimistically,
+      // and silently dropped on the next read. The seed path writes the whole
+      // record and so was unaffected, which is why nothing caught it — and the
+      // one test that touched the field passed a `null`, a value that cannot
+      // distinguish "written" from "not written". It now passes a real amount.
+      const memberValues = next.members.map((member) => ({
+        id: member.id,
+        tenantId: request.tenantId,
+        projectId: request.projectId,
+        name: member.name,
+        calendarId: member.calendarId,
+        dailyCapacityMinutes: member.dailyCapacityMinutes,
+        costRateMinorPerHour: member.costRateMinorPerHour,
+      }));
+      if (memberValues.length > 0) {
+        await transaction
+          .insert(members)
+          .values(memberValues)
+          .onConflictDoUpdate({
+            target: [members.tenantId, members.projectId, members.id],
+            set: {
+              name: sql`excluded.name`,
+              calendarId: sql`excluded.calendar_id`,
+              dailyCapacityMinutes: sql`excluded.daily_capacity_minutes`,
+              costRateMinorPerHour: sql`excluded.cost_rate_minor_per_hour`,
+              updatedAt: sql`now()`,
+            },
           });
-        }
       }
-      for (const member of memberRows) {
-        if (!nextMemberById.has(member.id)) {
-          await transaction
-            .delete(members)
-            .where(
-              and(
-                eq(members.tenantId, request.tenantId),
-                eq(members.projectId, request.projectId),
-                eq(members.id, member.id),
-              ),
-            );
-        }
+      const removedMemberIds = memberRows
+        .filter((member) => !nextMemberById.has(member.id))
+        .map((member) => member.id);
+      if (removedMemberIds.length > 0) {
+        await transaction
+          .delete(members)
+          .where(
+            and(
+              eq(members.tenantId, request.tenantId),
+              eq(members.projectId, request.projectId),
+              inArray(members.id, removedMemberIds),
+            ),
+          );
       }
 
-      // Processes: insert / update present, delete removed (now unreferenced).
-      for (const process of next.processes) {
-        const values = { name: process.name, sortOrder: process.sortOrder };
-        if (currentProcessIds.has(process.id)) {
-          await transaction
-            .update(processes)
-            .set({ ...values, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(processes.tenantId, request.tenantId),
-                eq(processes.projectId, request.projectId),
-                eq(processes.id, process.id),
-              ),
-            );
-        } else {
-          await transaction.insert(processes).values({
-            id: process.id,
-            tenantId: request.tenantId,
-            projectId: request.projectId,
-            ...values,
+      // Processes: upsert present, delete removed (now unreferenced).
+      const processValues = next.processes.map((process) => ({
+        id: process.id,
+        tenantId: request.tenantId,
+        projectId: request.projectId,
+        name: process.name,
+        sortOrder: process.sortOrder,
+      }));
+      if (processValues.length > 0) {
+        await transaction
+          .insert(processes)
+          .values(processValues)
+          .onConflictDoUpdate({
+            target: [processes.tenantId, processes.projectId, processes.id],
+            set: {
+              name: sql`excluded.name`,
+              sortOrder: sql`excluded.sort_order`,
+              updatedAt: sql`now()`,
+            },
           });
-        }
       }
-      for (const process of processRows) {
-        if (!nextProcessById.has(process.id)) {
-          await transaction
-            .delete(processes)
-            .where(
-              and(
-                eq(processes.tenantId, request.tenantId),
-                eq(processes.projectId, request.projectId),
-                eq(processes.id, process.id),
-              ),
-            );
-        }
+      const removedProcessIds = processRows
+        .filter((process) => !nextProcessById.has(process.id))
+        .map((process) => process.id);
+      if (removedProcessIds.length > 0) {
+        await transaction
+          .delete(processes)
+          .where(
+            and(
+              eq(processes.tenantId, request.tenantId),
+              eq(processes.projectId, request.projectId),
+              inArray(processes.id, removedProcessIds),
+            ),
+          );
       }
 
-      // Products: insert / update present, delete removed (now unreferenced).
-      for (const product of next.products) {
-        const values = { name: product.name, sortOrder: product.sortOrder };
-        if (currentProductIds.has(product.id)) {
-          await transaction
-            .update(products)
-            .set({ ...values, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(products.tenantId, request.tenantId),
-                eq(products.projectId, request.projectId),
-                eq(products.id, product.id),
-              ),
-            );
-        } else {
-          await transaction.insert(products).values({
-            id: product.id,
-            tenantId: request.tenantId,
-            projectId: request.projectId,
-            ...values,
+      // Products: upsert present, delete removed (now unreferenced).
+      const productValues = next.products.map((product) => ({
+        id: product.id,
+        tenantId: request.tenantId,
+        projectId: request.projectId,
+        name: product.name,
+        sortOrder: product.sortOrder,
+      }));
+      if (productValues.length > 0) {
+        await transaction
+          .insert(products)
+          .values(productValues)
+          .onConflictDoUpdate({
+            target: [products.tenantId, products.projectId, products.id],
+            set: {
+              name: sql`excluded.name`,
+              sortOrder: sql`excluded.sort_order`,
+              updatedAt: sql`now()`,
+            },
           });
-        }
       }
-      for (const product of productRows) {
-        if (!nextProductById.has(product.id)) {
-          await transaction
-            .delete(products)
-            .where(
-              and(
-                eq(products.tenantId, request.tenantId),
-                eq(products.projectId, request.projectId),
-                eq(products.id, product.id),
-              ),
-            );
-        }
+      const removedProductIds = productRows
+        .filter((product) => !nextProductById.has(product.id))
+        .map((product) => product.id);
+      if (removedProductIds.length > 0) {
+        await transaction
+          .delete(products)
+          .where(
+            and(
+              eq(products.tenantId, request.tenantId),
+              eq(products.projectId, request.projectId),
+              inArray(products.id, removedProductIds),
+            ),
+          );
       }
 
       // Templates: insert / update present, delete removed. Templates are never
       // referenced by a task (generation copies the step data), so a delete has
       // no referential guard (Design 0003 §E-1 locked decision 4).
-      for (const template of next.templates) {
-        const values = {
-          name: template.name,
-          sortOrder: template.sortOrder,
-          subtasks: template.subtasks,
-        };
-        if (currentTemplateIds.has(template.id)) {
-          await transaction
-            .update(subtaskTemplates)
-            .set({ ...values, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(subtaskTemplates.tenantId, request.tenantId),
-                eq(subtaskTemplates.projectId, request.projectId),
-                eq(subtaskTemplates.id, template.id),
-              ),
-            );
-        } else {
-          await transaction.insert(subtaskTemplates).values({
-            id: template.id,
-            tenantId: request.tenantId,
-            projectId: request.projectId,
-            ...values,
+      const templateValues = next.templates.map((template) => ({
+        id: template.id,
+        tenantId: request.tenantId,
+        projectId: request.projectId,
+        name: template.name,
+        sortOrder: template.sortOrder,
+        subtasks: template.subtasks,
+      }));
+      if (templateValues.length > 0) {
+        await transaction
+          .insert(subtaskTemplates)
+          .values(templateValues)
+          .onConflictDoUpdate({
+            target: [subtaskTemplates.tenantId, subtaskTemplates.projectId, subtaskTemplates.id],
+            set: {
+              name: sql`excluded.name`,
+              sortOrder: sql`excluded.sort_order`,
+              subtasks: sql`excluded.subtasks`,
+              updatedAt: sql`now()`,
+            },
           });
-        }
       }
-      for (const template of templateRows) {
-        if (!nextTemplateById.has(template.id)) {
-          await transaction
-            .delete(subtaskTemplates)
-            .where(
-              and(
-                eq(subtaskTemplates.tenantId, request.tenantId),
-                eq(subtaskTemplates.projectId, request.projectId),
-                eq(subtaskTemplates.id, template.id),
-              ),
-            );
-        }
+      const removedTemplateIds = templateRows
+        .filter((template) => !nextTemplateById.has(template.id))
+        .map((template) => template.id);
+      if (removedTemplateIds.length > 0) {
+        await transaction
+          .delete(subtaskTemplates)
+          .where(
+            and(
+              eq(subtaskTemplates.tenantId, request.tenantId),
+              eq(subtaskTemplates.projectId, request.projectId),
+              inArray(subtaskTemplates.id, removedTemplateIds),
+            ),
+          );
       }
 
-      // Delete removed tasks (parent references already nulled above).
-      for (const task of taskRows) {
-        if (!nextTaskById.has(task.id)) {
-          await transaction
-            .delete(tasks)
-            .where(
-              and(
-                eq(tasks.tenantId, request.tenantId),
-                eq(tasks.projectId, request.projectId),
-                eq(tasks.id, task.id),
-              ),
-            );
-        }
+      // Delete removed tasks (parent references already nulled above). ONE
+      // statement for the whole set: a loop here cost a round trip per deleted
+      // task, and deleting a subtree is exactly when there are many.
+      const removedTaskIds = taskRows
+        .filter((task) => !nextTaskById.has(task.id))
+        .map((task) => task.id);
+      if (removedTaskIds.length > 0) {
+        await transaction
+          .delete(tasks)
+          .where(
+            and(
+              eq(tasks.tenantId, request.tenantId),
+              eq(tasks.projectId, request.projectId),
+              inArray(tasks.id, removedTaskIds),
+            ),
+          );
       }
 
-      // Upsert task native columns (parent deferred to a second pass so every
-      // parent target exists before the self-FK is set).
-      const currentTaskIds = new Set(taskRows.map((task) => task.id));
-      for (const task of next.tasks) {
-        const values = {
-          sortOrder: task.sortOrder,
-          // Immutable display No.: written once at insert and re-set to the same
-          // value on update, so a reorder/edit never renumbers a task (§F-1).
-          seq: task.seq,
-          name: task.name,
-          processId: task.processId,
-          productId: task.productId,
-          note: task.note,
-          contract: task.contract,
-          assigneeMemberId: task.assigneeMemberId,
-          plannedEffortMinutes: task.plannedEffortMinutes,
-          progressBasisPoints: task.progressBasisPoints,
-          actualEffortMinutes: task.actualEffortMinutes,
-          prorationWeightBp: task.prorationWeightBp,
-          dailyPlan: task.dailyPlan,
-          // Design 0011. Carried in the same per-task write as `dailyPlan`, which
-          // is why an import survives the next unrelated command: both the total
-          // and the rows it comes from travel with the task.
-          datedActuals: task.datedActuals,
-          actualStart: task.actualStart,
-          actualFinish: task.actualFinish,
-        };
-        if (currentTaskIds.has(task.id)) {
-          await transaction
-            .update(tasks)
-            .set({ ...values, parentTaskId: null, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(tasks.tenantId, request.tenantId),
-                eq(tasks.projectId, request.projectId),
-                eq(tasks.id, task.id),
-              ),
-            );
-        } else {
-          await transaction.insert(tasks).values({
-            id: task.id,
-            tenantId: request.tenantId,
-            projectId: request.projectId,
-            parentTaskId: null,
-            ...values,
+      // Write every task in ONE statement, then link the parents in ONE more.
+      //
+      // This used to be a loop per task — an UPDATE or an INSERT each — plus a
+      // second loop for the parent links, so a command cost `2 × tasks` round
+      // trips whether it touched one task or all of them. Measured 2026-08-06:
+      // renaming a SINGLE task cost 37 statements on a 6-task project and 149 on
+      // a 60-task one, and against a database in another region that is the whole
+      // latency budget. `write-path-scaling.test.ts` pins the two counts EQUAL,
+      // which is the only shape that says "the work does not depend on how big
+      // the project is".
+      //
+      // An upsert rather than update-or-insert: whether a row already exists
+      // becomes Postgres' question, asked once for the set, instead of ours asked
+      // per row.
+      //
+      // The conflict target is the COMPOSITE `tasks_tenant_project_id_unique`,
+      // not the `id` primary key, and that is the tenancy fence. Task ids are
+      // supplied by the client (`AddTaskCommand.task` carries `id`), so a request
+      // scoped to project A can name a task id that lives in project B. Targeting
+      // `id` alone made that a silent cross-project UPDATE: `tenant_id` and
+      // `project_id` are absent from the `set` list, so the victim's row stayed
+      // where it was and took this project's name, seq, plan and a nulled parent.
+      // Against the composite the row is not a conflict at all, so Postgres
+      // attempts the INSERT and `tasks_pkey` rejects it — which is exactly what
+      // the per-row loop this replaced did. Fail closed, as before.
+      const taskValues = next.tasks.map((task) => ({
+        id: task.id,
+        tenantId: request.tenantId,
+        projectId: request.projectId,
+        // Parent deferred to the second statement so every parent target exists
+        // before the self-FK is set — the same reason the two loops were in this
+        // order, unchanged.
+        parentTaskId: null,
+        sortOrder: task.sortOrder,
+        // Immutable display No.: written once at insert and re-set to the same
+        // value on update, so a reorder/edit never renumbers a task (§F-1).
+        seq: task.seq,
+        name: task.name,
+        processId: task.processId,
+        productId: task.productId,
+        note: task.note,
+        contract: task.contract,
+        assigneeMemberId: task.assigneeMemberId,
+        plannedEffortMinutes: task.plannedEffortMinutes,
+        progressBasisPoints: task.progressBasisPoints,
+        actualEffortMinutes: task.actualEffortMinutes,
+        prorationWeightBp: task.prorationWeightBp,
+        dailyPlan: task.dailyPlan,
+        // Design 0011. Carried in the same per-task write as `dailyPlan`, which
+        // is why an import survives the next unrelated command: both the total
+        // and the rows it comes from travel with the task.
+        datedActuals: task.datedActuals,
+        actualStart: task.actualStart,
+        actualFinish: task.actualFinish,
+      }));
+      if (taskValues.length > 0) {
+        await transaction
+          .insert(tasks)
+          .values(taskValues)
+          .onConflictDoUpdate({
+            target: [tasks.tenantId, tasks.projectId, tasks.id],
+            set: {
+              parentTaskId: sql`null`,
+              sortOrder: sql`excluded.sort_order`,
+              seq: sql`excluded.seq`,
+              name: sql`excluded.name`,
+              processId: sql`excluded.process_id`,
+              productId: sql`excluded.product_id`,
+              note: sql`excluded.note`,
+              contract: sql`excluded.contract`,
+              assigneeMemberId: sql`excluded.assignee_member_id`,
+              plannedEffortMinutes: sql`excluded.planned_effort_minutes`,
+              progressBasisPoints: sql`excluded.progress_basis_points`,
+              actualEffortMinutes: sql`excluded.actual_effort_minutes`,
+              prorationWeightBp: sql`excluded.proration_weight_bp`,
+              dailyPlan: sql`excluded.daily_plan`,
+              datedActuals: sql`excluded.dated_actuals`,
+              actualStart: sql`excluded.actual_start`,
+              actualFinish: sql`excluded.actual_finish`,
+              updatedAt: sql`now()`,
+            },
           });
-        }
       }
-      for (const task of next.tasks) {
-        if (task.parentId !== null) {
-          await transaction
-            .update(tasks)
-            .set({ parentTaskId: task.parentId })
-            .where(
-              and(
-                eq(tasks.tenantId, request.tenantId),
-                eq(tasks.projectId, request.projectId),
-                eq(tasks.id, task.id),
-              ),
-            );
-        }
+
+      // The parent links, once every row above exists. An UPDATE driven by a
+      // VALUES list, so it stays one statement however deep or wide the tree is.
+      const parented = next.tasks.filter((task) => task.parentId !== null);
+      if (parented.length > 0) {
+        const pairs = sql.join(
+          parented.map((task) => sql`(${task.id}::uuid, ${task.parentId}::uuid)`),
+          sql`, `,
+        );
+        await transaction.execute(sql`
+          update ${tasks} set parent_task_id = v.parent_task_id
+          from (values ${pairs}) as v(id, parent_task_id)
+          where ${tasks.tenantId} = ${request.tenantId}
+            and ${tasks.projectId} = ${request.projectId}
+            and ${tasks.id} = v.id
+        `);
       }
 
       const dependencyValues = next.tasks.flatMap((task) =>

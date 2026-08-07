@@ -25,6 +25,22 @@ import {
  * The root middleware owns the lifecycle and calls `close()` in a `finally`
  * after the response.
  */
+/**
+ * What this request spent talking to the database, split by transport.
+ *
+ * Counts and milliseconds only — never a statement, a parameter or a row. It
+ * leaves the Worker as a `Server-Timing` header on a public app, so the shape of
+ * this type is the privacy boundary.
+ */
+export interface DbTimings {
+  /** HTTP read round trips: one per query or `batch(...)`. */
+  readonly readCount: number;
+  readonly readMs: number;
+  /** Statements issued over the WebSocket pool by the command write path. */
+  readonly writeCount: number;
+  readonly writeMs: number;
+}
+
 export interface DbSession {
   /** The read transport: one `fetch` per query or batch, no connection held. */
   read(): NeonHttpReadDatabase;
@@ -32,6 +48,11 @@ export interface DbSession {
   database(): PersistenceDatabase;
   /** Close the write connection if it was opened; otherwise a no-op. */
   close(): Promise<void>;
+  /**
+   * What has been spent so far. Read AFTER the response is produced, by the root
+   * middleware — every loader and action has awaited its reads by then.
+   */
+  timings(): DbTimings;
 }
 
 /**
@@ -43,10 +64,14 @@ export interface DbSession {
  */
 export function createDbSession(
   env: Env,
-  open: (connectionString: string) => NeonPersistenceConnection =
-    openNeonPersistenceConnection,
-  openRead: (connectionString: string) => NeonHttpReadDatabase =
-    openNeonHttpReadDatabase,
+  open: (
+    connectionString: string,
+    onRoundTrip?: (durationMs: number) => void,
+  ) => NeonPersistenceConnection = openNeonPersistenceConnection,
+  openRead: (
+    connectionString: string,
+    onRoundTrip?: (durationMs: number) => void,
+  ) => NeonHttpReadDatabase = openNeonHttpReadDatabase,
 ): DbSession {
   const databaseUrl = env.DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl.length === 0) {
@@ -54,14 +79,30 @@ export function createDbSession(
   }
   let connection: NeonPersistenceConnection | undefined;
   let readDatabase: NeonHttpReadDatabase | undefined;
+  // Accumulated per request. Plain numbers rather than a list of samples: the
+  // header carries a total, and keeping the samples would be keeping data this
+  // has no use for.
+  let readCount = 0;
+  let readMs = 0;
+  let writeCount = 0;
+  let writeMs = 0;
   return {
     read() {
-      readDatabase ??= openRead(databaseUrl);
+      readDatabase ??= openRead(databaseUrl, (durationMs) => {
+        readCount += 1;
+        readMs += durationMs;
+      });
       return readDatabase;
     },
     database() {
-      connection ??= open(databaseUrl);
+      connection ??= open(databaseUrl, (durationMs) => {
+        writeCount += 1;
+        writeMs += durationMs;
+      });
       return connection.database;
+    },
+    timings() {
+      return { readCount, readMs, writeCount, writeMs };
     },
     async close() {
       if (connection === undefined) {

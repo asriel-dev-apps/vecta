@@ -224,13 +224,24 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       actor: { type: "HUMAN", id: "user-001" },
       command: {
         type: "member.add",
-        member: { id: memberId, name: "Member 99", calendarId: "standard", dailyCapacityMinutes: 420, costRateMinorPerHour: null },
+        // A REAL rate, not null. The field was missing from the write path
+        // entirely until 2026-08-07, and this assertion passed throughout —
+        // because null is also what a dropped column reads back as. A value that
+        // cannot distinguish "written" from "not written" is not a check.
+        member: {
+          id: memberId,
+          name: "Member 99",
+          calendarId: "standard",
+          dailyCapacityMinutes: 420,
+          costRateMinorPerHour: 7_350,
+        },
       },
     });
     let reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.find((member) => member.id === memberId)).toMatchObject({
       name: "Member 99",
-      dailyCapacityMinutes: 420, costRateMinorPerHour: null,
+      dailyCapacityMinutes: 420,
+      costRateMinorPerHour: 7_350,
     });
 
     await service().execute({
@@ -243,6 +254,60 @@ describe("PostgresProjectCommandUnitOfWork", () => {
     });
     reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.some((member) => member.id === memberId)).toBe(false);
+  });
+
+  it("round-trips a cost rate typed on an EXISTING member", async () => {
+    // The path the production defect actually lived on. `member.add` sends the
+    // whole record, so it would have survived a write list missing one column;
+    // the members SCREEN types a rate into a row that already exists and sends
+    // `member.update` with that field alone (`member-list.tsx` → `onUpdate(member.id,
+    // { costRateMinorPerHour: next })`). Adding a member is not a substitute for it.
+    const existing = demoProjectRecord.members[0]!;
+    expect(existing.costRateMinorPerHour).not.toBe(9_100);
+
+    await service().execute({
+      tenantId: demoProjectRecord.tenant.id,
+      projectId: demoProjectRecord.project.id,
+      expectedRevision: 1n,
+      idempotencyKey: "set-cost-rate",
+      actor: { type: "HUMAN", id: "user-001" },
+      command: {
+        type: "member.update",
+        memberId: existing.id,
+        changes: { costRateMinorPerHour: 9_100 },
+      },
+    });
+
+    const reloaded = await repository.load(
+      demoProjectRecord.tenant.id,
+      demoProjectRecord.project.id,
+    );
+    expect(reloaded?.members.find((member) => member.id === existing.id)).toMatchObject({
+      name: existing.name,
+      costRateMinorPerHour: 9_100,
+    });
+
+    // Clearing it must reach the database too — `null` here is a real value the
+    // screen can send, not the absence the dropped column used to produce.
+    await service().execute({
+      tenantId: demoProjectRecord.tenant.id,
+      projectId: demoProjectRecord.project.id,
+      expectedRevision: 2n,
+      idempotencyKey: "clear-cost-rate",
+      actor: { type: "HUMAN", id: "user-001" },
+      command: {
+        type: "member.update",
+        memberId: existing.id,
+        changes: { costRateMinorPerHour: null },
+      },
+    });
+    const cleared = await repository.load(
+      demoProjectRecord.tenant.id,
+      demoProjectRecord.project.id,
+    );
+    expect(
+      cleared?.members.find((member) => member.id === existing.id)?.costRateMinorPerHour,
+    ).toBeNull();
   });
 
   it("adds, renames, and removes a process master", async () => {

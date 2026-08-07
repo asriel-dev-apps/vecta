@@ -41,8 +41,34 @@ export const middleware: Route.MiddlewareFunction[] = [
     const { env } = context.get(appContext);
     const session = createDbSession(env);
     context.set(dbSessionContext, session);
+    const startedAt = Date.now();
     try {
-      return await next();
+      const response = await next();
+      // `Server-Timing` — the only way to get the REAL Tokyo→Singapore number
+      // rather than an arithmetic estimate from round-trip counts. Attached here
+      // because this middleware already owns the session, so by the time `next()`
+      // returns every loader and action has awaited its reads.
+      //
+      // COUNTS AND MILLISECONDS ONLY. No statement, no parameter, no row, no
+      // table name: this is a response header on a public app, and anything
+      // richer would make a measurement cost something.
+      //
+      // The counts matter as much as the durations. A count that rises with the
+      // size of a project is the shape of a per-row write path, and a total alone
+      // would hide it behind "the network was slow" — which is exactly how the
+      // per-task loop stayed invisible for as long as it did. Now that the write
+      // path is batched, `dbw` count staying flat as a project grows is the
+      // property this header exists to keep honest.
+      const { readCount, readMs, writeCount, writeMs } = session.timings();
+      response.headers.append(
+        "Server-Timing",
+        [
+          `app;dur=${Date.now() - startedAt}`,
+          `db;desc="read ${readCount}";dur=${readMs}`,
+          `dbw;desc="write ${writeCount}";dur=${writeMs}`,
+        ].join(", "),
+      );
+      return response;
     } finally {
       await session.close();
     }
