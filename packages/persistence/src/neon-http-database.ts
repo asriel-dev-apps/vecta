@@ -108,33 +108,44 @@ export function instrumentNeonHttpRoundTrips(
 
   const query = callSites.query.bind(callSites);
   callSites.query = (...args: unknown[]): unknown => {
-    const pending = query(...args) as {
-      then: (onFulfilled?: unknown, onRejected?: unknown) => unknown;
-    };
+    const pending = query(...args) as PendingQuery;
     // The prototype `then` is what runs the statement. Shadowing it with an own
     // property leaves the object's identity intact — `transaction` checks these
     // with `instanceof` and would reject a substitute.
-    const run = pending.then.bind(pending) as (
-      onFulfilled?: (value: unknown) => unknown,
-      onRejected?: (error: unknown) => unknown,
-    ) => unknown;
-    pending.then = (onFulfilled?: unknown, onRejected?: unknown): unknown => {
+    const run = pending.then.bind(pending);
+    pending.then = (onFulfilled, onRejected): unknown => {
       const startedAt = Date.now();
       const stop = (): void => onRoundTrip(Date.now() - startedAt);
       return run(
         (value) => {
           stop();
-          return typeof onFulfilled === "function" ? onFulfilled(value) : value;
+          return onFulfilled === undefined || onFulfilled === null
+            ? value
+            : onFulfilled(value);
         },
         (error) => {
           stop();
-          if (typeof onRejected === "function") {
-            return onRejected(error);
+          if (onRejected === undefined || onRejected === null) {
+            throw error;
           }
-          throw error;
+          return onRejected(error);
         },
       );
     };
     return pending;
   };
+}
+
+/**
+ * The lazy query object Neon's `query` hands back, in the only two respects this
+ * touches: it is thenable, and its `then` is what actually runs the statement.
+ * The callbacks are typed rather than `unknown` on purpose — narrowing `unknown`
+ * with `typeof x === "function"` yields the bare `Function` type, which cannot be
+ * called without losing every argument and return check.
+ */
+interface PendingQuery {
+  then: (
+    onFulfilled?: ((value: unknown) => unknown) | null,
+    onRejected?: ((error: unknown) => unknown) | null,
+  ) => unknown;
 }
