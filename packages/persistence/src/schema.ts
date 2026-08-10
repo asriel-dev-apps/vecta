@@ -25,6 +25,7 @@ export const auditActorType = pgEnum("audit_actor_type", ["HUMAN", "AGENT", "SYS
 export const principalType = pgEnum("principal_type", ["HUMAN", "AGENT"]);
 export const tenantRole = pgEnum("tenant_role", ["OWNER", "ADMIN", "MEMBER"]);
 export const projectRole = pgEnum("project_role", ["OWNER", "EDITOR", "VIEWER"]);
+export const scenarioStatus = pgEnum("scenario_status", ["DRAFT", "PUBLISHED", "DISCARDED"]);
 
 const auditTimestamp = (name: string) =>
   timestamp(name, { withTimezone: true, mode: "string", precision: 6 });
@@ -492,6 +493,130 @@ export const baselineTasks = pgTable(
       "baseline_tasks_not_own_parent",
       sql`${table.parentTaskId} is null or ${table.parentTaskId} <> ${table.taskId}`,
     ),
+  ],
+);
+
+/**
+ * A scenario: a revision-pinned draft of plan-only changes that never touches
+ * Current until a human publishes it (Design 0015, ADR 0008's aggregate and
+ * publish decisions re-expressed for the effort model).
+ *
+ * Terminal rows are immutable, but DRAFT rows deliberately are NOT — a draft that
+ * cannot be edited is not a draft. So the trigger installed alongside this table
+ * keys on `status`, unlike the unconditional one on `baselineTasks`, and its
+ * control has to measure both directions.
+ */
+export const projectScenarios = pgTable(
+  "project_scenarios",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    id: uuid().notNull(),
+    name: text().notNull(),
+    status: scenarioStatus().notNull().default("DRAFT"),
+    // The project revision the draft is pinned to. Editing and publishing fail
+    // closed unless this still equals `projects.revision`; VIEWING does not,
+    // which is the whole reason the base snapshot exists (Design 0015 §7).
+    baseRevision: bigint("base_revision", { mode: "bigint" }).notNull(),
+    // Rises per edit. The project revision does not move until publish.
+    scenarioRevision: bigint("scenario_revision", { mode: "bigint" }).notNull().default(0n),
+    createdByActorType: auditActorType("created_by_actor_type").notNull(),
+    createdByActorId: text("created_by_actor_id").notNull(),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+    terminalAt: auditTimestamp("terminal_at"),
+    terminalByActorType: auditActorType("terminal_by_actor_type"),
+    terminalByActorId: text("terminal_by_actor_id"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.id] }),
+    foreignKey({
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+      name: "project_scenarios_project_fk",
+    }).onDelete("restrict"),
+    index("project_scenarios_project_status_idx").on(table.tenantId, table.projectId, table.status),
+    check("project_scenarios_base_revision_non_negative", sql`${table.baseRevision} >= 0`),
+    check("project_scenarios_scenario_revision_non_negative", sql`${table.scenarioRevision} >= 0`),
+    check("project_scenarios_name_not_blank", sql`length(btrim(${table.name})) > 0`),
+    // One constraint rather than three nullable columns nobody checks, so a
+    // half-written terminal row cannot exist.
+    check(
+      "project_scenarios_terminal_fields_together",
+      sql`(${table.status} = 'DRAFT' and ${table.terminalAt} is null and ${table.terminalByActorType} is null and ${table.terminalByActorId} is null) or (${table.status} <> 'DRAFT' and ${table.terminalAt} is not null and ${table.terminalByActorType} is not null and ${table.terminalByActorId} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * The base state, whole, as one jsonb document — enough to rebuild a
+ * `ProjectState`, because `applyProjectCommand` takes the whole thing.
+ *
+ * `baselineTasks` opened its snapshot into columns and this one does not; the
+ * difference is not inconsistency. Baseline rows are AGGREGATED in SQL, so their
+ * columns earn their keep. This one is only ever read whole and turned back into a
+ * `ProjectState`, so columns would buy nothing and would need a migration every
+ * time that type grows.
+ *
+ * The member cost rate is NOT in here (Design 0015 §4.2, reserved by Design 0009
+ * §8-5): `stripSensitiveMemberFields` is an allow-list, so a snapshot carrying the
+ * rate would become a second read path for a commercially sensitive field.
+ */
+export const scenarioBaseSnapshots = pgTable(
+  "scenario_base_snapshots",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    scenarioId: uuid("scenario_id").notNull(),
+    state: jsonb().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.projectId, table.scenarioId] }),
+    foreignKey({
+      columns: [table.tenantId, table.projectId, table.scenarioId],
+      foreignColumns: [projectScenarios.tenantId, projectScenarios.projectId, projectScenarios.id],
+      name: "scenario_base_snapshots_scenario_fk",
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * The scenario's own edits, in order. Plain existing `ProjectCommand` payloads:
+ * ADR 0008 Decision 1 defines a scenario as an ordered set of existing plan-only
+ * commands and publish replays them through the normal Application validation, so
+ * no new command type and no second write path appears (ADR 0013).
+ *
+ * Which commands may land here is enforced in the Application layer, and it is a
+ * FIELD-level check, not a type-level one: `task.update` and `member.update` carry
+ * `Partial<Omit<…>>` change bags that include progress, actuals and the cost rate.
+ */
+export const scenarioEdits = pgTable(
+  "scenario_edits",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    scenarioId: uuid("scenario_id").notNull(),
+    ordinal: integer().notNull(),
+    command: jsonb().notNull(),
+    createdByActorType: auditActorType("created_by_actor_type").notNull(),
+    createdByActorId: text("created_by_actor_id").notNull(),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.projectId, table.scenarioId, table.ordinal],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.projectId, table.scenarioId],
+      foreignColumns: [projectScenarios.tenantId, projectScenarios.projectId, projectScenarios.id],
+      name: "scenario_edits_scenario_fk",
+    }).onDelete("restrict"),
+    index("scenario_edits_scenario_ordinal_idx").on(
+      table.tenantId,
+      table.projectId,
+      table.scenarioId,
+      table.ordinal,
+    ),
+    check("scenario_edits_ordinal_non_negative", sql`${table.ordinal} >= 0`),
   ],
 );
 

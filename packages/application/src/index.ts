@@ -4,6 +4,7 @@ export * from "./timesheet-import.js";
 export * from "./project-command-service.js";
 export * from "./project-command-authorizer.js";
 export * from "./project-state.js";
+export * from "./scenario.js";
 export * from "./project-projection.js";
 export * from "./project-evm-dashboard.js";
 export * from "./effort-schedule.js";
