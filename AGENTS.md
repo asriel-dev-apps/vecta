@@ -4,7 +4,12 @@
 
 - Docs: `../project-docs/vecta/`
 - Visibility: public
-- Tier: product   # staging (`pnpm deploy:staging`) はエージェントが出す。production は deploy.yml の承認を人間が行う
+- Environments: dev, prod
+- Auto-deploy: dev
+- Deploy.dev: pnpm deploy:staging
+- Deploy.prod: ci:deploy.yml   # production Environment の required reviewers を人間が承認する
+
+## Working rules
 
 - Surface assumptions only when ambiguity changes the implementation; ask before choosing between materially different outcomes.
 - Make the smallest change that satisfies the request. Do not add unrequested abstractions, options, fallbacks, or extensibility.
