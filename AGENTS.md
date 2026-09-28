@@ -1,5 +1,11 @@
 # Agent guidelines
 
+## Project settings
+
+- Docs: `../project-docs/vecta/`
+- Visibility: public
+- Tier: product   # staging (`pnpm deploy:staging`) はエージェントが出す。production は deploy.yml の承認を人間が行う
+
 - Surface assumptions only when ambiguity changes the implementation; ask before choosing between materially different outcomes.
 - Make the smallest change that satisfies the request. Do not add unrequested abstractions, options, fallbacks, or extensibility.
 - Keep diffs scoped, preserve established conventions, and clean up only artifacts introduced by the current change.
