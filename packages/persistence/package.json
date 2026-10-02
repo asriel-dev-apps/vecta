@@ -18,13 +18,13 @@
     "@vecta/application": "workspace:*",
     "@vecta/domain": "workspace:*",
     "@neondatabase/serverless": "1.1.0",
-    "drizzle-orm": "0.45.2",
-    "pg": "8.22.0"
+    "drizzle-orm": "0.45.3",
+    "pg": "8.23.0"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "12.0.4",
     "@types/node": "24.10.1",
-    "@types/pg": "8.20.0",
+    "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.10",
     "typescript": "6.0.3",
     "vitest": "4.1.10"
