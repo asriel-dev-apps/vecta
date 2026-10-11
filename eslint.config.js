@@ -113,6 +113,7 @@ export default tseslint.config(
       "**/build/**",
       "**/.react-router/**",
       "**/worker-configuration.d.ts",
+      ".pnpmfile.cjs",
       // `spikes/` is exploration code, deliberately OUTSIDE the pnpm workspace
       // (`pnpm-workspace.yaml` lists only `apps/*` and `packages/*`), so CI never
       // installs its dependencies. Type-aware linting there is not noisy, it is
