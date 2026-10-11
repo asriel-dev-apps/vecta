@@ -10,6 +10,12 @@ updates:
       javascript-development:
         dependency-type: development
     open-pull-requests-limit: 5
+    ignore:
+      # Block TypeScript 7.x major updates until typescript-eslint adds support
+      # for TS 7.1+. typescript-eslint 8.65.0 fails with "does not support TS 7.0".
+      # See: https://github.com/typescript-eslint/typescript-eslint/issues/10940
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
