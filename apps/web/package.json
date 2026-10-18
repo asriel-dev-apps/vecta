@@ -10,7 +10,9 @@
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run",
     "types:worker": "wrangler types --env-file worker-types.env",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "perf": "node perf/measure.mjs",
+    "e2e:grid": "playwright test -c perf/playwright.config.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

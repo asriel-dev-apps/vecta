@@ -23,6 +23,7 @@
     "vitest.config.ts",
     "playwright.config.ts",
     "e2e",
+    "perf",
     "react-router.config.ts",
     "worker-configuration.d.ts",
     ".react-router/types/**/*"
