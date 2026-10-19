@@ -73,6 +73,7 @@ describe("persistence migrations", () => {
       "tenant",
       "tenant_membership",
       "wbs",
+      "wbs_change",
     ]);
   });
 

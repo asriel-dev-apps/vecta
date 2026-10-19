@@ -194,7 +194,7 @@ function createServer(deps: ApiDeps, session: DbSession, identity: Authenticated
     "apply_project_commands",
     {
       description:
-        "Apply a batch of project commands, chaining revisions server-side on top of expectedRevision.",
+        "Apply one operation of project commands as a single revision on top of expectedRevision.",
       annotations: {
         title: "Apply project commands",
         readOnlyHint: false,
@@ -205,22 +205,23 @@ function createServer(deps: ApiDeps, session: DbSession, identity: Authenticated
       inputSchema: {
         tenantId: UuidSchema.describe("Tenant that owns the project"),
         projectId: UuidSchema.describe("Project to change"),
-        expectedRevision: RevisionSchema.describe("Confirmed revision the batch applies on top of"),
+        expectedRevision: RevisionSchema.describe("Confirmed revision the operation applies on top of"),
+        operationId: z.string().trim().min(1).max(200).describe("Client-minted operation id"),
         commands: z
           .array(CommandEntrySchema)
           .min(1)
-          .describe("Ordered commands, each with a client-minted idempotency key"),
+          .describe("Commands in this operation. More than one is allowed only when every command is task.update"),
       },
       outputSchema: {
         projectId: UuidSchema,
         revision: RevisionSchema,
       },
     },
-    async ({ tenantId, projectId, expectedRevision, commands }) => {
+    async ({ tenantId, projectId, expectedRevision, operationId, commands }) => {
       try {
-        // Re-validate the assembled batch through the SAME contract schema `/api`
-        // uses, so the duplicate-idempotency-key refine and bounds hold identically.
-        const parsed = CommandBatchSchema.safeParse({ expectedRevision, commands });
+        // Re-validate the assembled operation through the SAME contract schema
+        // `/api` uses, so the task.update-only multi-command rule and bounds hold.
+        const parsed = CommandBatchSchema.safeParse({ expectedRevision, operationId, commands });
         if (!parsed.success) {
           return mcpErrorContent({ code: "REQUEST_INVALID", message: "Request validation failed" });
         }
@@ -229,10 +230,8 @@ function createServer(deps: ApiDeps, session: DbSession, identity: Authenticated
             session,
             tenantId,
             projectId,
-            commands: parsed.data.commands.map((entry) => ({
-              command: toCommand(entry.command),
-              idempotencyKey: entry.idempotencyKey,
-            })),
+            operationId: parsed.data.operationId,
+            commands: parsed.data.commands.map((command) => toCommand(command)),
             expectedRevision: BigInt(parsed.data.expectedRevision),
           },
           {

@@ -160,42 +160,31 @@ export const ApiCommandSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-// ADR 0012 Step 4b — the write-path batch envelope. The client posts a whole
-// multi-command edit (e.g. a sibling reorder = several `task.update`s) as ONE
-// action request; the route action chains their revisions server-side. Each
-// entry carries a client-generated idempotency key (mirrors the SPA's
-// per-command `crypto.randomUUID()`), so a replayed POST dedupes through the
-// command receipts. `expectedRevision` is the confirmed revision the batch is
-// applied on top of (string on the wire, `bigint` once parsed).
-export const CommandEntrySchema = z
-  .object({
-    command: ApiCommandSchema,
-    idempotencyKey: z.string().trim().min(1).max(200),
-  })
-  .strict();
+// One request is one operation: a client-minted operation id plus the commands
+// it applies, on top of `expectedRevision` (string on the wire, `bigint` once
+// parsed). Replaying the same operation id does not apply it twice. More than
+// one command is a reorder or a paste, and every command in that case is
+// `task.update`.
+export const CommandEntrySchema = ApiCommandSchema;
 
 // The largest single user gesture emits one command per task it touches; the
 // worst case is a full sibling-group reorder (`reorderSiblingCommands` renumbers a
 // whole sibling group), and the biggest such group in a realistic tree — even the
 // SSR stress project's 500 root siblings — stays under this bound. 1,000 covers
-// that comfortably while rejecting a payload that could only be a bug or abuse
-// (down from the original 5,000, which was sized to the whole-project task cap and
-// would fan a pathological batch out into thousands of DB transactions).
+// that comfortably while rejecting a payload that could only be a bug or abuse.
 const MAX_COMMANDS_PER_BATCH = 1_000;
 
 export const CommandBatchSchema = z
   .object({
     expectedRevision: RevisionSchema,
+    operationId: z.string().trim().min(1).max(200),
     commands: z.array(CommandEntrySchema).min(1).max(MAX_COMMANDS_PER_BATCH),
   })
   .strict()
-  // Each command carries a client-minted idempotency key; a duplicate within one
-  // batch would make the second command replay the first's receipt instead of
-  // executing, silently dropping an edit. Reject the batch at the boundary.
-  .refine((batch) => {
-    const keys = batch.commands.map((entry) => entry.idempotencyKey);
-    return new Set(keys).size === keys.length;
-  }, "Duplicate idempotency key within one batch");
+  .refine(
+    (batch) => batch.commands.length === 1 || batch.commands.every((command) => command.type === "task.update"),
+    "Only task.update commands may be combined in one operation",
+  );
 
 // The wire never carries `seq`: the display No. is assigned server-side from the
 // project counter (§F-1), so the command task omits it.

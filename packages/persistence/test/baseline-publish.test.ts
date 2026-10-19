@@ -67,9 +67,9 @@ describe("baseline.publish", () => {
       tenantId,
       projectId,
       expectedRevision,
-      idempotencyKey: `publish-${(attempt += 1).toString()}`,
+      operationId: `publish-${(attempt += 1).toString()}`,
       actor: { type: "HUMAN", id: "user-001" },
-      command,
+      commands: [command],
     });
 
   const frozenRows = () =>

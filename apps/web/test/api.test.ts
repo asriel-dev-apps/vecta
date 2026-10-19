@@ -65,16 +65,17 @@ function postCommands(body: unknown): RequestInit {
   };
 }
 
-function batchOf(command: unknown, idempotencyKey = "key-1", expectedRevision = "5") {
-  return { expectedRevision, commands: [{ command, idempotencyKey }] };
+function batchOf(command: unknown, operationId = "key-1", expectedRevision = "5") {
+  return { expectedRevision, operationId, commands: [command] };
 }
 
 /**
  * A unit of work that models the Postgres UoW's idempotency receipt (checked
  * BEFORE the version gate, per `PostgresProjectCommandUnitOfWork.execute`): a
- * repeated `(idempotencyKey)` with a matching request fingerprint REPLAYS the
- * recorded revision without re-applying the transition or bumping the revision;
- * a mismatched fingerprint is an {@link IdempotencyConflictError}. `applyCount`
+ * repeated `operationId` with a matching request fingerprint REPLAYS the
+ * recorded revision without re-applying the transition or bumping the revision.
+ * The fingerprint is the actor and the commands, not `expectedRevision`.
+ * A mismatched fingerprint is an {@link IdempotencyConflictError}. `applyCount`
  * counts real transitions so a replay can be proven not to re-execute.
  */
 class IdempotentFakeUnitOfWork implements ProjectCommandUnitOfWork {
@@ -94,25 +95,21 @@ class IdempotentFakeUnitOfWork implements ProjectCommandUnitOfWork {
     return this.inner.revision;
   }
 
-  async execute(
-    request: ProjectCommandRequest,
-    transition: (project: ProjectState) => ProjectState,
-  ): Promise<ProjectCommandExecution> {
+  async execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution> {
     const fingerprint = JSON.stringify({
       actor: request.actor,
-      command: request.command,
-      expectedRevision: request.expectedRevision.toString(),
+      commands: request.commands,
     });
-    const existing = this.receipts.get(request.idempotencyKey);
+    const existing = this.receipts.get(request.operationId);
     if (existing !== undefined) {
       if (existing.fingerprint !== fingerprint) {
-        throw new IdempotencyConflictError(request.idempotencyKey);
+        throw new IdempotencyConflictError(request.operationId);
       }
       return { projectId: request.projectId, revision: existing.revision, replayed: true };
     }
-    const execution = await this.inner.execute(request, transition);
+    const execution = await this.inner.execute(request);
     this.applyCount += 1;
-    this.receipts.set(request.idempotencyKey, { revision: execution.revision, fingerprint });
+    this.receipts.set(request.operationId, { revision: execution.revision, fingerprint });
     return execution;
   }
 }
@@ -384,7 +381,8 @@ describe("/api core parity (one write core, no fork by surface)", () => {
         tenantId: TENANT_ID,
         projectId: PROJECT_ID,
         projectRole: "OWNER",
-        commands: [{ command: toCommand(wireCommand), idempotencyKey: "k-parity" }],
+        operationId: "k-parity",
+        commands: [toCommand(wireCommand)],
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uowCookie },
@@ -456,7 +454,7 @@ describe("/api conflict + idempotency", () => {
     const { app } = buildApiApp({ grantResolver: fakeGrantResolver(grant({ projectRole: "OWNER" })) });
     const response = await app.request(
       `${BASE}/commands`,
-      postCommands({ expectedRevision: "5", commands: [{ command: { type: "task.update" }, idempotencyKey: "k" }] }),
+      postCommands({ expectedRevision: "5", operationId: "k", commands: [{ type: "task.update" }] }),
       apiEnv(),
     );
     expect(response.status).toBe(400);
@@ -545,7 +543,8 @@ describe("applyCommands cookie surface unchanged (post-seam regression)", () => 
         tenantId: TENANT_ID,
         projectId: PROJECT_ID,
         projectRole: "OWNER",
-        commands: [{ command: { type: "task.update", taskId: leaf.id, changes: { name: "X" } }, idempotencyKey: "k1" }],
+        operationId: "k1",
+        commands: [{ type: "task.update", taskId: leaf.id, changes: { name: "X" } }],
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => new FakeProjectCommandUnitOfWork(project, 5n) },
@@ -561,7 +560,8 @@ describe("applyCommands cookie surface unchanged (post-seam regression)", () => 
         tenantId: TENANT_ID,
         projectId: PROJECT_ID,
         projectRole: "VIEWER",
-        commands: [{ command: { type: "task.update", taskId: leaf.id, changes: { name: "X" } }, idempotencyKey: "k2" }],
+        operationId: "k2",
+        commands: [{ type: "task.update", taskId: leaf.id, changes: { name: "X" } }],
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => new FakeProjectCommandUnitOfWork(project, 5n) },
@@ -575,7 +575,8 @@ describe("applyCommands cookie surface unchanged (post-seam regression)", () => 
         session: fakeSession(),
         tenantId: TENANT_ID,
         projectId: PROJECT_ID,
-        commands: [{ command: { type: "task.update", taskId: leaf.id, changes: { name: "X" } }, idempotencyKey: "k3" }],
+        operationId: "k3",
+        commands: [{ type: "task.update", taskId: leaf.id, changes: { name: "X" } }],
         expectedRevision: 5n,
       }),
     ).rejects.toThrow(/grantResolver/);

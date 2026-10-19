@@ -78,8 +78,8 @@ describe("subtask template generation (write path + scheduler)", () => {
     await service().execute({
       ...envelope,
       expectedRevision: revision,
-      idempotencyKey: `parent-effort-${minutes}`,
-      command: { type: "task.update", taskId: parentTask.id, changes: { plannedEffortMinutes: minutes } },
+      operationId: `parent-effort-${minutes}`,
+      commands: [{ type: "task.update", taskId: parentTask.id, changes: { plannedEffortMinutes: minutes } }],
     });
   }
 
@@ -87,12 +87,12 @@ describe("subtask template generation (write path + scheduler)", () => {
     await service().execute({
       ...envelope,
       expectedRevision: revision,
-      idempotencyKey: "generate-subtasks",
-      command: {
+      operationId: "generate-subtasks",
+      commands: [{
         type: "task.generateSubtasks",
         parentTaskId: parentTask.id,
         templateId: standardBuildTemplateId,
-      },
+      }],
     });
   }
 
@@ -167,8 +167,8 @@ describe("subtask template generation (write path + scheduler)", () => {
     await service().execute({
       ...envelope,
       expectedRevision: 3n,
-      idempotencyKey: "edit-weight",
-      command: { type: "task.update", taskId: design.id, changes: { prorationWeightBp: 4_000 } },
+      operationId: "edit-weight",
+      commands: [{ type: "task.update", taskId: design.id, changes: { prorationWeightBp: 4_000 } }],
     });
 
     const children = subtasksOf(await reload());

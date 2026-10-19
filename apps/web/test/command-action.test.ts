@@ -71,12 +71,8 @@ function saveRequest(): Request {
     headers: { "content-type": "application/json", "x-request-id": "req-write" },
     body: JSON.stringify({
       expectedRevision: "5",
-      commands: [
-        {
-          idempotencyKey: "k-1",
-          command: { type: "task.update", taskId: TASK_ID, changes: { sortOrder: 3 } },
-        },
-      ],
+      operationId: "k-1",
+      commands: [{ type: "task.update", taskId: TASK_ID, changes: { sortOrder: 3 } }],
     }),
   });
 }

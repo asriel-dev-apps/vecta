@@ -96,7 +96,7 @@ export function TimesheetImport({
         // files — the receipt would then reject the second on a hash mismatch
         // with an internal error (found by review, 2026-08-06). Every other write
         // path in the app already mints a UUID here.
-        idempotencyKey: crypto.randomUUID(),
+        operationId: crypto.randomUUID(),
       },
       { method: "post", encType: "application/json" },
     );

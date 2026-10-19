@@ -52,7 +52,7 @@ export async function runCommandAction<K extends SaveKind>(
 
   // A malformed JSON body must not 500: JSON syntax errors → 400 (the request is
   // not even parseable), a well-formed body that violates the command contract
-  // (shape, caps, or a duplicate idempotency key) → 422 (unprocessable entity).
+  // (shape, caps, or a mixed multi-command operation) → 422 (unprocessable entity).
   let rawBody: unknown;
   try {
     rawBody = await request.json();
@@ -79,10 +79,8 @@ export async function runCommandAction<K extends SaveKind>(
     tenantId: membership.tenantId,
     projectId: membership.projectId,
     projectRole: membership.projectRole,
-    commands: parsed.data.commands.map((entry) => ({
-      command: toCommand(entry.command),
-      idempotencyKey: entry.idempotencyKey,
-    })),
+    operationId: parsed.data.operationId,
+    commands: parsed.data.commands.map((command) => toCommand(command)),
     expectedRevision: BigInt(parsed.data.expectedRevision),
   });
 

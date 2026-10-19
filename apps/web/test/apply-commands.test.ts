@@ -17,12 +17,12 @@ import type { DbSession } from "~/server/db-session.server";
 import { FakeProjectCommandUnitOfWork } from "./fixtures/fake-unit-of-work";
 import { scheduledProject } from "./fixtures/wbs";
 
-// ADR 0012 Step 4b — the action core (`applyCommands`) authorizes the session
-// principal as the actor and drives the batch through the command service with
-// optimistic concurrency. These tests inject the in-memory fake unit of work, so
-// the whole write path runs with no network/DB: an authorized batch persists and
-// advances the revision; a stale expected revision RETURNS a 409-shaped conflict
-// (never throws); a VIEWER actor is denied before any command executes.
+// The action core (`applyCommands`) authorizes the session principal as the actor
+// and drives the operation through the command service once, with optimistic
+// concurrency. These tests inject the in-memory fake unit of work, so the whole
+// write path runs with no network/DB: an authorized operation persists and
+// advances the revision by one; a stale expected revision RETURNS a 409-shaped
+// conflict (never throws); a VIEWER actor is denied before anything executes.
 
 const TENANT_ID = "11111111-1111-4111-8111-111111111111";
 const project: ProjectState = scheduledProject({ parentCount: 2, subtasksPerParent: 3, memberCount: 3 });
@@ -39,8 +39,8 @@ function fakeSession(): DbSession {
   };
 }
 
-function withKeys(commands: readonly ProjectCommand[]) {
-  return commands.map((command, index) => ({ command, idempotencyKey: `key-${index}` }));
+function operation(commands: readonly ProjectCommand[], operationId = "op-1") {
+  return { operationId, commands };
 }
 
 const rename: ProjectCommand = { type: "task.update", taskId: leaf.id, changes: { name: "Renamed" } };
@@ -50,39 +50,21 @@ const renameOther: ProjectCommand = {
   changes: { name: "Renamed too" },
 };
 
-/**
- * A unit of work that commits normally through {@link FakeProjectCommandUnitOfWork}
- * until the Nth `execute`, then throws a chosen error WITHOUT advancing — modelling
- * the Postgres UoW's one-transaction-per-command semantics, where a failure at
- * command index > 0 leaves the earlier commands already persisted (a partial
- * commit the client must resync, never roll back).
- */
-class MidBatchFailureUnitOfWork implements ProjectCommandUnitOfWork {
-  private readonly inner: FakeProjectCommandUnitOfWork;
+/** Throws from the single `execute`, so the operation commits nothing. */
+class FailingUnitOfWork implements ProjectCommandUnitOfWork {
+  readonly revision: bigint;
   executeCount = 0;
 
   constructor(
-    state: ProjectState,
     revision: bigint,
-    private readonly failAtCall: number,
-    private readonly makeError: (request: ProjectCommandRequest, revision: bigint) => Error,
+    private readonly makeError: (request: ProjectCommandRequest) => Error,
   ) {
-    this.inner = new FakeProjectCommandUnitOfWork(state, revision);
+    this.revision = revision;
   }
 
-  get revision(): bigint {
-    return this.inner.revision;
-  }
-
-  async execute(
-    request: ProjectCommandRequest,
-    transition: (project: ProjectState) => ProjectState,
-  ): Promise<ProjectCommandExecution> {
+  async execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution> {
     this.executeCount += 1;
-    if (this.executeCount === this.failAtCall) {
-      throw this.makeError(request, this.inner.revision);
-    }
-    return this.inner.execute(request, transition);
+    throw this.makeError(request);
   }
 }
 
@@ -96,7 +78,7 @@ describe("applyCommands action core", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "OWNER",
-        commands: withKeys([rename]),
+        ...operation([rename]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },
@@ -107,7 +89,7 @@ describe("applyCommands action core", () => {
     expect(uow.state.tasks.find((task) => task.id === leaf.id)!.name).toBe("Renamed");
   });
 
-  it("chains the revision across a multi-command batch (server-side, one POST)", async () => {
+  it("applies a multi-command reorder as one revision", async () => {
     const uow = new FakeProjectCommandUnitOfWork(project, 5n);
     const result = await applyCommands(
       {
@@ -116,7 +98,7 @@ describe("applyCommands action core", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "EDITOR",
-        commands: withKeys([
+        ...operation([
           { type: "task.update", taskId: leaf.id, changes: { sortOrder: 3 } },
           { type: "task.update", taskId: otherLeaf.id, changes: { sortOrder: 4 } },
         ]),
@@ -125,8 +107,10 @@ describe("applyCommands action core", () => {
       { unitOfWorkFor: () => uow },
     );
 
-    expect(result).toEqual({ ok: true, revision: 7n });
-    expect(uow.executeCount).toBe(2);
+    expect(result).toEqual({ ok: true, revision: 6n });
+    expect(uow.executeCount).toBe(1);
+    expect(uow.state.tasks.find((task) => task.id === leaf.id)!.sortOrder).toBe(3);
+    expect(uow.state.tasks.find((task) => task.id === otherLeaf.id)!.sortOrder).toBe(4);
   });
 
   it("RETURNS a 409-shaped VERSION_CONFLICT on a stale expected revision (does not throw)", async () => {
@@ -138,7 +122,7 @@ describe("applyCommands action core", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "OWNER",
-        commands: withKeys([rename]),
+        ...operation([rename]),
         expectedRevision: 4n, // behind the fake's actual revision of 5
       },
       { unitOfWorkFor: () => uow },
@@ -158,7 +142,7 @@ describe("applyCommands action core", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "VIEWER",
-        commands: withKeys([rename]),
+        ...operation([rename]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },
@@ -171,16 +155,10 @@ describe("applyCommands action core", () => {
   });
 });
 
-describe("applyCommands partial-commit resync (P1-2 batch atomicity)", () => {
-  it("a mid-batch conflict AFTER a commit resyncs (409) with the conflict's revision, not a rollback", async () => {
-    // Command 0 commits (5 → 6); a concurrent writer then advances the row, so
-    // command 1 hits a version conflict. Because command 0 already persisted, the
-    // client must ADOPT the server state (resync), never roll back to its pre-batch
-    // snapshot — so the core returns a VERSION_CONFLICT (mapped to 409 by the route).
-    const uow = new MidBatchFailureUnitOfWork(
-      project,
+describe("applyCommands is one transaction", () => {
+  it("a version conflict from the one execute maps to VERSION_CONFLICT and does not advance", async () => {
+    const uow = new FailingUnitOfWork(
       5n,
-      2,
       (request) => new ProjectVersionConflictError(request.expectedRevision, 42n),
     );
     const result = await applyCommands(
@@ -190,28 +168,19 @@ describe("applyCommands partial-commit resync (P1-2 batch atomicity)", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "EDITOR",
-        commands: withKeys([rename, renameOther]),
+        ...operation([rename, renameOther]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },
     );
 
     expect(result).toEqual({ ok: false, code: "VERSION_CONFLICT", actualRevision: 42n });
-    // Exactly one command committed before the failure.
-    expect(uow.executeCount).toBe(2);
-    expect(uow.revision).toBe(6n);
+    expect(uow.executeCount).toBe(1);
+    expect(uow.revision).toBe(5n);
   });
 
-  it("a mid-batch validation failure AFTER a commit resyncs with the committed revision", async () => {
-    // Command 0 commits (5 → 6); command 1 fails validation. A non-conflict error
-    // after a partial commit still requires a resync, carrying the revision the
-    // partial batch reached (6) so the client adopts rather than rolling back.
-    const uow = new MidBatchFailureUnitOfWork(
-      project,
-      5n,
-      2,
-      () => new ProjectCommandValidationError("second command is invalid"),
-    );
+  it("a validation failure maps to INVALID and leaves the revision unchanged", async () => {
+    const uow = new FailingUnitOfWork(5n, () => new ProjectCommandValidationError("second command is invalid"));
     const result = await applyCommands(
       {
         session: fakeSession(),
@@ -219,39 +188,13 @@ describe("applyCommands partial-commit resync (P1-2 batch atomicity)", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "EDITOR",
-        commands: withKeys([rename, renameOther]),
+        ...operation([rename, renameOther]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },
     );
 
-    expect(result).toEqual({ ok: false, code: "VERSION_CONFLICT", actualRevision: 6n });
-    expect(uow.executeCount).toBe(2);
-  });
-
-  it("a first-command validation failure (nothing committed) maps to INVALID for rollback", async () => {
-    // Failure at index 0 committed nothing, so the client's optimistic edit is
-    // untouched on the server — INVALID (422) lets it roll back cleanly.
-    const uow = new MidBatchFailureUnitOfWork(
-      project,
-      5n,
-      1,
-      () => new ProjectCommandValidationError("first command is invalid"),
-    );
-    const result = await applyCommands(
-      {
-        session: fakeSession(),
-        actor: { principalId: "p-1", principalType: "HUMAN" },
-        tenantId: TENANT_ID,
-        projectId: project.id,
-        projectRole: "OWNER",
-        commands: withKeys([rename, renameOther]),
-        expectedRevision: 5n,
-      },
-      { unitOfWorkFor: () => uow },
-    );
-
-    expect(result).toEqual({ ok: false, code: "INVALID", message: "first command is invalid" });
+    expect(result).toEqual({ ok: false, code: "INVALID", message: "second command is invalid" });
     expect(uow.executeCount).toBe(1);
     expect(uow.revision).toBe(5n);
   });
@@ -282,7 +225,7 @@ describe("applyCommands grant resolution (per-batch memo)", () => {
         session: fakeSession(),
         tenantId: TENANT_ID,
         projectId: project.id,
-        commands: withKeys([
+        ...operation([
           { type: "task.update", taskId: leaf.id, changes: { sortOrder: 3 } },
           { type: "task.update", taskId: otherLeaf.id, changes: { sortOrder: 4 } },
           { type: "task.update", taskId: leaf.id, changes: { name: "Renamed" } },
@@ -296,22 +239,18 @@ describe("applyCommands grant resolution (per-batch memo)", () => {
       },
     );
 
-    expect(result).toEqual({ ok: true, revision: 8n });
-    // One DB resolution for the whole batch, but all three commands were authorized
-    // and executed.
+    expect(result).toEqual({ ok: true, revision: 6n });
+    // One DB resolution for the whole operation. Every command was authorized;
+    // the unit of work ran once.
     expect(resolveCount).toBe(1);
-    expect(uow.executeCount).toBe(3);
+    expect(uow.executeCount).toBe(1);
+    expect(uow.state.tasks.find((task) => task.id === leaf.id)!.name).toBe("Renamed");
   });
 });
 
 describe("applyCommands error mapping (P2-a)", () => {
   it("maps IdempotencyConflictError (nothing committed) to INVALID", async () => {
-    const uow = new MidBatchFailureUnitOfWork(
-      project,
-      5n,
-      1,
-      () => new IdempotencyConflictError("k"),
-    );
+    const uow = new FailingUnitOfWork(5n, () => new IdempotencyConflictError("k"));
     const result = await applyCommands(
       {
         session: fakeSession(),
@@ -319,7 +258,7 @@ describe("applyCommands error mapping (P2-a)", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "OWNER",
-        commands: withKeys([rename]),
+        ...operation([rename]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },
@@ -330,12 +269,7 @@ describe("applyCommands error mapping (P2-a)", () => {
   });
 
   it("maps ProjectNotFoundError to a 404-shaped NOT_FOUND result (not a 500)", async () => {
-    const uow = new MidBatchFailureUnitOfWork(
-      project,
-      5n,
-      1,
-      () => new ProjectNotFoundError(project.id),
-    );
+    const uow = new FailingUnitOfWork(5n, () => new ProjectNotFoundError(project.id));
     const result = await applyCommands(
       {
         session: fakeSession(),
@@ -343,7 +277,7 @@ describe("applyCommands error mapping (P2-a)", () => {
         tenantId: TENANT_ID,
         projectId: project.id,
         projectRole: "OWNER",
-        commands: withKeys([rename]),
+        ...operation([rename]),
         expectedRevision: 5n,
       },
       { unitOfWorkFor: () => uow },

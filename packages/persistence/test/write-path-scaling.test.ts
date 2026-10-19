@@ -96,9 +96,9 @@ describe("write path scaling", () => {
       ).execute({
         tenantId: record.tenant.id,
         projectId: record.project.id,
-        command: { type: "task.update", taskId: leaf.id, changes: { name } },
+        commands: [{ type: "task.update", taskId: leaf.id, changes: { name } }],
         expectedRevision: record.project.revision,
-        idempotencyKey: `rename-${name}`,
+        operationId: `rename-${name}`,
         actor: { type: "HUMAN", id: "00000000-0000-4000-8000-00000000beef" },
       });
     } finally {

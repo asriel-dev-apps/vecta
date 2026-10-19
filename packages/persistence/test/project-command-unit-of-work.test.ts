@@ -53,13 +53,13 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "progress-update",
+      operationId: "progress-update",
       actor: { type: "HUMAN", id: "user-001" },
-      command: {
+      commands: [{
         type: "task.update",
         taskId: leafTask.id,
         changes: { progressBasisPoints: 7_500, actualEffortMinutes: 4_200 },
-      },
+      }],
     });
 
     expect(result).toEqual({ projectId: demoProjectRecord.project.id, revision: 2n, replayed: false });
@@ -97,9 +97,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "rewrite-leaf",
+      operationId: "rewrite-leaf",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "task.update", taskId: leafTask.id, changes },
+      commands: [{ type: "task.update", taskId: leafTask.id, changes }],
     });
 
     const reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
@@ -111,17 +111,17 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "raise-effort",
+      operationId: "raise-effort",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "task.update", taskId: leafTask.id, changes: { actualEffortMinutes: 5_000 } },
+      commands: [{ type: "task.update", taskId: leafTask.id, changes: { actualEffortMinutes: 5_000 } }],
     });
     await service().execute({
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 2n,
-      idempotencyKey: "correct-effort",
+      operationId: "correct-effort",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "task.update", taskId: leafTask.id, changes: { actualEffortMinutes: 100 } },
+      commands: [{ type: "task.update", taskId: leafTask.id, changes: { actualEffortMinutes: 100 } }],
     });
 
     const reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
@@ -160,9 +160,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "add-review",
+      operationId: "add-review",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "task.add", task },
+      commands: [{ type: "task.add", task }],
     });
 
     const reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
@@ -198,9 +198,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "delete-leaf",
+      operationId: "delete-leaf",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "task.delete", taskId: deletableLeaf.id },
+      commands: [{ type: "task.delete", taskId: deletableLeaf.id }],
     });
 
     const reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
@@ -220,9 +220,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "add-member",
+      operationId: "add-member",
       actor: { type: "HUMAN", id: "user-001" },
-      command: {
+      commands: [{
         type: "member.add",
         // A REAL rate, not null. The field was missing from the write path
         // entirely until 2026-08-07, and this assertion passed throughout —
@@ -235,7 +235,7 @@ describe("PostgresProjectCommandUnitOfWork", () => {
           dailyCapacityMinutes: 420,
           costRateMinorPerHour: 7_350,
         },
-      },
+      }],
     });
     let reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.find((member) => member.id === memberId)).toMatchObject({
@@ -248,9 +248,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 2n,
-      idempotencyKey: "delete-member",
+      operationId: "delete-member",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "member.delete", memberId },
+      commands: [{ type: "member.delete", memberId }],
     });
     reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.members.some((member) => member.id === memberId)).toBe(false);
@@ -269,13 +269,13 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "set-cost-rate",
+      operationId: "set-cost-rate",
       actor: { type: "HUMAN", id: "user-001" },
-      command: {
+      commands: [{
         type: "member.update",
         memberId: existing.id,
         changes: { costRateMinorPerHour: 9_100 },
-      },
+      }],
     });
 
     const reloaded = await repository.load(
@@ -293,13 +293,13 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 2n,
-      idempotencyKey: "clear-cost-rate",
+      operationId: "clear-cost-rate",
       actor: { type: "HUMAN", id: "user-001" },
-      command: {
+      commands: [{
         type: "member.update",
         memberId: existing.id,
         changes: { costRateMinorPerHour: null },
-      },
+      }],
     });
     const cleared = await repository.load(
       demoProjectRecord.tenant.id,
@@ -316,9 +316,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "add-process",
+      operationId: "add-process",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "process.add", process: { id: processId, name: "Phase Z", sortOrder: 99 } },
+      commands: [{ type: "process.add", process: { id: processId, name: "Phase Z", sortOrder: 99 } }],
     });
     let reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.processes.find((process) => process.id === processId)).toMatchObject({
@@ -330,9 +330,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 2n,
-      idempotencyKey: "rename-process",
+      operationId: "rename-process",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "process.update", processId, changes: { name: "Phase ZZ" } },
+      commands: [{ type: "process.update", processId, changes: { name: "Phase ZZ" } }],
     });
     reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.processes.find((process) => process.id === processId)?.name).toBe("Phase ZZ");
@@ -341,9 +341,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 3n,
-      idempotencyKey: "delete-process",
+      operationId: "delete-process",
       actor: { type: "HUMAN", id: "user-001" },
-      command: { type: "process.delete", processId },
+      commands: [{ type: "process.delete", processId }],
     });
     reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
     expect(reloaded?.processes.some((process) => process.id === processId)).toBe(false);
@@ -354,16 +354,16 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "replay-key",
+      operationId: "replay-key",
       actor: { type: "AGENT" as const, id: "agent-001" },
-      command: {
+      commands: [{
         type: "task.update" as const,
         taskId: leafTask.id,
         changes: { actualEffortMinutes: 4_200 },
-      },
+      }],
     };
     await service().execute(request);
-    const replay = await service().execute(request);
+    const replay = await service().execute({ ...request, expectedRevision: 99n });
     expect(replay).toEqual({ projectId: demoProjectRecord.project.id, revision: 2n, replayed: true });
 
     const reloaded = await repository.load(demoProjectRecord.tenant.id, demoProjectRecord.project.id);
@@ -376,19 +376,19 @@ describe("PostgresProjectCommandUnitOfWork", () => {
       tenantId: demoProjectRecord.tenant.id,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "same-key",
+      operationId: "same-key",
       actor: { type: "HUMAN" as const, id: "user-001" },
-      command: {
+      commands: [{
         type: "task.update" as const,
         taskId: leafTask.id,
         changes: { progressBasisPoints: 7_000 },
-      },
+      }],
     };
     await service().execute(request);
     await expect(
       service().execute({
         ...request,
-        command: { ...request.command, changes: { progressBasisPoints: 8_000 } },
+        commands: [{ ...request.commands[0]!, changes: { progressBasisPoints: 8_000 } }],
       }),
     ).rejects.toBeInstanceOf(IdempotencyConflictError);
 
@@ -403,9 +403,9 @@ describe("PostgresProjectCommandUnitOfWork", () => {
         tenantId: demoProjectRecord.tenant.id,
         projectId: demoProjectRecord.project.id,
         expectedRevision: 0n,
-        idempotencyKey: "stale",
+        operationId: "stale",
         actor: { type: "HUMAN", id: "user-001" },
-        command: { type: "task.update", taskId: leafTask.id, changes: { name: "Must not persist" } },
+        commands: [{ type: "task.update", taskId: leafTask.id, changes: { name: "Must not persist" } }],
       }),
     ).rejects.toBeInstanceOf(ProjectVersionConflictError);
 
@@ -428,13 +428,13 @@ describe("PostgresProjectCommandUnitOfWork", () => {
         tenantId: demoProjectRecord.tenant.id,
         projectId: demoProjectRecord.project.id,
         expectedRevision: 1n,
-        idempotencyKey: "concurrent",
+        operationId: "concurrent",
         actor: { type: "AGENT" as const, id: "agent-001" },
-        command: {
+        commands: [{
           type: "task.update" as const,
           taskId: leafTask.id,
           changes: { actualEffortMinutes: 4_200 },
-        },
+        }],
       };
 
       const results = await Promise.all([first.execute(request), second.execute(request)]);

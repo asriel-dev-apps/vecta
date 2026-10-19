@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createProjectCommandService,
+  diffOperation,
   type ProjectCommandExecution,
   type ProjectCommandRequest,
   type ProjectCommandUnitOfWork,
@@ -51,11 +52,8 @@ const initialProject: ProjectState = {
 class InMemoryProjectCommandUnitOfWork implements ProjectCommandUnitOfWork {
   private project = initialProject;
 
-  async execute(
-    request: ProjectCommandRequest,
-    transition: (project: ProjectState) => ProjectState,
-  ): Promise<ProjectCommandExecution> {
-    this.project = transition(this.project);
+  async execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution> {
+    this.project = diffOperation(this.project, request.commands).after;
     return {
       projectId: request.projectId,
       revision: request.expectedRevision + 1n,
@@ -77,13 +75,15 @@ describe("ProjectCommandService", () => {
       tenantId: "00000000-0000-4000-8000-000000000001",
       projectId: initialProject.id,
       expectedRevision: 4n,
-      idempotencyKey: "command-001",
+      operationId: "command-001",
       actor: { type: "HUMAN", id: "user-001" },
-      command: {
-        type: "task.update",
-        taskId: initialProject.tasks[0]!.id,
-        changes: { progressBasisPoints: 5_500, actualEffortMinutes: 900 },
-      },
+      commands: [
+        {
+          type: "task.update",
+          taskId: initialProject.tasks[0]!.id,
+          changes: { progressBasisPoints: 5_500, actualEffortMinutes: 900 },
+        },
+      ],
     });
 
     expect(result).toEqual({

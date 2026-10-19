@@ -10,8 +10,8 @@ import {
 
 // ADR 0012 Step 4c — the router wrapper shared by the masters / members /
 // templates routes, mirroring 4b's `ProjectWbs`: it owns the `useFetcher` and the
-// dispatch seam (encode the command batch to the wire shape, mint a per-command
-// idempotency key, submit ONE JSON action request with the confirmed revision) and
+// dispatch seam (encode the commands to the wire shape, mint one operation id,
+// submit ONE JSON action request with the confirmed revision) and
 // hands `onExecute` / `saveInFlight` / `saveResult` to the router-free `MasterApp`
 // pipeline. Each route supplies its own loader payload, subtitle, and panels; the
 // dispatch + pipeline are identical, so they live here once.
@@ -28,17 +28,14 @@ export function MasterRoute({
   const fetcher = useFetcher();
 
   // The dispatch seam (identical to `ProjectWbs.onExecute`): encode each domain
-  // command to the wire shape, mint a client idempotency key per command (the
-  // SPA's per-command `crypto.randomUUID()`), and submit ONE JSON action request.
-  // Masters submit a batch of one; the revision chain is walked server-side.
+  // command to the wire shape, mint one operation id, and submit ONE JSON
+  // action request.
   const onExecute = useCallback(
     (commands: readonly ProjectCommand[], expectedRevision: string) => {
       const body = {
         expectedRevision,
-        commands: commands.map((command) => ({
-          command: fromCommand(command),
-          idempotencyKey: crypto.randomUUID(),
-        })),
+        operationId: crypto.randomUUID(),
+        commands: commands.map((command) => fromCommand(command)),
       };
       // `fromCommand`'s optional fields are typed `T | undefined` under
       // `exactOptionalPropertyTypes`, which the JSON `SubmitTarget` type rejects

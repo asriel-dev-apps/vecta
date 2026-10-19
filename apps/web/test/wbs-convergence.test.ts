@@ -81,9 +81,9 @@ async function serverState(command: ProjectCommand): Promise<ProjectState> {
     tenantId: TENANT_ID,
     projectId: base.id,
     expectedRevision: 1n,
-    idempotencyKey: "convergence-key",
+    operationId: "convergence-key",
     actor: { type: "HUMAN", id: "principal-1" },
-    command,
+    commands: [command],
   });
   return uow.state;
 }
@@ -207,7 +207,8 @@ describe("§0 GENERAL: the write path is server-denied (no equivalence assertion
         tenantId: TENANT_ID,
         projectId: base.id,
         projectRole: "VIEWER",
-        commands: [{ command: { type: "task.update", taskId: leaf.id, changes: { name: "x" } }, idempotencyKey: "k" }],
+        operationId: "k",
+        commands: [{ type: "task.update", taskId: leaf.id, changes: { name: "x" } }],
         expectedRevision: 1n,
       },
       { unitOfWorkFor: () => uow },

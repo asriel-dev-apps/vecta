@@ -82,7 +82,7 @@ interface TimesheetRequestBody {
   readonly intent?: unknown;
   readonly csv?: unknown;
   readonly expectedRevision?: unknown;
-  readonly idempotencyKey?: unknown;
+  readonly operationId?: unknown;
 }
 
 function invalid(message: string, status: number) {
@@ -147,8 +147,8 @@ export async function runTimesheetAction({
   if (typeof body.expectedRevision !== "string" || !/^\d+$/u.test(body.expectedRevision)) {
     return invalid("expectedRevision がありません", 422);
   }
-  if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
-    return invalid("idempotencyKey がありません", 422);
+  if (typeof body.operationId !== "string" || body.operationId.trim() === "" || body.operationId.trim().length > 200) {
+    return invalid("operationId がありません", 422);
   }
 
   const result = await applyCommands({
@@ -160,12 +160,8 @@ export async function runTimesheetAction({
     tenantId: membership.tenantId,
     projectId: membership.projectId,
     projectRole: membership.projectRole,
-    commands: [
-      {
-        command: { type: "actuals.import", entries: parsed.entries },
-        idempotencyKey: body.idempotencyKey,
-      },
-    ],
+    operationId: body.operationId.trim(),
+    commands: [{ type: "actuals.import", entries: parsed.entries }],
     expectedRevision: BigInt(body.expectedRevision),
   });
 

@@ -91,9 +91,9 @@ describe("actuals.import (persisted)", () => {
     return service().execute({
       tenantId,
       projectId,
-      command,
+      commands: [command],
       expectedRevision,
-      idempotencyKey: `timesheet-${keyCounter}`,
+      operationId: `timesheet-${keyCounter}`,
       actor: { type: "HUMAN", id: "00000000-0000-4000-8000-00000000cafe" },
     });
   };

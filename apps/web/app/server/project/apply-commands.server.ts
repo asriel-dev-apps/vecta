@@ -28,9 +28,8 @@ import type { DbSession } from "../db-session.server";
  * command service (over the shared per-request DB session) + the command
  * authorizer, AUTHORIZE the actor here (the session principal is the actor —
  * writes are authorized in this core, not by the `/projects/:id` shell gate,
- * which only grants read access), then execute the batch through the service
- * with optimistic-concurrency, chaining each command's revision off the previous
- * one. It NEVER closes the session — the 4-pre root middleware owns the
+ * which only grants read access), then execute the operation through the service
+ * once. It NEVER closes the session — the 4-pre root middleware owns the
  * connection lifecycle (`close()` in a `finally` after the response), so this
  * function leaks nothing.
  *
@@ -52,18 +51,14 @@ export interface CommandActor {
   readonly principalType: "HUMAN" | "AGENT";
 }
 
-/** One command in a batch with its client-generated idempotency key. */
-export interface CommandWithKey {
-  readonly command: ProjectCommand;
-  readonly idempotencyKey: string;
-}
-
 export interface ApplyCommandsInput {
   readonly session: DbSession;
   readonly tenantId: string;
   readonly projectId: string;
-  readonly commands: readonly CommandWithKey[];
-  /** The confirmed revision the batch is applied on top of. */
+  /** Client-minted id of this one operation. A replay of the same id is one revision. */
+  readonly operationId: string;
+  readonly commands: readonly ProjectCommand[];
+  /** The confirmed revision the operation is applied on top of. */
   readonly expectedRevision: bigint;
   /**
    * The cookie surface's already-known actor. Present with {@link projectRole}
@@ -191,7 +186,8 @@ export async function applyCommands(
   input: ApplyCommandsInput,
   deps: ApplyCommandsDeps = {},
 ): Promise<ApplyCommandsResult> {
-  const { session, actor, tenantId, projectId, projectRole, commands, expectedRevision } = input;
+  const { session, actor, tenantId, projectId, projectRole, commands, expectedRevision, operationId } =
+    input;
   const unitOfWorkFor =
     deps.unitOfWorkFor ?? ((database) => new PostgresProjectCommandUnitOfWork(database));
 
@@ -214,52 +210,27 @@ export async function applyCommands(
 
   try {
     // Authorize every command BEFORE executing any, so a denied actor persists
-    // nothing (fail-closed): the batch is all-or-none on the authorization gate.
+    // nothing (fail-closed): the operation is all-or-none on the authorization gate.
     const actors = [];
-    for (const { command } of commands) {
+    for (const command of commands) {
       actors.push(await authorizer.authorize({ identity, tenantId, projectId, command }));
     }
-
-    // Execute in order, chaining each command onto the revision the previous one
-    // produced — the server-side revision chain the SPA drove per round trip. The
-    // UoW commits ONE transaction per command, so a failure at index > 0 leaves
-    // commands 0..index-1 already committed and the server ahead of the client's
-    // pre-batch snapshot. That partial commit must be RESYNCED (the client adopts
-    // fresh state), never rolled back — rolling back would restore a state the
-    // server no longer holds. We track how far the batch got and, on a mid-batch
-    // failure, surface a VERSION_CONFLICT carrying the server's current revision so
-    // the route replies 409 and the loader re-runs (mirrors the SPA's reload).
-    let revision = expectedRevision;
-    let committedCount = 0;
-    try {
-      for (let index = 0; index < commands.length; index += 1) {
-        const { command, idempotencyKey } = commands[index]!;
-        const result = await service.execute({
-          tenantId,
-          projectId,
-          expectedRevision: revision,
-          idempotencyKey,
-          actor: actors[index]!,
-          command,
-        });
-        revision = result.revision;
-        committedCount += 1;
-      }
-    } catch (error) {
-      if (committedCount > 0) {
-        // At least one command committed before this failure: the server is now at
-        // a revision the client did not expect, so a version conflict is the exact
-        // truth. Carry the concurrent writer's revision when the failure itself was
-        // a conflict, otherwise the revision the partial batch reached.
-        const actualRevision =
-          error instanceof ProjectVersionConflictError ? error.actualRevision : revision;
-        return { ok: false, code: "VERSION_CONFLICT", actualRevision };
-      }
-      // Nothing committed (failure at index 0): fall through to the whole-batch
-      // mapping so the client can roll back the untouched optimistic edit.
-      throw error;
+    const auditActor = actors[0];
+    if (auditActor === undefined) {
+      return { ok: false, code: "INVALID", message: "Project command envelope is invalid" };
     }
-    return { ok: true, revision };
+
+    // One call, one transaction, one revision. A failure inside it leaves no
+    // revision, receipt, audit row or change record.
+    const result = await service.execute({
+      tenantId,
+      projectId,
+      expectedRevision,
+      operationId,
+      actor: auditActor,
+      commands,
+    });
+    return { ok: true, revision: result.revision };
   } catch (error) {
     if (error instanceof ProjectVersionConflictError) {
       return { ok: false, code: "VERSION_CONFLICT", actualRevision: error.actualRevision };
@@ -275,8 +246,6 @@ export async function applyCommands(
       return { ok: false, code: "FORBIDDEN" };
     }
     if (error instanceof ProjectNotFoundError) {
-      // The project row vanished (e.g. deleted concurrently) before any command
-      // committed: a 404-shaped result, not an unmapped 500 after a partial apply.
       return { ok: false, code: "NOT_FOUND" };
     }
     if (

@@ -72,12 +72,13 @@ async function callTool(
   return { status, result: body.result };
 }
 
-function applyArgs(command: unknown, idempotencyKey = "key-1", expectedRevision = "5") {
+function applyArgs(command: unknown, operationId = "key-1", expectedRevision = "5") {
   return {
     tenantId: TENANT_ID,
     projectId: PROJECT_ID,
     expectedRevision,
-    commands: [{ command, idempotencyKey }],
+    operationId,
+    commands: [command],
   };
 }
 

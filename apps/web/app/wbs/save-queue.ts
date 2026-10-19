@@ -16,25 +16,31 @@ import type { ProjectCommand } from "@vecta/application";
 // One fetcher + this manual queue is the only shape that upholds it (multiple
 // fetchers would fire parallel POSTs that cannot chain `expectedRevision`).
 //
-// Two slots, with coalescing:
+// Two slots. A gesture that arrives while a save is on the wire is parked as its
+// own operation, not folded into the one already in flight:
 //   inFlight : the save currently on the wire. Its `snapshot` is the last
 //              CONFIRMED boundary — the rollback target if the save is rejected.
-//   pending  : edits accepted WHILE a save was in flight, coalesced in FIFO
-//              gesture order into ONE wire batch, dispatched when inFlight settles.
-//   invariant: pending !== null  ⇒  inFlight !== null.
+//   pending  : a FIFO list of gestures accepted WHILE a save was in flight.
+//              Each entry is `{ commands, snapshot }` for THAT gesture.
+//              `settle-success` dispatches only the head, as its own operation,
+//              with the revision the in-flight save returned.
+//   invariant: pending.length > 0  ⇒  inFlight !== null.
+
+/** One parked gesture: the commands of that gesture and the state before it. */
+interface QueuedGesture<S> {
+  readonly commands: readonly ProjectCommand[];
+  readonly snapshot: S;
+}
 
 /** The two-slot queue, generic over the host's optimistic snapshot type `S`. */
 export interface QueueState<S> {
   readonly inFlight: { readonly snapshot: S } | null;
-  readonly pending: {
-    readonly commands: readonly ProjectCommand[];
-    readonly snapshot: S;
-  } | null;
+  readonly pending: readonly QueuedGesture<S>[];
 }
 
 /** The empty (idle) queue: nothing in flight, nothing pending. */
 export function emptyQueue<S>(): QueueState<S> {
-  return { inFlight: null, pending: null };
+  return { inFlight: null, pending: [] };
 }
 
 /**
@@ -90,39 +96,31 @@ export function reduceQueue<S>(queue: QueueState<S>, event: QueueEvent<S>): Queu
       // and dispatch `(commands, confirmedRevision)`.
       if (queue.inFlight === null) {
         return {
-          queue: { inFlight: { snapshot: event.snapshot }, pending: null },
+          queue: { inFlight: { snapshot: event.snapshot }, pending: [] },
           dispatch: { commands: event.commands, expectedRevision: event.confirmedRevision },
         };
       }
-      // edit @ in-flight — never submit (the correctness invariant). Park the
-      // batch as `pending`; the first pending edit snapshots ITS pre-apply state
-      // (the drain's future rollback boundary), and later edits APPEND their wire
-      // commands in FIFO gesture order while KEEPING that first snapshot. Each
-      // gesture's optimistic derivation already happened at its own enqueue, so
-      // the concatenation is never re-derived (ADR §0 convergence).
-      // KNOWN Step-4 limitation (tracked separately, not fixed here): under
-      // sustained heavy reorders behind a slow save this coalesced buffer can grow
-      // past the 1,000-command batch cap, so the drain would 422 → rollback erases
-      // the queue. No chunking is done here by design.
-      const pending =
-        queue.pending === null
-          ? { commands: event.commands, snapshot: event.snapshot }
-          : {
-              commands: [...queue.pending.commands, ...event.commands],
-              snapshot: queue.pending.snapshot,
-            };
-      return { queue: { inFlight: queue.inFlight, pending } };
+      // edit @ in-flight — never submit (the correctness invariant). Park this
+      // gesture at the tail. Its snapshot is the state BEFORE this gesture, so a
+      // later failure of THIS operation rolls back to here, not to an earlier one.
+      return {
+        queue: {
+          inFlight: queue.inFlight,
+          pending: [...queue.pending, { commands: event.commands, snapshot: event.snapshot }],
+        },
+      };
     }
     case "settle-success": {
       // The host advances its confirmed revision to `event.revision` (read from
-      // the SETTLED result, never its stale `confirmedRevision` state var). If a
-      // coalesced batch is pending, DRAIN it: dispatch `(pending.commands,
-      // revision)` — using this same settled revision — and promote its snapshot
-      // to the new in-flight boundary. Otherwise the queue goes idle.
-      if (queue.pending !== null) {
+      // the SETTLED result, never its stale `confirmedRevision` state var). If
+      // gestures are waiting, dispatch only the HEAD as its own operation, using
+      // this settled revision, and promote that gesture's snapshot to the new
+      // in-flight boundary. The tail stays pending. Otherwise the queue goes idle.
+      const head = queue.pending[0];
+      if (head !== undefined) {
         return {
-          queue: { inFlight: { snapshot: queue.pending.snapshot }, pending: null },
-          dispatch: { commands: queue.pending.commands, expectedRevision: event.revision },
+          queue: { inFlight: { snapshot: head.snapshot }, pending: queue.pending.slice(1) },
+          dispatch: { commands: head.commands, expectedRevision: event.revision },
         };
       }
       return { queue: emptyQueue<S>() };
@@ -135,8 +133,8 @@ export function reduceQueue<S>(queue: QueueState<S>, event: QueueEvent<S>): Queu
     }
     case "settle-failure": {
       // Roll back to `inFlight.snapshot` (the last confirmed boundary) and clear
-      // BOTH slots. The rollback correctly discards any pending edits too — they
-      // were applied after the boundary and may depend on the failed batch, so
+      // BOTH slots. The rollback discards every parked gesture too — they were
+      // applied after the boundary and may depend on the failed operation, so
       // they are NOT replayed onto the restored state.
       return {
         queue: emptyQueue<S>(),

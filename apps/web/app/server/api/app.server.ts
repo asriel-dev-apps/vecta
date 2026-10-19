@@ -293,7 +293,7 @@ const commandRoute = createRoute({
     },
   },
   responses: {
-    200: { description: "Batch executed (revisions chained server-side)", content: { "application/json": { schema: CommandBatchResponseSchema } } },
+    200: { description: "Operation executed as one revision", content: { "application/json": { schema: CommandBatchResponseSchema } } },
     400: { description: "Malformed request", content: { "application/json": { schema: ErrorResponseSchema } } },
     401: { description: "Authentication required", content: { "application/json": { schema: ErrorResponseSchema } } },
     403: { description: "Authenticated identity is not permitted to run the batch", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -413,10 +413,8 @@ export function createApiApp(deps: ApiDeps) {
         session,
         tenantId,
         projectId,
-        commands: body.commands.map((entry) => ({
-          command: toCommand(entry.command),
-          idempotencyKey: entry.idempotencyKey,
-        })),
+        operationId: body.operationId,
+        commands: body.commands.map((command) => toCommand(command)),
         expectedRevision: BigInt(body.expectedRevision),
       },
       {

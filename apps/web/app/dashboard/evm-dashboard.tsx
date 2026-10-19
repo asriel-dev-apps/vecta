@@ -544,19 +544,13 @@ export function EvmDashboard({
               void publisher.submit(
                 {
                   expectedRevision: revision,
+                  // Stable for this revision and acknowledgement, so a double-click
+                  // replays the first receipt instead of publishing twice.
+                  operationId: `baseline-publish-${revision}-${acknowledged ? "ack" : "plain"}`,
                   commands: [
-                    {
-                      command: acknowledged
-                        ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
-                        : { type: "baseline.publish" },
-                      // Client-minted, and unique per attempt. The batch schema
-                      // requires it, and it is what makes a double-click one
-                      // publish rather than two — a duplicate key replays the
-                      // first receipt instead of executing again.
-                      idempotencyKey: `baseline-publish-${revision}-${
-                        acknowledged ? "ack" : "plain"
-                      }`,
-                    },
+                    acknowledged
+                      ? { type: "baseline.publish", acknowledgeUnplottedTasks: true }
+                      : { type: "baseline.publish" },
                   ],
                 },
                 { method: "post", encType: "application/json" },

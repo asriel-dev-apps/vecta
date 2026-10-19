@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
 import {
-  applyEffortSchedule,
-  leafTaskIds,
+  canonicalJson,
+  diffOperation,
   IdempotencyConflictError,
+  leafTaskIds,
+  ProjectCommandValidationError,
   ProjectNotFoundError,
   ProjectVersionConflictError,
+  type FieldChange,
+  type JsonValue,
   type ProjectCommandExecution,
   type ProjectCommandRequest,
   type ProjectCommandUnitOfWork,
   type ProjectState,
   type SubtaskTemplateStep,
+  type WbsChange,
 } from "@vecta/application";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -27,55 +32,421 @@ import {
   subtaskTemplate,
   taskDependency,
   task,
+  wbsChange,
 } from "./schema.js";
 
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("Command fingerprint contains a non-finite number");
-    }
-    return JSON.stringify(value);
-  }
-  if (typeof value === "bigint") {
-    return JSON.stringify(value.toString());
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-  }
-  if (typeof value === "object") {
-    const entries = Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  throw new Error(`Command fingerprint contains unsupported data: ${typeof value}`);
+type CommandTransaction = Parameters<
+  Parameters<NodePgDatabase<typeof schema>["transaction"]>[0]
+>[0];
+
+const DEPENDENCY_TYPES = ["FF", "FS", "SF", "SS"] as const;
+type DependencyTypeName = (typeof DEPENDENCY_TYPES)[number];
+
+interface DependencyIdentity {
+  readonly successorId: string;
+  readonly predecessorId: string;
+  readonly type: DependencyTypeName;
 }
 
-function requestHash(request: ProjectCommandRequest): string {
+interface TaskWrite {
+  insert?: { readonly [key: string]: JsonValue };
+  remove: boolean;
+  readonly columns: Map<string, JsonValue>;
+  writeDailyPlan: boolean;
+  writeDatedActuals: boolean;
+}
+
+interface MasterWrite {
+  insert?: { readonly [key: string]: JsonValue };
+  remove: boolean;
+  readonly patch: Map<string, JsonValue>;
+}
+
+type MasterKind = "calendar" | "member" | "process" | "product" | "template";
+
+function operationFingerprint(request: ProjectCommandRequest): string {
   return createHash("sha256")
-    .update(
-      canonicalJson({
-        actor: request.actor,
-        command: request.command,
-        expectedRevision: request.expectedRevision,
-      }),
-    )
+    .update(canonicalJson({ actor: request.actor, commands: request.commands }))
     .digest("hex");
 }
+
+function fieldChanged(change: FieldChange): boolean {
+  const beforePresent = Object.hasOwn(change, "before");
+  const afterPresent = Object.hasOwn(change, "after");
+  if (beforePresent !== afterPresent) return true;
+  if (!beforePresent) return false;
+  return canonicalJson(change.before) !== canonicalJson(change.after);
+}
+
+function asObject(value: JsonValue, label: string): { readonly [key: string]: JsonValue } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`WBS change ${label} is not an object`);
+  }
+  return value as { readonly [key: string]: JsonValue };
+}
+
+function expectString(value: JsonValue, label: string): string {
+  if (typeof value !== "string") throw new Error(`WBS change ${label} is not a string`);
+  return value;
+}
+
+function expectNullableString(value: JsonValue, label: string): string | null {
+  if (value === null) return null;
+  return expectString(value, label);
+}
+
+function expectNumber(value: JsonValue, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`WBS change ${label} is not a number`);
+  }
+  return value;
+}
+
+function expectNullableNumber(value: JsonValue, label: string): number | null {
+  if (value === null) return null;
+  return expectNumber(value, label);
+}
+
+function expectStringArray(value: JsonValue, label: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`WBS change ${label} is not an array`);
+  return (value as readonly JsonValue[]).map((entry) => expectString(entry, label));
+}
+
+function expectNumberArray(value: JsonValue, label: string): number[] {
+  if (!Array.isArray(value)) throw new Error(`WBS change ${label} is not an array`);
+  return (value as readonly JsonValue[]).map((entry) => expectNumber(entry, label));
+}
+
+function expectNumberRecord(value: JsonValue, label: string): Record<string, number> {
+  const record = asObject(value, label);
+  const next: Record<string, number> = {};
+  for (const key of Object.keys(record)) {
+    const entry = record[key];
+    if (entry === undefined) continue;
+    next[key] = expectNumber(entry, label);
+  }
+  return next;
+}
+
+function required(record: { readonly [key: string]: JsonValue }, key: string, label: string): JsonValue {
+  if (!Object.hasOwn(record, key)) throw new Error(`WBS change ${label} missing ${key}`);
+  const value = record[key];
+  if (value === undefined) throw new Error(`WBS change ${label} missing ${key}`);
+  return value;
+}
+
+function isDependencyType(value: string): value is DependencyTypeName {
+  return (DEPENDENCY_TYPES as readonly string[]).includes(value);
+}
+
+function parseDependencyTarget(target: string): DependencyIdentity | undefined {
+  const prefix = "dependency:";
+  if (!target.startsWith(prefix)) return undefined;
+  const body = target.slice(prefix.length);
+  const arrow = body.indexOf("<-");
+  if (arrow <= 0) return undefined;
+  const successorId = body.slice(0, arrow);
+  const rest = body.slice(arrow + 2);
+  const colon = rest.lastIndexOf(":");
+  if (colon <= 0) return undefined;
+  const predecessorId = rest.slice(0, colon);
+  const type = rest.slice(colon + 1);
+  if (predecessorId.length === 0 || !isDependencyType(type)) return undefined;
+  return { successorId, predecessorId, type };
+}
+
+function prefixedId(target: string, prefix: string): string | undefined {
+  if (!target.startsWith(prefix)) return undefined;
+  const id = target.slice(prefix.length);
+  return id.length === 0 ? undefined : id;
+}
+
+function taskWriteFor(writes: Map<string, TaskWrite>, id: string): TaskWrite {
+  const existing = writes.get(id);
+  if (existing !== undefined) return existing;
+  const created: TaskWrite = { remove: false, columns: new Map(), writeDailyPlan: false, writeDatedActuals: false };
+  writes.set(id, created);
+  return created;
+}
+
+function masterWriteFor(writes: Map<string, MasterWrite>, id: string): MasterWrite {
+  const existing = writes.get(id);
+  if (existing !== undefined) return existing;
+  const created: MasterWrite = { remove: false, patch: new Map() };
+  writes.set(id, created);
+  return created;
+}
+
+function absorbMaster(writes: Map<string, MasterWrite>, id: string, change: FieldChange): void {
+  const row = masterWriteFor(writes, id);
+  if (change.field === "") {
+    if (change.after === undefined) row.remove = true;
+    else row.insert = asObject(change.after, change.target);
+    return;
+  }
+  if (!fieldChanged(change) || !Object.hasOwn(change, "after") || change.after === undefined) return;
+  row.patch.set(change.field, change.after);
+}
+
+interface GroupedChanges {
+  readonly wbsFields: ReadonlyMap<string, JsonValue>;
+  readonly tasks: ReadonlyMap<string, TaskWrite>;
+  readonly masters: { readonly [kind in MasterKind]: ReadonlyMap<string, MasterWrite> };
+  readonly dependencyDeletes: readonly DependencyIdentity[];
+  readonly dependencyInserts: readonly (DependencyIdentity & { readonly lagWorkingDays: number })[];
+  readonly dependencyUpdates: readonly (DependencyIdentity & { readonly lagWorkingDays: number })[];
+}
+
+function groupChanges(change: WbsChange): GroupedChanges {
+  const wbsFields = new Map<string, JsonValue>();
+  const tasks = new Map<string, TaskWrite>();
+  const masters = {
+    calendar: new Map<string, MasterWrite>(),
+    member: new Map<string, MasterWrite>(),
+    process: new Map<string, MasterWrite>(),
+    product: new Map<string, MasterWrite>(),
+    template: new Map<string, MasterWrite>(),
+  };
+  const dependencyDeletes: DependencyIdentity[] = [];
+  const dependencyInserts: (DependencyIdentity & { lagWorkingDays: number })[] = [];
+  const dependencyUpdates: (DependencyIdentity & { lagWorkingDays: number })[] = [];
+
+  for (const entry of change.changes) {
+    if (entry.target === "wbs") {
+      if (fieldChanged(entry) && entry.after !== undefined) wbsFields.set(entry.field, entry.after);
+      continue;
+    }
+    const dependency = parseDependencyTarget(entry.target);
+    if (dependency !== undefined) {
+      if (entry.field === "") {
+        if (entry.after === undefined) dependencyDeletes.push(dependency);
+        else {
+          const row = asObject(entry.after, entry.target);
+          dependencyInserts.push({
+            ...dependency,
+            lagWorkingDays: expectNumber(required(row, "lagWorkingDays", entry.target), "lagWorkingDays"),
+          });
+        }
+        continue;
+      }
+      if (entry.field === "lagWorkingDays" && fieldChanged(entry) && entry.after !== undefined) {
+        dependencyUpdates.push({
+          ...dependency,
+          lagWorkingDays: expectNumber(entry.after, "lagWorkingDays"),
+        });
+      }
+      continue;
+    }
+    const taskId = prefixedId(entry.target, "task:");
+    if (taskId !== undefined) {
+      const row = taskWriteFor(tasks, taskId);
+      if (entry.field === "") {
+        if (entry.after === undefined) row.remove = true;
+        else row.insert = asObject(entry.after, entry.target);
+        continue;
+      }
+      if (entry.field.startsWith("dailyPlan.")) {
+        if (fieldChanged(entry)) row.writeDailyPlan = true;
+        continue;
+      }
+      if (entry.field.startsWith("datedActuals.")) {
+        if (fieldChanged(entry)) row.writeDatedActuals = true;
+        continue;
+      }
+      if (fieldChanged(entry) && entry.after !== undefined) row.columns.set(entry.field, entry.after);
+      continue;
+    }
+    const kinds: readonly MasterKind[] = ["calendar", "member", "process", "product", "template"];
+    let matched = false;
+    for (const kind of kinds) {
+      const id = prefixedId(entry.target, `${kind}:`);
+      if (id === undefined) continue;
+      absorbMaster(masters[kind], id, entry);
+      matched = true;
+      break;
+    }
+    if (!matched) throw new Error(`Unknown WBS change target ${entry.target}`);
+  }
+
+  return { wbsFields, tasks, masters, dependencyDeletes, dependencyInserts, dependencyUpdates };
+}
+
+async function upsertMasters(
+  transaction: CommandTransaction,
+  request: ProjectCommandRequest,
+  masters: GroupedChanges["masters"],
+): Promise<{ readonly [kind in MasterKind]: readonly string[] }> {
+  const removed: { [kind in MasterKind]: string[] } = {
+    calendar: [],
+    member: [],
+    process: [],
+    product: [],
+    template: [],
+  };
+
+  for (const [id, row] of masters.calendar) {
+    if (row.remove) {
+      removed.calendar.push(id);
+      continue;
+    }
+    if (row.insert !== undefined) {
+      const record = row.insert;
+      await transaction.insert(calendar).values({
+        tenantId: request.tenantId,
+        wbsId: request.projectId,
+        id,
+        name: expectString(required(record, "name", "calendar"), "name"),
+        workingWeekdays: expectNumberArray(required(record, "workingWeekdays", "calendar"), "workingWeekdays"),
+        nonWorkingDates: expectStringArray(required(record, "nonWorkingDates", "calendar"), "nonWorkingDates"),
+      });
+      continue;
+    }
+    if (row.patch.size === 0) continue;
+    await transaction
+      .update(calendar)
+      .set({
+        ...(row.patch.has("name") ? { name: expectString(row.patch.get("name")!, "name") } : {}),
+        ...(row.patch.has("workingWeekdays")
+          ? { workingWeekdays: expectNumberArray(row.patch.get("workingWeekdays")!, "workingWeekdays") }
+          : {}),
+        ...(row.patch.has("nonWorkingDates")
+          ? { nonWorkingDates: expectStringArray(row.patch.get("nonWorkingDates")!, "nonWorkingDates") }
+          : {}),
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(eq(calendar.tenantId, request.tenantId), eq(calendar.wbsId, request.projectId), eq(calendar.id, id)),
+      );
+  }
+
+  for (const [id, row] of masters.member) {
+    if (row.remove) {
+      removed.member.push(id);
+      continue;
+    }
+    if (row.insert !== undefined) {
+      const record = row.insert;
+      await transaction.insert(member).values({
+        id,
+        tenantId: request.tenantId,
+        wbsId: request.projectId,
+        name: expectString(required(record, "name", "member"), "name"),
+        calendarId: expectString(required(record, "calendarId", "member"), "calendarId"),
+        dailyCapacityMinutes: expectNumber(
+          required(record, "dailyCapacityMinutes", "member"),
+          "dailyCapacityMinutes",
+        ),
+        costRateMinorPerHour: expectNullableNumber(
+          required(record, "costRateMinorPerHour", "member"),
+          "costRateMinorPerHour",
+        ),
+      });
+      continue;
+    }
+    if (row.patch.size === 0) continue;
+    await transaction
+      .update(member)
+      .set({
+        ...(row.patch.has("name") ? { name: expectString(row.patch.get("name")!, "name") } : {}),
+        ...(row.patch.has("calendarId")
+          ? { calendarId: expectString(row.patch.get("calendarId")!, "calendarId") }
+          : {}),
+        ...(row.patch.has("dailyCapacityMinutes")
+          ? { dailyCapacityMinutes: expectNumber(row.patch.get("dailyCapacityMinutes")!, "dailyCapacityMinutes") }
+          : {}),
+        ...(row.patch.has("costRateMinorPerHour")
+          ? {
+              costRateMinorPerHour: expectNullableNumber(
+                row.patch.get("costRateMinorPerHour")!,
+                "costRateMinorPerHour",
+              ),
+            }
+          : {}),
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(member.tenantId, request.tenantId), eq(member.wbsId, request.projectId), eq(member.id, id)));
+  }
+
+  for (const kind of ["process", "product"] as const) {
+    const table = kind === "process" ? process : product;
+    for (const [id, row] of masters[kind]) {
+      if (row.remove) {
+        removed[kind].push(id);
+        continue;
+      }
+      if (row.insert !== undefined) {
+        const record = row.insert;
+        await transaction.insert(table).values({
+          id,
+          tenantId: request.tenantId,
+          wbsId: request.projectId,
+          name: expectString(required(record, "name", kind), "name"),
+          sortOrder: expectNumber(required(record, "sortOrder", kind), "sortOrder"),
+        });
+        continue;
+      }
+      if (row.patch.size === 0) continue;
+      await transaction
+        .update(table)
+        .set({
+          ...(row.patch.has("name") ? { name: expectString(row.patch.get("name")!, "name") } : {}),
+          ...(row.patch.has("sortOrder") ? { sortOrder: expectNumber(row.patch.get("sortOrder")!, "sortOrder") } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(table.tenantId, request.tenantId), eq(table.wbsId, request.projectId), eq(table.id, id)));
+    }
+  }
+
+  for (const [id, row] of masters.template) {
+    if (row.remove) {
+      removed.template.push(id);
+      continue;
+    }
+    if (row.insert !== undefined) {
+      const record = row.insert;
+      await transaction.insert(subtaskTemplate).values({
+        id,
+        tenantId: request.tenantId,
+        wbsId: request.projectId,
+        name: expectString(required(record, "name", "template"), "name"),
+        sortOrder: expectNumber(required(record, "sortOrder", "template"), "sortOrder"),
+        subtasks: required(record, "subtasks", "template"),
+      });
+      continue;
+    }
+    if (row.patch.size === 0) continue;
+    await transaction
+      .update(subtaskTemplate)
+      .set({
+        ...(row.patch.has("name") ? { name: expectString(row.patch.get("name")!, "name") } : {}),
+        ...(row.patch.has("sortOrder") ? { sortOrder: expectNumber(row.patch.get("sortOrder")!, "sortOrder") } : {}),
+        ...(row.patch.has("subtasks") ? { subtasks: row.patch.get("subtasks")! } : {}),
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(subtaskTemplate.tenantId, request.tenantId),
+          eq(subtaskTemplate.wbsId, request.projectId),
+          eq(subtaskTemplate.id, id),
+        ),
+      );
+  }
+
+  return removed;
+}
+
+function taskAfter(after: ProjectState, id: string) {
+  const found = after.tasks.find((entry) => entry.id === id);
+  if (found === undefined) throw new Error(`WBS change names missing task ${id}`);
+  return found;
+}
+
 
 export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWork {
   constructor(private readonly database: NodePgDatabase<typeof schema>) {}
 
-  async execute(
-    request: ProjectCommandRequest,
-    transition: (project: ProjectState) => ProjectState,
-  ): Promise<ProjectCommandExecution> {
-    const fingerprint = requestHash(request);
+  async execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution> {
+    const fingerprint = operationFingerprint(request);
 
     return this.database.transaction(async (transaction) => {
       const findReceipt = () =>
@@ -86,14 +457,14 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
             and(
               eq(commandReceipt.tenantId, request.tenantId),
               eq(commandReceipt.wbsId, request.projectId),
-              eq(commandReceipt.idempotencyKey, request.idempotencyKey),
+              eq(commandReceipt.idempotencyKey, request.operationId),
             ),
           )
           .limit(1);
 
       const replay = (receipt: typeof commandReceipt.$inferSelect) => {
         if (receipt.requestHash !== fingerprint) {
-          throw new IdempotencyConflictError(request.idempotencyKey);
+          throw new IdempotencyConflictError(request.operationId);
         }
         return {
           projectId: request.projectId,
@@ -128,6 +499,15 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         throw new ProjectVersionConflictError(request.expectedRevision, actualRevision);
       }
 
+      const resultRevision = actualRevision + 1n;
+      await transaction.execute(sql`
+        select set_config(
+          'vecta.wbs_write',
+          ${`${request.projectId}:${resultRevision.toString()}`},
+          true
+        )
+      `);
+
       const [projectRow] = await transaction
         .select({
           id: wbs.id,
@@ -157,12 +537,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const calendarRows = await transaction
         .select()
         .from(calendar)
-        .where(
-          and(
-            eq(calendar.tenantId, request.tenantId),
-            eq(calendar.wbsId, request.projectId),
-          ),
-        )
+        .where(and(eq(calendar.tenantId, request.tenantId), eq(calendar.wbsId, request.projectId)))
         .orderBy(asc(calendar.id));
       const memberRows = await transaction
         .select()
@@ -172,36 +547,24 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const processRows = await transaction
         .select()
         .from(process)
-        .where(
-          and(eq(process.tenantId, request.tenantId), eq(process.wbsId, request.projectId)),
-        )
+        .where(and(eq(process.tenantId, request.tenantId), eq(process.wbsId, request.projectId)))
         .orderBy(asc(process.sortOrder), asc(process.id));
       const productRows = await transaction
         .select()
         .from(product)
-        .where(
-          and(eq(product.tenantId, request.tenantId), eq(product.wbsId, request.projectId)),
-        )
+        .where(and(eq(product.tenantId, request.tenantId), eq(product.wbsId, request.projectId)))
         .orderBy(asc(product.sortOrder), asc(product.id));
       const templateRows = await transaction
         .select()
         .from(subtaskTemplate)
         .where(
-          and(
-            eq(subtaskTemplate.tenantId, request.tenantId),
-            eq(subtaskTemplate.wbsId, request.projectId),
-          ),
+          and(eq(subtaskTemplate.tenantId, request.tenantId), eq(subtaskTemplate.wbsId, request.projectId)),
         )
         .orderBy(asc(subtaskTemplate.sortOrder), asc(subtaskTemplate.id));
       const dependencyRows = await transaction
         .select()
         .from(taskDependency)
-        .where(
-          and(
-            eq(taskDependency.tenantId, request.tenantId),
-            eq(taskDependency.wbsId, request.projectId),
-          ),
-        )
+        .where(and(eq(taskDependency.tenantId, request.tenantId), eq(taskDependency.wbsId, request.projectId)))
         .orderBy(
           asc(taskDependency.successorTaskId),
           asc(taskDependency.predecessorTaskId),
@@ -210,7 +573,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
 
       const dependenciesByTask = new Map<
         string,
-        Array<{ predecessorId: string; type: "FS" | "SS" | "FF" | "SF"; lagWorkingDays: number }>
+        Array<{ predecessorId: string; type: DependencyTypeName; lagWorkingDays: number }>
       >();
       for (const dependency of dependencyRows) {
         const entries = dependenciesByTask.get(dependency.successorTaskId) ?? [];
@@ -229,272 +592,229 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         statusDate: projectRow.statusDate,
         currency: "JPY",
         defaultCalendarId: projectRow.defaultCalendarId,
-        calendars: calendarRows.map((calendar) => ({
-          id: calendar.id,
-          name: calendar.name,
-          workingWeekdays: calendar.workingWeekdays,
-          nonWorkingDates: calendar.nonWorkingDates,
+        calendars: calendarRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          workingWeekdays: row.workingWeekdays,
+          nonWorkingDates: row.nonWorkingDates,
         })),
-        members: memberRows.map((member) => ({
-          id: member.id,
-          name: member.name,
-          calendarId: member.calendarId,
-          dailyCapacityMinutes: member.dailyCapacityMinutes,
-          costRateMinorPerHour: member.costRateMinorPerHour,
+        members: memberRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          calendarId: row.calendarId,
+          dailyCapacityMinutes: row.dailyCapacityMinutes,
+          costRateMinorPerHour: row.costRateMinorPerHour,
         })),
-        processes: processRows.map((process) => ({
-          id: process.id,
-          name: process.name,
-          sortOrder: process.sortOrder,
+        processes: processRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          sortOrder: row.sortOrder,
         })),
-        products: productRows.map((product) => ({
-          id: product.id,
-          name: product.name,
-          sortOrder: product.sortOrder,
+        products: productRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          sortOrder: row.sortOrder,
         })),
-        templates: templateRows.map((template) => ({
-          id: template.id,
-          name: template.name,
-          sortOrder: template.sortOrder,
-          subtasks: template.subtasks as readonly SubtaskTemplateStep[],
+        templates: templateRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          sortOrder: row.sortOrder,
+          subtasks: row.subtasks as readonly SubtaskTemplateStep[],
         })),
         nextTaskSeq: projectRow.nextTaskSeq,
         nextBaselineVersion: projectRow.nextBaselineVersion,
-        tasks: taskRows.map((task) => ({
-          id: task.id,
-          parentId: task.parentTaskId,
-          sortOrder: task.sortOrder,
-          seq: task.seq,
-          name: task.name,
-          processId: task.processId,
-          productId: task.productId,
-          note: task.note,
-          contract: task.contract,
-          assigneeMemberId: task.assigneeMemberId,
-          plannedEffortMinutes: task.plannedEffortMinutes,
-          progressBasisPoints: task.progressBasisPoints,
-          actualEffortMinutes: task.actualEffortMinutes,
-          prorationWeightBp: task.prorationWeightBp,
-          dailyPlan: task.dailyPlan as Record<string, number>,
-          datedActuals: task.datedActuals as Record<string, number>,
-          actualStart: task.actualStart,
-          actualFinish: task.actualFinish,
-          dependencies: dependenciesByTask.get(task.id) ?? [],
+        tasks: taskRows.map((row) => ({
+          id: row.id,
+          parentId: row.parentTaskId,
+          sortOrder: row.sortOrder,
+          seq: row.seq,
+          name: row.name,
+          processId: row.processId,
+          productId: row.productId,
+          note: row.note,
+          contract: row.contract,
+          assigneeMemberId: row.assigneeMemberId,
+          plannedEffortMinutes: row.plannedEffortMinutes,
+          progressBasisPoints: row.progressBasisPoints,
+          actualEffortMinutes: row.actualEffortMinutes,
+          prorationWeightBp: row.prorationWeightBp,
+          dailyPlan: row.dailyPlan as Record<string, number>,
+          datedActuals: row.datedActuals as Record<string, number>,
+          actualStart: row.actualStart,
+          actualFinish: row.actualFinish,
+          dependencies: dependenciesByTask.get(row.id) ?? [],
         })),
       };
 
-      // Apply the validated command. The deterministic scheduler runs only for
-      // `task.generateSubtasks`, and even then it places daily plans for just the
-      // newly-created leaf children as initial values (Design 0003 §C-2); every
-      // pre-existing task's daily plan is left untouched. All other commands
-      // persist the transitioned state verbatim — nothing auto-overwrites a hand
-      // edit, and consistency is surfaced as non-blocking validation warnings.
-      const transitioned = transition(current);
-      let next: ProjectState;
-      if (request.command.type === "task.generateSubtasks") {
-        const existingTaskIds = new Set(current.tasks.map((task) => task.id));
-        const newTaskIds = new Set(
-          transitioned.tasks
-            .filter((task) => !existingTaskIds.has(task.id))
-            .map((task) => task.id),
+      let diffed: ReturnType<typeof diffOperation>;
+      try {
+        if (current.id !== request.projectId) {
+          throw new Error(`Loaded project does not match command: ${request.projectId}`);
+        }
+        diffed = diffOperation(current, request.commands);
+      } catch (error) {
+        if (error instanceof ProjectCommandValidationError) throw error;
+        throw new ProjectCommandValidationError(
+          error instanceof Error ? error.message : "Project command is invalid",
         );
-        next = applyEffortSchedule(transitioned, newTaskIds);
-      } else {
-        next = transitioned;
       }
-      // Only the NEXT-state maps survive. The matching `current…Ids` sets existed
-      // to answer "insert or update?" per row; every write below is now an upsert,
-      // so that question belongs to Postgres and is asked once for the whole set.
-      const nextTaskById = new Map(next.tasks.map((task) => [task.id, task]));
-      const nextMemberById = new Map(next.members.map((member) => [member.id, member]));
-      const nextProcessById = new Map(next.processes.map((process) => [process.id, process]));
-      const nextProductById = new Map(next.products.map((product) => [product.id, product]));
-      const nextTemplateById = new Map(next.templates.map((template) => [template.id, template]));
 
-      // Free all self-FK (parent), assignee, process, and product references so
-      // deletes and inserts never collide with RESTRICT constraints.
-      await transaction
-        .delete(taskDependency)
-        .where(
-          and(
-            eq(taskDependency.tenantId, request.tenantId),
-            eq(taskDependency.wbsId, request.projectId),
-          ),
-        );
-      if (taskRows.length > 0) {
+      const grouped = groupChanges(diffed.change);
+      const removedMasters = await upsertMasters(transaction, request, grouped.masters);
+
+      const removedTaskIds: string[] = [];
+      const newTaskParents: { readonly id: string; readonly parentId: string }[] = [];
+      for (const [id, row] of grouped.tasks) {
+        if (row.remove) {
+          removedTaskIds.push(id);
+          continue;
+        }
+        if (row.insert === undefined) continue;
+        const record = row.insert;
+        const parentId = expectNullableString(required(record, "parentId", id), "parentId");
+        await transaction.insert(task).values({
+          id,
+          tenantId: request.tenantId,
+          wbsId: request.projectId,
+          parentTaskId: null,
+          sortOrder: expectNumber(required(record, "sortOrder", id), "sortOrder"),
+          seq: expectNumber(required(record, "seq", id), "seq"),
+          name: expectString(required(record, "name", id), "name"),
+          processId: expectNullableString(required(record, "processId", id), "processId"),
+          productId: expectNullableString(required(record, "productId", id), "productId"),
+          note: expectString(required(record, "note", id), "note"),
+          contract: expectString(required(record, "contract", id), "contract"),
+          assigneeMemberId: expectNullableString(required(record, "assigneeMemberId", id), "assigneeMemberId"),
+          plannedEffortMinutes: expectNumber(required(record, "plannedEffortMinutes", id), "plannedEffortMinutes"),
+          progressBasisPoints: expectNumber(required(record, "progressBasisPoints", id), "progressBasisPoints"),
+          actualEffortMinutes: expectNumber(required(record, "actualEffortMinutes", id), "actualEffortMinutes"),
+          prorationWeightBp: expectNullableNumber(required(record, "prorationWeightBp", id), "prorationWeightBp"),
+          dailyPlan: expectNumberRecord(required(record, "dailyPlan", id), "dailyPlan"),
+          datedActuals: expectNumberRecord(required(record, "datedActuals", id), "datedActuals"),
+          actualStart: expectNullableString(required(record, "actualStart", id), "actualStart"),
+          actualFinish: expectNullableString(required(record, "actualFinish", id), "actualFinish"),
+        });
+        if (parentId !== null) newTaskParents.push({ id, parentId });
+      }
+
+      for (const [id, row] of grouped.tasks) {
+        if (row.remove || row.insert !== undefined) continue;
+        const column = (field: string): JsonValue => {
+          const value = row.columns.get(field);
+          if (value === undefined) throw new Error(`WBS change missing task field ${field}`);
+          return value;
+        };
+        const set: {
+          parentTaskId?: string | null;
+          sortOrder?: number;
+          seq?: number;
+          name?: string;
+          processId?: string | null;
+          productId?: string | null;
+          note?: string;
+          contract?: string;
+          assigneeMemberId?: string | null;
+          plannedEffortMinutes?: number;
+          progressBasisPoints?: number;
+          actualEffortMinutes?: number;
+          prorationWeightBp?: number | null;
+          dailyPlan?: Record<string, number>;
+          datedActuals?: Record<string, number>;
+          actualStart?: string | null;
+          actualFinish?: string | null;
+        } = {};
+        if (row.columns.has("parentId")) set.parentTaskId = expectNullableString(column("parentId"), "parentId");
+        if (row.columns.has("sortOrder")) set.sortOrder = expectNumber(column("sortOrder"), "sortOrder");
+        if (row.columns.has("seq")) set.seq = expectNumber(column("seq"), "seq");
+        if (row.columns.has("name")) set.name = expectString(column("name"), "name");
+        if (row.columns.has("processId")) set.processId = expectNullableString(column("processId"), "processId");
+        if (row.columns.has("productId")) set.productId = expectNullableString(column("productId"), "productId");
+        if (row.columns.has("note")) set.note = expectString(column("note"), "note");
+        if (row.columns.has("contract")) set.contract = expectString(column("contract"), "contract");
+        if (row.columns.has("assigneeMemberId")) {
+          set.assigneeMemberId = expectNullableString(column("assigneeMemberId"), "assigneeMemberId");
+        }
+        if (row.columns.has("plannedEffortMinutes")) {
+          set.plannedEffortMinutes = expectNumber(column("plannedEffortMinutes"), "plannedEffortMinutes");
+        }
+        if (row.columns.has("progressBasisPoints")) {
+          set.progressBasisPoints = expectNumber(column("progressBasisPoints"), "progressBasisPoints");
+        }
+        if (row.columns.has("actualEffortMinutes")) {
+          set.actualEffortMinutes = expectNumber(column("actualEffortMinutes"), "actualEffortMinutes");
+        }
+        if (row.columns.has("prorationWeightBp")) {
+          set.prorationWeightBp = expectNullableNumber(column("prorationWeightBp"), "prorationWeightBp");
+        }
+        if (row.columns.has("actualStart")) set.actualStart = expectNullableString(column("actualStart"), "actualStart");
+        if (row.columns.has("actualFinish")) {
+          set.actualFinish = expectNullableString(column("actualFinish"), "actualFinish");
+        }
+        if (row.writeDailyPlan) set.dailyPlan = { ...taskAfter(diffed.after, id).dailyPlan };
+        if (row.writeDatedActuals) set.datedActuals = { ...taskAfter(diffed.after, id).datedActuals };
+        if (Object.keys(set).length === 0) continue;
+        // Same fence as the insert: the WHERE names (tenant_id, wbs_id, id),
+        // so a client-supplied id cannot update a task that belongs elsewhere.
         await transaction
           .update(task)
-          .set({ parentTaskId: null, assigneeMemberId: null, processId: null, productId: null })
-          .where(and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId)));
+          .set({ ...set, updatedAt: sql`now()` })
+          .where(and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId), eq(task.id, id)));
       }
 
-      // Members: insert / update present, delete removed (now unreferenced).
-      // One upsert, one delete — the same shape as the task write below, and for
-      // the same reason.
-      //
-      // `costRateMinorPerHour` was MISSING from this list until 2026-08-07, so a
-      // rate typed on the members screen was accepted, applied optimistically,
-      // and silently dropped on the next read. The seed path writes the whole
-      // record and so was unaffected, which is why nothing caught it — and the
-      // one test that touched the field passed a `null`, a value that cannot
-      // distinguish "written" from "not written". It now passes a real amount.
-      const memberValues = next.members.map((member) => ({
-        id: member.id,
-        tenantId: request.tenantId,
-        wbsId: request.projectId,
-        name: member.name,
-        calendarId: member.calendarId,
-        dailyCapacityMinutes: member.dailyCapacityMinutes,
-        costRateMinorPerHour: member.costRateMinorPerHour,
-      }));
-      if (memberValues.length > 0) {
-        await transaction
-          .insert(member)
-          .values(memberValues)
-          .onConflictDoUpdate({
-            target: [member.tenantId, member.wbsId, member.id],
-            set: {
-              name: sql`excluded.name`,
-              calendarId: sql`excluded.calendar_id`,
-              dailyCapacityMinutes: sql`excluded.daily_capacity_minutes`,
-              costRateMinorPerHour: sql`excluded.cost_rate_minor_per_hour`,
-              updatedAt: sql`now()`,
-            },
-          });
+      if (newTaskParents.length > 0) {
+        const pairs = sql.join(
+          newTaskParents.map((row) => sql`(${row.id}::uuid, ${row.parentId}::uuid)`),
+          sql`, `,
+        );
+        await transaction.execute(sql`
+          update ${task} set parent_task_id = v.parent_task_id
+          from (values ${pairs}) as v(id, parent_task_id)
+          where ${task.tenantId} = ${request.tenantId}
+            and ${task.wbsId} = ${request.projectId}
+            and ${task.id} = v.id
+        `);
       }
-      const removedMemberIds = memberRows
-        .filter((member) => !nextMemberById.has(member.id))
-        .map((member) => member.id);
-      if (removedMemberIds.length > 0) {
+
+      for (const edge of grouped.dependencyDeletes) {
         await transaction
-          .delete(member)
+          .delete(taskDependency)
           .where(
             and(
-              eq(member.tenantId, request.tenantId),
-              eq(member.wbsId, request.projectId),
-              inArray(member.id, removedMemberIds),
+              eq(taskDependency.tenantId, request.tenantId),
+              eq(taskDependency.wbsId, request.projectId),
+              eq(taskDependency.successorTaskId, edge.successorId),
+              eq(taskDependency.predecessorTaskId, edge.predecessorId),
+              eq(taskDependency.type, edge.type),
+            ),
+          );
+      }
+      if (grouped.dependencyInserts.length > 0) {
+        await transaction.insert(taskDependency).values(
+          grouped.dependencyInserts.map((edge) => ({
+            tenantId: request.tenantId,
+            wbsId: request.projectId,
+            predecessorTaskId: edge.predecessorId,
+            successorTaskId: edge.successorId,
+            type: edge.type,
+            lagWorkingDays: edge.lagWorkingDays,
+          })),
+        );
+      }
+      for (const edge of grouped.dependencyUpdates) {
+        await transaction
+          .update(taskDependency)
+          .set({ lagWorkingDays: edge.lagWorkingDays })
+          .where(
+            and(
+              eq(taskDependency.tenantId, request.tenantId),
+              eq(taskDependency.wbsId, request.projectId),
+              eq(taskDependency.successorTaskId, edge.successorId),
+              eq(taskDependency.predecessorTaskId, edge.predecessorId),
+              eq(taskDependency.type, edge.type),
             ),
           );
       }
 
-      // Processes: upsert present, delete removed (now unreferenced).
-      const processValues = next.processes.map((process) => ({
-        id: process.id,
-        tenantId: request.tenantId,
-        wbsId: request.projectId,
-        name: process.name,
-        sortOrder: process.sortOrder,
-      }));
-      if (processValues.length > 0) {
-        await transaction
-          .insert(process)
-          .values(processValues)
-          .onConflictDoUpdate({
-            target: [process.tenantId, process.wbsId, process.id],
-            set: {
-              name: sql`excluded.name`,
-              sortOrder: sql`excluded.sort_order`,
-              updatedAt: sql`now()`,
-            },
-          });
-      }
-      const removedProcessIds = processRows
-        .filter((process) => !nextProcessById.has(process.id))
-        .map((process) => process.id);
-      if (removedProcessIds.length > 0) {
-        await transaction
-          .delete(process)
-          .where(
-            and(
-              eq(process.tenantId, request.tenantId),
-              eq(process.wbsId, request.projectId),
-              inArray(process.id, removedProcessIds),
-            ),
-          );
-      }
-
-      // Products: upsert present, delete removed (now unreferenced).
-      const productValues = next.products.map((product) => ({
-        id: product.id,
-        tenantId: request.tenantId,
-        wbsId: request.projectId,
-        name: product.name,
-        sortOrder: product.sortOrder,
-      }));
-      if (productValues.length > 0) {
-        await transaction
-          .insert(product)
-          .values(productValues)
-          .onConflictDoUpdate({
-            target: [product.tenantId, product.wbsId, product.id],
-            set: {
-              name: sql`excluded.name`,
-              sortOrder: sql`excluded.sort_order`,
-              updatedAt: sql`now()`,
-            },
-          });
-      }
-      const removedProductIds = productRows
-        .filter((product) => !nextProductById.has(product.id))
-        .map((product) => product.id);
-      if (removedProductIds.length > 0) {
-        await transaction
-          .delete(product)
-          .where(
-            and(
-              eq(product.tenantId, request.tenantId),
-              eq(product.wbsId, request.projectId),
-              inArray(product.id, removedProductIds),
-            ),
-          );
-      }
-
-      // Templates: insert / update present, delete removed. Templates are never
-      // referenced by a task (generation copies the step data), so a delete has
-      // no referential guard (Design 0003 §E-1 locked decision 4).
-      const templateValues = next.templates.map((template) => ({
-        id: template.id,
-        tenantId: request.tenantId,
-        wbsId: request.projectId,
-        name: template.name,
-        sortOrder: template.sortOrder,
-        subtasks: template.subtasks,
-      }));
-      if (templateValues.length > 0) {
-        await transaction
-          .insert(subtaskTemplate)
-          .values(templateValues)
-          .onConflictDoUpdate({
-            target: [subtaskTemplate.tenantId, subtaskTemplate.wbsId, subtaskTemplate.id],
-            set: {
-              name: sql`excluded.name`,
-              sortOrder: sql`excluded.sort_order`,
-              subtasks: sql`excluded.subtasks`,
-              updatedAt: sql`now()`,
-            },
-          });
-      }
-      const removedTemplateIds = templateRows
-        .filter((template) => !nextTemplateById.has(template.id))
-        .map((template) => template.id);
-      if (removedTemplateIds.length > 0) {
-        await transaction
-          .delete(subtaskTemplate)
-          .where(
-            and(
-              eq(subtaskTemplate.tenantId, request.tenantId),
-              eq(subtaskTemplate.wbsId, request.projectId),
-              inArray(subtaskTemplate.id, removedTemplateIds),
-            ),
-          );
-      }
-
-      // Delete removed tasks (parent references already nulled above). ONE
-      // statement for the whole set: a loop here cost a round trip per deleted
-      // task, and deleting a subtree is exactly when there are many.
-      const removedTaskIds = taskRows
-        .filter((task) => !nextTaskById.has(task.id))
-        .map((task) => task.id);
       if (removedTaskIds.length > 0) {
         await transaction
           .delete(task)
@@ -507,135 +827,103 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           );
       }
 
-      // Write every task in ONE statement, then link the parents in ONE more.
-      //
-      // This used to be a loop per task — an UPDATE or an INSERT each — plus a
-      // second loop for the parent links, so a command cost `2 × tasks` round
-      // trips whether it touched one task or all of them. Measured 2026-08-06:
-      // renaming a SINGLE task cost 37 statements on a 6-task project and 149 on
-      // a 60-task one, and against a database in another region that is the whole
-      // latency budget. `write-path-scaling.test.ts` pins the two counts EQUAL,
-      // which is the only shape that says "the work does not depend on how big
-      // the project is".
-      //
-      // An upsert rather than update-or-insert: whether a row already exists
-      // becomes Postgres' question, asked once for the set, instead of ours asked
-      // per row.
-      //
-      // The conflict target is the COMPOSITE `task_tenant_wbs_id_unique`,
-      // not the `id` primary key, and that is the tenancy fence. Task ids are
-      // supplied by the client (`AddTaskCommand.task` carries `id`), so a request
-      // scoped to project A can name a task id that lives in project B. Targeting
-      // `id` alone made that a silent cross-project UPDATE: `tenant_id` and
-      // `wbs_id` are absent from the `set` list, so the victim's row stayed
-      // where it was and took this project's name, seq, plan and a nulled parent.
-      // Against the composite the row is not a conflict at all, so Postgres
-      // attempts the INSERT and `task_pkey` rejects it — which is exactly what
-      // the per-row loop this replaced did. Fail closed, as before.
-      const taskValues = next.tasks.map((task) => ({
-        id: task.id,
-        tenantId: request.tenantId,
-        wbsId: request.projectId,
-        // Parent deferred to the second statement so every parent target exists
-        // before the self-FK is set — the same reason the two loops were in this
-        // order, unchanged.
-        parentTaskId: null,
-        sortOrder: task.sortOrder,
-        // Immutable display No.: written once at insert and re-set to the same
-        // value on update, so a reorder/edit never renumbers a task (§F-1).
-        seq: task.seq,
-        name: task.name,
-        processId: task.processId,
-        productId: task.productId,
-        note: task.note,
-        contract: task.contract,
-        assigneeMemberId: task.assigneeMemberId,
-        plannedEffortMinutes: task.plannedEffortMinutes,
-        progressBasisPoints: task.progressBasisPoints,
-        actualEffortMinutes: task.actualEffortMinutes,
-        prorationWeightBp: task.prorationWeightBp,
-        dailyPlan: task.dailyPlan,
-        // Design 0011. Carried in the same per-task write as `dailyPlan`, which
-        // is why an import survives the next unrelated command: both the total
-        // and the rows it comes from travel with the task.
-        datedActuals: task.datedActuals,
-        actualStart: task.actualStart,
-        actualFinish: task.actualFinish,
-      }));
-      if (taskValues.length > 0) {
-        await transaction
-          .insert(task)
-          .values(taskValues)
-          .onConflictDoUpdate({
-            target: [task.tenantId, task.wbsId, task.id],
-            set: {
-              parentTaskId: sql`null`,
-              sortOrder: sql`excluded.sort_order`,
-              seq: sql`excluded.seq`,
-              name: sql`excluded.name`,
-              processId: sql`excluded.process_id`,
-              productId: sql`excluded.product_id`,
-              note: sql`excluded.note`,
-              contract: sql`excluded.contract`,
-              assigneeMemberId: sql`excluded.assignee_member_id`,
-              plannedEffortMinutes: sql`excluded.planned_effort_minutes`,
-              progressBasisPoints: sql`excluded.progress_basis_points`,
-              actualEffortMinutes: sql`excluded.actual_effort_minutes`,
-              prorationWeightBp: sql`excluded.proration_weight_bp`,
-              dailyPlan: sql`excluded.daily_plan`,
-              datedActuals: sql`excluded.dated_actuals`,
-              actualStart: sql`excluded.actual_start`,
-              actualFinish: sql`excluded.actual_finish`,
-              updatedAt: sql`now()`,
-            },
-          });
-      }
+      const deleteMaster = async (kind: MasterKind, ids: readonly string[]) => {
+        if (ids.length === 0) return;
+        if (kind === "calendar") {
+          await transaction
+            .delete(calendar)
+            .where(
+              and(
+                eq(calendar.tenantId, request.tenantId),
+                eq(calendar.wbsId, request.projectId),
+                inArray(calendar.id, [...ids]),
+              ),
+            );
+        } else if (kind === "member") {
+          await transaction
+            .delete(member)
+            .where(
+              and(
+                eq(member.tenantId, request.tenantId),
+                eq(member.wbsId, request.projectId),
+                inArray(member.id, [...ids]),
+              ),
+            );
+        } else if (kind === "process") {
+          await transaction
+            .delete(process)
+            .where(
+              and(
+                eq(process.tenantId, request.tenantId),
+                eq(process.wbsId, request.projectId),
+                inArray(process.id, [...ids]),
+              ),
+            );
+        } else if (kind === "product") {
+          await transaction
+            .delete(product)
+            .where(
+              and(
+                eq(product.tenantId, request.tenantId),
+                eq(product.wbsId, request.projectId),
+                inArray(product.id, [...ids]),
+              ),
+            );
+        } else {
+          await transaction
+            .delete(subtaskTemplate)
+            .where(
+              and(
+                eq(subtaskTemplate.tenantId, request.tenantId),
+                eq(subtaskTemplate.wbsId, request.projectId),
+                inArray(subtaskTemplate.id, [...ids]),
+              ),
+            );
+        }
+      };
+      await deleteMaster("member", removedMasters.member);
+      await deleteMaster("calendar", removedMasters.calendar);
+      await deleteMaster("process", removedMasters.process);
+      await deleteMaster("product", removedMasters.product);
+      await deleteMaster("template", removedMasters.template);
 
-      // The parent links, once every row above exists. An UPDATE driven by a
-      // VALUES list, so it stays one statement however deep or wide the tree is.
-      const parented = next.tasks.filter((task) => task.parentId !== null);
-      if (parented.length > 0) {
-        const pairs = sql.join(
-          parented.map((task) => sql`(${task.id}::uuid, ${task.parentId}::uuid)`),
-          sql`, `,
+      const wbsSet: {
+        revision: bigint;
+        nextTaskSeq: number;
+        nextBaselineVersion: number;
+        name?: string;
+        projectStart?: string;
+        statusDate?: string;
+        defaultCalendarId?: string;
+        updatedAt: ReturnType<typeof sql>;
+      } = {
+        revision: resultRevision,
+        nextTaskSeq: diffed.after.nextTaskSeq,
+        nextBaselineVersion: diffed.after.nextBaselineVersion,
+        updatedAt: sql`now()`,
+      };
+      if (grouped.wbsFields.has("name")) wbsSet.name = expectString(grouped.wbsFields.get("name")!, "name");
+      if (grouped.wbsFields.has("projectStart")) {
+        wbsSet.projectStart = expectString(grouped.wbsFields.get("projectStart")!, "projectStart");
+      }
+      if (grouped.wbsFields.has("statusDate")) {
+        wbsSet.statusDate = expectString(grouped.wbsFields.get("statusDate")!, "statusDate");
+      }
+      if (grouped.wbsFields.has("defaultCalendarId")) {
+        wbsSet.defaultCalendarId = expectString(grouped.wbsFields.get("defaultCalendarId")!, "defaultCalendarId");
+      }
+      await transaction
+        .update(wbs)
+        .set(wbsSet)
+        .where(
+          and(
+            eq(wbs.tenantId, request.tenantId),
+            eq(wbs.id, request.projectId),
+            eq(wbs.revision, actualRevision),
+          ),
         );
-        await transaction.execute(sql`
-          update ${task} set parent_task_id = v.parent_task_id
-          from (values ${pairs}) as v(id, parent_task_id)
-          where ${task.tenantId} = ${request.tenantId}
-            and ${task.wbsId} = ${request.projectId}
-            and ${task.id} = v.id
-        `);
-      }
 
-      const dependencyValues = next.tasks.flatMap((task) =>
-        task.dependencies.map((dependency) => ({
-          tenantId: request.tenantId,
-          wbsId: request.projectId,
-          predecessorTaskId: dependency.predecessorId,
-          successorTaskId: task.id,
-          type: dependency.type,
-          lagWorkingDays: dependency.lagWorkingDays,
-        })),
-      );
-      if (dependencyValues.length > 0) {
-        await transaction.insert(taskDependency).values(dependencyValues);
-      }
-
-      // Design 0009. The snapshot is taken from `current` — the state AT
-      // `expectedRevision` — not from `next`, even though for this command they
-      // differ only by the counter. Reading the pre-transition state is what makes
-      // "the frozen plan and the revision it is pinned to agree" true by
-      // construction rather than by the transition happening to be a no-op.
-      //
-      // Only LEAF rows are frozen. A summary row does not roll up (`calculateEvm`
-      // skips it), so storing one would put a number in the table that no reader
-      // may add, and the first person to sum the column would double-count.
-      if (request.command.type === "baseline.publish") {
-        // `leafTaskIds` rather than a local re-derivation: this set decides what
-        // the baseline's BAC is, and the rollup's BAC comes from the same
-        // predicate. Two hand-written copies agree by transcription, which is not
-        // a property anything enforces.
+      if (request.commands.some((command) => command.type === "baseline.publish")) {
         const leaves = leafTaskIds(current.tasks);
         await transaction.insert(baseline).values({
           tenantId: request.tenantId,
@@ -646,61 +934,55 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           publishedByActorId: request.actor.id,
         });
         const frozen = current.tasks
-          .filter((task) => leaves.has(task.id))
-          .map((task) => ({
+          .filter((row) => leaves.has(row.id))
+          .map((row) => ({
             tenantId: request.tenantId,
             wbsId: request.projectId,
             version: current.nextBaselineVersion,
-            taskId: task.id,
-            parentTaskId: task.parentId,
-            dailyPlan: task.dailyPlan,
-            plannedEffortMinutes: task.plannedEffortMinutes,
-            assigneeMemberId: task.assigneeMemberId,
-            name: task.name,
-            seq: task.seq,
+            taskId: row.id,
+            parentTaskId: row.parentId,
+            dailyPlan: row.dailyPlan,
+            plannedEffortMinutes: row.plannedEffortMinutes,
+            assigneeMemberId: row.assigneeMemberId,
+            name: row.name,
+            seq: row.seq,
           }));
         if (frozen.length > 0) {
           await transaction.insert(baselineTask).values(frozen);
         }
       }
 
-      const resultRevision = actualRevision + 1n;
-      // Advance the per-project display-No. counter transactionally alongside the
-      // revision bump, under the project row lock held above (§F-1). A task.add or
-      // generateSubtasks batch leaves `next.nextTaskSeq` ahead by the number of
-      // tasks created; every other command leaves it unchanged.
-      await transaction
-        .update(wbs)
-        .set({
-          revision: resultRevision,
-          nextTaskSeq: next.nextTaskSeq,
-          nextBaselineVersion: next.nextBaselineVersion,
-          updatedAt: sql`now()`,
-        })
-        .where(
-          and(
-            eq(wbs.tenantId, request.tenantId),
-            eq(wbs.id, request.projectId),
-            eq(wbs.revision, actualRevision),
-          ),
-        );
+      await transaction.insert(wbsChange).values({
+        tenantId: request.tenantId,
+        wbsId: request.projectId,
+        revision: resultRevision,
+        operationId: request.operationId,
+        actorType: request.actor.type,
+        actorId: request.actor.id,
+        format: diffed.change.format,
+        change: diffed.change,
+      });
+      const firstCommand = request.commands[0];
+      if (firstCommand === undefined) {
+        throw new ProjectCommandValidationError("Project command is invalid");
+      }
       await transaction.insert(auditEvent).values({
         tenantId: request.tenantId,
         wbsId: request.projectId,
         wbsRevision: resultRevision,
         actorType: request.actor.type,
         actorId: request.actor.id,
-        commandType: request.command.type,
+        commandType: firstCommand.type,
         payload: {
-          command: request.command,
+          operationId: request.operationId,
+          commands: request.commands,
           expectedRevision: request.expectedRevision.toString(),
-          idempotencyKey: request.idempotencyKey,
         },
       });
       await transaction.insert(commandReceipt).values({
         tenantId: request.tenantId,
         wbsId: request.projectId,
-        idempotencyKey: request.idempotencyKey,
+        idempotencyKey: request.operationId,
         requestHash: fingerprint,
         resultRevision,
       });
@@ -713,3 +995,4 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
     });
   }
 }
+

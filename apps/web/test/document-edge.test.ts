@@ -55,18 +55,17 @@ describe("document body bound — sized to this surface, not copied from /api", 
   it("lets a realistic 1,000-command batch through", async () => {
     const batch = JSON.stringify({
       expectedRevision: "12345",
+      operationId: "reorder-1000",
       commands: Array.from({ length: 1000 }, (_, index) => ({
-        command: {
-          type: "task.update",
-          taskId: "018f2c3d-0000-7000-8000-000000000001",
-          changes: { sortOrder: index * 100 },
-        },
-        idempotencyKey: `key-${index}`,
+        type: "task.update",
+        taskId: "018f2c3d-0000-7000-8000-000000000001",
+        changes: { sortOrder: index * 100 },
       })),
     });
-    // Control: the fixture must actually be the size the decision was made about,
-    // or this test passes for the wrong reason.
-    expect(batch.length).toBeGreaterThan(100 * 1024);
+    // Control: the fixture must actually be a full reorder, or this test passes
+    // for the wrong reason. One operation id replaced a key per command, so the
+    // same 1,000 updates are about 99 KiB — still over /api's 64 KiB bound.
+    expect(batch.length).toBeGreaterThan(MAX_REQUEST_BODY_BYTES);
     expect(batch.length).toBeLessThan(MAX_DOCUMENT_BODY_BYTES);
 
     const response = await withDocumentEdge(post("/projects/p1/wbs", batch), envWith(true), () =>

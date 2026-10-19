@@ -123,9 +123,9 @@ describe("task ids cannot cross a project boundary", () => {
         tenantId: TENANT_ID,
         projectId: demoProjectRecord.project.id,
         expectedRevision: 1n,
-        idempotencyKey: "cross-project-add",
+        operationId: "cross-project-add",
         actor: { type: "HUMAN", id: "user-001" },
-        command: addTaskCommand(VICTIM_TASK_ID),
+        commands: [addTaskCommand(VICTIM_TASK_ID)],
       }),
     ).rejects.toThrow();
 
@@ -147,9 +147,9 @@ describe("task ids cannot cross a project boundary", () => {
       tenantId: TENANT_ID,
       projectId: demoProjectRecord.project.id,
       expectedRevision: 1n,
-      idempotencyKey: "ordinary-add",
+      operationId: "ordinary-add",
       actor: { type: "HUMAN", id: "user-001" },
-      command: addTaskCommand(freshId),
+      commands: [addTaskCommand(freshId)],
     });
 
     expect(result.revision).toBe(2n);

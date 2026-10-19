@@ -98,7 +98,7 @@ describe("ADR 0012 Step 4d — WBS queue-not-block (driven harness)", () => {
     expect(screen.getByTestId("save-state").textContent).toBe("saving");
   });
 
-  it("(3) CORE: coalesced drain dispatches both gestures FIFO with the SETTLED revision", async () => {
+  it("(3) CORE: drain dispatches the head gesture with the SETTLED revision, then the next", async () => {
     const onExecute = vi.fn();
     const props = propsFor(onExecute);
     const { rerender } = render(props({ saveInFlight: false }));
@@ -109,20 +109,26 @@ describe("ADR 0012 Step 4d — WBS queue-not-block (driven harness)", () => {
 
     await editFirstName("B");
     await editFirstName("C");
-    expect(onExecute).toHaveBeenCalledTimes(1); // both queued
+    expect(onExecute).toHaveBeenCalledTimes(1); // both queued, as separate gestures
 
-    // The in-flight save settles success at revision 8.
+    // The in-flight save settles success at revision 8. Only B goes out.
     rerender(props({ saveInFlight: false, saveResult: { ok: true, kind: "wbs-save", revision: "8" } }));
 
-    // EXACTLY ONE new dispatch, carrying both queued gestures in FIFO order.
     await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(2));
     const drained = onExecute.mock.calls[1]![0] as ProjectCommand[];
-    expect(drained.map(nameOf)).toEqual(["B", "C"]);
+    expect(drained.map(nameOf)).toEqual(["B"]);
     // expectedRevision is the SETTLED revision (8): ≠ loader revision (7) AND ≠ the
     // pre-settle confirmed revision (7) — pins the stale-closure bug.
     expect(onExecute.mock.calls[1]![1]).toBe("8");
     expect(onExecute.mock.calls[1]![1]).not.toBe("7");
-    // A save is again on the wire → badge stays "saving".
+    // A save is again on the wire → badge stays "saving". C is still parked.
+    expect(screen.getByTestId("save-state").textContent).toBe("saving");
+
+    rerender(props({ saveInFlight: true, saveResult: { ok: true, kind: "wbs-save", revision: "8" } }));
+    rerender(props({ saveInFlight: false, saveResult: { ok: true, kind: "wbs-save", revision: "9" } }));
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(3));
+    expect((onExecute.mock.calls[2]![0] as ProjectCommand[]).map(nameOf)).toEqual(["C"]);
+    expect(onExecute.mock.calls[2]![1]).toBe("9");
     expect(screen.getByTestId("save-state").textContent).toBe("saving");
   });
 
@@ -358,6 +364,7 @@ describe("ADR 0012 Step 4d — WBS queue economy through the real router", () =>
       });
     const gate1 = gateFor(1);
     const gate2 = gateFor(2);
+    const gate3 = gateFor(3);
     let loaderCalls = 0;
     let actionCalls = 0;
     const expectedRevisions: string[] = [];
@@ -374,7 +381,7 @@ describe("ADR 0012 Step 4d — WBS queue economy through the real router", () =>
       const body = (await request.json()) as { expectedRevision: string; commands: unknown[] };
       expectedRevisions.push(body.expectedRevision);
       drainedSizes.push(body.commands.length);
-      await (mine === 1 ? gate1 : gate2); // hold this POST in flight until released
+      await (mine === 1 ? gate1 : mine === 2 ? gate2 : gate3); // hold this POST in flight until released
       server.revision = String(Number(body.expectedRevision) + 1);
       return data({ ok: true, kind: "wbs-save", revision: server.revision });
     };
@@ -388,21 +395,25 @@ describe("ADR 0012 Step 4d — WBS queue economy through the real router", () =>
     await editFirstName("A"); // dispatched (rev 7), now in flight (gated)
     await waitFor(() => expect(actionCalls).toBe(1));
     await editFirstName("B"); // queued
-    await editFirstName("C"); // coalesced with B
+    await editFirstName("C"); // its own gesture, behind B
     expect(actionCalls).toBe(1);
 
     gates[1]!();
-    // The first save settles → the coalesced [B,C] batch drains as ONE POST, now
-    // itself in flight (gated) so the badge is still "saving".
+    // A settles → B drains as its own POST and stays in flight, so the badge is
+    // still "saving". C waits.
     await waitFor(() => expect(actionCalls).toBe(2));
     await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saving"));
 
     gates[2]!();
-    // The drained batch settles → both slots empty → "saved".
+    await waitFor(() => expect(actionCalls).toBe(3));
+    await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saving"));
+
+    gates[3]!();
+    // C settles → both slots empty → "saved".
     await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saved"));
 
-    expect(expectedRevisions).toEqual(["7", "8"]); // chained off the settled revision
-    expect(drainedSizes[1]).toBe(2); // B and C coalesced into one wire batch
+    expect(expectedRevisions).toEqual(["7", "8", "9"]); // each gesture chains off the settled revision
+    expect(drainedSizes).toEqual([1, 1, 1]); // B and C are separate operations
     // The whole sequence of successful self-saves triggered ZERO loader re-runs.
     expect(loaderCalls).toBe(1);
   });

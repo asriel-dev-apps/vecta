@@ -107,7 +107,7 @@ describe("ADR 0012 Step 4d — masters queue-not-block (driven harness)", () => 
     expect(screen.getByTestId("save-state").textContent).toBe("saving");
   });
 
-  it("(3) CORE: coalesced drain dispatches both gestures FIFO with the SETTLED revision", async () => {
+  it("(3) CORE: drain dispatches the head gesture with the SETTLED revision, then the next", async () => {
     const onExecute = vi.fn();
     const props = propsFor(onExecute);
     const { rerender } = render(props({ saveInFlight: false }));
@@ -123,10 +123,17 @@ describe("ADR 0012 Step 4d — masters queue-not-block (driven harness)", () => 
 
     await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(2));
     const drained = onExecute.mock.calls[1]![0] as ProjectCommand[];
-    expect(drained.map(processName)).toEqual(["B", "C"]); // FIFO
+    expect(drained.map(processName)).toEqual(["B"]);
     // Settled revision (8): ≠ loader revision (7) AND ≠ pre-settle confirmed (7).
     expect(onExecute.mock.calls[1]![1]).toBe("8");
     expect(onExecute.mock.calls[1]![1]).not.toBe("7");
+    expect(screen.getByTestId("save-state").textContent).toBe("saving");
+
+    rerender(props({ saveInFlight: true, saveResult: { ok: true, kind: "masters-save", revision: "8" } }));
+    rerender(props({ saveInFlight: false, saveResult: { ok: true, kind: "masters-save", revision: "9" } }));
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(3));
+    expect((onExecute.mock.calls[2]![0] as ProjectCommand[]).map(processName)).toEqual(["C"]);
+    expect(onExecute.mock.calls[2]![1]).toBe("9");
     expect(screen.getByTestId("save-state").textContent).toBe("saving");
   });
 
@@ -268,6 +275,7 @@ describe("ADR 0012 Step 4d — masters queue economy through the real router", (
     const gates: Array<() => void> = [];
     const gate1 = new Promise<void>((r) => { gates[1] = r; });
     const gate2 = new Promise<void>((r) => { gates[2] = r; });
+    const gate3 = new Promise<void>((r) => { gates[3] = r; });
     let loaderCalls = 0;
     let actionCalls = 0;
     const expectedRevisions: string[] = [];
@@ -284,7 +292,7 @@ describe("ADR 0012 Step 4d — masters queue economy through the real router", (
       const body = (await request.json()) as { expectedRevision: string; commands: unknown[] };
       expectedRevisions.push(body.expectedRevision);
       drainedSizes.push(body.commands.length);
-      await (mine === 1 ? gate1 : gate2);
+      await (mine === 1 ? gate1 : mine === 2 ? gate2 : gate3);
       server.revision = String(Number(body.expectedRevision) + 1);
       return data({ ok: true, kind: "masters-save", revision: server.revision });
     };
@@ -298,7 +306,7 @@ describe("ADR 0012 Step 4d — masters queue economy through the real router", (
     addProcess("A"); // in flight (gated)
     await waitFor(() => expect(actionCalls).toBe(1));
     addProcess("B"); // queued
-    addProcess("C"); // coalesced
+    addProcess("C"); // its own gesture, behind B
     expect(actionCalls).toBe(1);
 
     gates[1]!();
@@ -306,10 +314,14 @@ describe("ADR 0012 Step 4d — masters queue economy through the real router", (
     await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saving"));
 
     gates[2]!();
+    await waitFor(() => expect(actionCalls).toBe(3));
+    await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saving"));
+
+    gates[3]!();
     await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("saved"));
 
-    expect(expectedRevisions).toEqual(["7", "8"]); // chained off the settled revision
-    expect(drainedSizes[1]).toBe(2); // B and C coalesced into one wire batch
+    expect(expectedRevisions).toEqual(["7", "8", "9"]); // each gesture chains off the settled revision
+    expect(drainedSizes).toEqual([1, 1, 1]); // B and C are separate operations
     expect(loaderCalls).toBe(1); // ZERO re-runs across the drained sequence
   });
 });

@@ -1,8 +1,4 @@
-import {
-  applyProjectCommand,
-  type ProjectCommand,
-  type ProjectState,
-} from "./project-state.js";
+import type { ProjectCommand } from "./project-state.js";
 
 export interface AuditActor {
   readonly type: "HUMAN" | "AGENT" | "SYSTEM";
@@ -13,9 +9,9 @@ export interface ProjectCommandRequest {
   readonly tenantId: string;
   readonly projectId: string;
   readonly expectedRevision: bigint;
-  readonly idempotencyKey: string;
+  readonly operationId: string;
   readonly actor: AuditActor;
-  readonly command: ProjectCommand;
+  readonly commands: readonly ProjectCommand[];
 }
 
 export interface ProjectCommandExecution {
@@ -25,10 +21,7 @@ export interface ProjectCommandExecution {
 }
 
 export interface ProjectCommandUnitOfWork {
-  execute(
-    request: ProjectCommandRequest,
-    transition: (project: ProjectState) => ProjectState,
-  ): Promise<ProjectCommandExecution>;
+  execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution>;
 }
 
 export interface ProjectCommandService {
@@ -53,8 +46,8 @@ export class ProjectVersionConflictError extends Error {
 }
 
 export class IdempotencyConflictError extends Error {
-  constructor(readonly idempotencyKey: string) {
-    super(`Idempotency key was reused for a different command: ${idempotencyKey}`);
+  constructor(readonly operationId: string) {
+    super(`Idempotency key was reused for a different command: ${operationId}`);
     this.name = "IdempotencyConflictError";
   }
 }
@@ -74,25 +67,15 @@ export function createProjectCommandService(
       if (
         request.tenantId.trim().length === 0 ||
         request.projectId.trim().length === 0 ||
-        request.idempotencyKey.trim().length === 0 ||
+        request.operationId.trim().length === 0 ||
         request.actor.id.trim().length === 0 ||
-        request.expectedRevision < 0n
+        request.expectedRevision < 0n ||
+        request.commands.length === 0
       ) {
         throw new Error("Project command envelope is invalid");
       }
 
-      return unitOfWork.execute(request, (project) => {
-        if (project.id !== request.projectId) {
-          throw new Error(`Loaded project does not match command: ${request.projectId}`);
-        }
-        try {
-          return applyProjectCommand(project, request.command);
-        } catch (error) {
-          throw new ProjectCommandValidationError(
-            error instanceof Error ? error.message : "Project command is invalid",
-          );
-        }
-      });
+      return unitOfWork.execute(request);
     },
   };
 }

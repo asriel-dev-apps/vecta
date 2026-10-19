@@ -51,10 +51,10 @@ function mount(initial: ProjectState, mode: ActionMode = "accept") {
   const action = async ({ request }: { request: Request }) => {
     const body = (await request.json()) as {
       expectedRevision: string;
-      commands: { command: unknown }[];
+      commands: unknown[];
     };
     server.expectedRevisions.push(body.expectedRevision);
-    for (const entry of body.commands) server.commands.push(toCommand(entry.command as never));
+    for (const command of body.commands) server.commands.push(toCommand(command as never));
     if (server.mode === "conflict") {
       server.revision = server.conflictRevision;
       server.state = server.conflictState;

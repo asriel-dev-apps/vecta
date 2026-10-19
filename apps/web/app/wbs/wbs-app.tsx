@@ -1281,6 +1281,50 @@ export function App({
     [connected, confirmedRevision, grid, onExecute, project, projectionRole, saveState],
   );
 
+  // A proposal is one gesture per command, in order, through the same queue.
+  // Fold first so a later command is applied on the earlier result, and so a
+  // rejection queues nothing. Each queued gesture keeps the state before itself.
+  const applyProposal = useCallback(
+    (commands: readonly ProjectCommand[]): boolean => {
+      if (commands.length === 0) return false;
+      if (connected && saveState === "error") return false;
+      let cursor = project;
+      let gridCursor = grid;
+      const steps: { readonly before: ProjectState; readonly beforeGrid: WbsGridProjection; readonly command: ProjectCommand }[] = [];
+      try {
+        for (const command of commands) {
+          const after = deriveOptimisticState(cursor, [command]);
+          steps.push({ before: cursor, beforeGrid: gridCursor, command });
+          cursor = after;
+          gridCursor = projectWbsGrid(after, { role: projectionRole });
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "The edit could not be applied");
+        return false;
+      }
+      if (connected) {
+        for (const step of steps) {
+          const transition = reduceQueue(queueRef.current, {
+            type: "edit",
+            snapshot: { project: step.before, grid: step.beforeGrid },
+            commands: [step.command],
+            confirmedRevision,
+          });
+          queueRef.current = transition.queue;
+          setSaveState("saving");
+          if (transition.dispatch !== undefined) {
+            onExecute?.(transition.dispatch.commands, transition.dispatch.expectedRevision);
+          }
+        }
+      }
+      setProject(cursor);
+      setGrid(gridCursor);
+      setNotice(null);
+      return true;
+    },
+    [connected, confirmedRevision, grid, onExecute, project, projectionRole, saveState],
+  );
+
   const executeCommand = useCallback(
     (command: ProjectCommand): boolean => executeCommands([command]),
     [executeCommands],
@@ -1814,10 +1858,10 @@ export function App({
           {project.name ? `${project.name} · ` : ""}基準日 {grid.statusDate} · {rows.length.toLocaleString("ja-JP")} タスク · {planDays.length} 計画日
         </p>
         <div className="app-header__actions">
-          {/* ADR 0013 — the assistant proposes; approving hands the commands to
-              `executeCommands`, the very entry point a typed cell edit uses. Mounted
-              only when the route wired the seam: preview mode has nowhere to post,
-              and a proposal that could never be applied is worse than absent. */}
+          {/* ADR 0013 — the assistant proposes; approving applies one gesture per
+              command, in order, through the same save queue. Mounted only when the
+              route wired the seam: preview mode has nowhere to post, and a proposal
+              that could never be applied is worse than absent. */}
           {assistant !== undefined && (
             <AssistantOverlay
               proposeSeam={assistant}
@@ -1825,7 +1869,7 @@ export function App({
               // A save in flight, or a grid locked after a rejection, means the
               // batch would not carry the revision it was reasoned over.
               canApply={saveState !== "saving" && saveState !== "error"}
-              onApply={executeCommands}
+              onApply={applyProposal}
             />
           )}
           <div className={`save-badge save-badge--${saveState}`} data-testid="save-state">{saveState}</div>

@@ -8,6 +8,7 @@ import {
   type DatedActualEntry,
   type DatedActualKeyParts,
 } from "./dated-actuals.js";
+import { applyEffortSchedule } from "./effort-schedule.js";
 import {
   deriveSubtaskId,
   prorateLargestRemainder,
@@ -705,6 +706,7 @@ export function applyProjectCommand(
   command: ProjectCommand,
 ): ProjectState {
   let next: ProjectState;
+  let generatedTaskIds: ReadonlySet<string> | undefined;
   if (command.type === "baseline.publish") {
     // The state transition is ONLY the counter. The snapshot rows are written by
     // the unit of work, in the same transaction, from the state this was applied
@@ -836,6 +838,7 @@ export function applyProjectCommand(
       ...child,
       seq: seq++,
     }));
+    generatedTaskIds = new Set(children.map((child) => child.id));
     next = { ...state, tasks: [...state.tasks, ...children], nextTaskSeq: seq };
   } else if (command.type === "member.add") {
     next = { ...state, members: [...state.members, command.member] };
@@ -959,5 +962,12 @@ export function applyProjectCommand(
   }
   next = { ...next, tasks: reprorateSubtasks(next.tasks) };
   validateProject(next);
+  // Place daily plans for just the newly created leaves, after validation, the
+  // same point the unit of work used to schedule (Design 0003 §C-2). One
+  // transition so the diff, the unit of work and an optimistic apply all see
+  // those plans.
+  if (generatedTaskIds !== undefined) {
+    next = applyEffortSchedule(next, generatedTaskIds);
+  }
   return next;
 }

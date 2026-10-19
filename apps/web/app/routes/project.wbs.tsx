@@ -45,11 +45,11 @@ export async function loader({ context }: Route.LoaderArgs) {
   return loadProjectView(context);
 }
 
-// ADR 0012 Step 4b — the WBS write path. The client posts the whole command batch
-// as ONE JSON action request (with the confirmed revision + per-command
-// idempotency keys); the shared `runCommandAction` core authorizes the session
-// principal as the actor and executes the batch through the command service with
-// optimistic concurrency, tagging success with the `wbs-save` kind.
+// ADR 0012 Step 4b — the WBS write path. The client posts one operation as ONE
+// JSON action request (confirmed revision, one operation id, and its commands);
+// the shared `runCommandAction` core authorizes the session principal as the
+// actor and executes that operation through the command service with optimistic
+// concurrency, tagging success with the `wbs-save` kind.
 //
 // Conflicts and denials are RETURNED (not thrown) so the client's optimistic
 // pipeline can react: a `VERSION_CONFLICT` triggers the resync/adopt path, an
@@ -75,18 +75,14 @@ export default function ProjectWbs({ loaderData, params }: Route.ComponentProps)
   // fetcher, keeping `WbsApp` and the overlay free of a router dependency.
   const assistantFetcher = useFetcher<AssistantActionResult>();
 
-  // The dispatch seam: encode the domain command batch to the wire shape, mint a
-  // client idempotency key per command (mirrors the SPA's per-command
-  // `crypto.randomUUID()`), and submit ONE JSON action request. The revision
-  // chain is walked server-side inside the action, not by a client round trip.
+  // The dispatch seam: encode the domain commands to the wire shape, mint one
+  // operation id for the gesture, and submit ONE JSON action request.
   const onExecute = useCallback(
     (commands: readonly ProjectCommand[], expectedRevision: string) => {
       const body = {
         expectedRevision,
-        commands: commands.map((command) => ({
-          command: fromCommand(command),
-          idempotencyKey: crypto.randomUUID(),
-        })),
+        operationId: crypto.randomUUID(),
+        commands: commands.map((command) => fromCommand(command)),
       };
       // `fromCommand`'s optional fields are typed `T | undefined` under
       // `exactOptionalPropertyTypes`, which the JSON `SubmitTarget` type rejects

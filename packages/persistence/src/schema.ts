@@ -9,6 +9,7 @@ import {
   index,
   integer,
   jsonb,
+  smallint,
   pgEnum,
   pgTable,
   primaryKey,
@@ -353,10 +354,8 @@ export const task = pgTable(
     prorationWeightBp: integer("proration_weight_bp"),
     dailyPlan: jsonb("daily_plan").notNull().default(sql`'{}'::jsonb`),
     // Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → minutes.
-    // The actuals side's `daily_plan`, and stored the same way for the same
-    // reason: the command unit of work rewrites every task row on every command,
-    // so anything AC is derived from has to travel with the task or the next
-    // unrelated edit writes a stale total back over it.
+    // The actuals side's `daily_plan`. A change that touches any cell rewrites
+    // this task's whole value from the after state.
     datedActuals: jsonb("dated_actuals").notNull().default(sql`'{}'::jsonb`),
     actualStart: date("actual_start", { mode: "string" }),
     actualFinish: date("actual_finish", { mode: "string" }),
@@ -580,6 +579,41 @@ export const auditEvent = pgTable(
   ],
 );
 
+/**
+ * One row per committed WBS revision (Design 0016 §2.1). Append-only: the
+ * primary key is the revision, and `operation_id` is unique per WBS so a
+ * replay finds the original row instead of writing a second one.
+ */
+export const wbsChange = pgTable(
+  "wbs_change",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    wbsId: uuid("wbs_id").notNull(),
+    revision: bigint({ mode: "bigint" }).notNull(),
+    operationId: text("operation_id").notNull(),
+    actorType: auditActorType("actor_type").notNull(),
+    actorId: text("actor_id").notNull(),
+    format: smallint("format").notNull(),
+    change: jsonb().notNull(),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "wbs_change_pkey",
+      columns: [table.tenantId, table.wbsId, table.revision],
+    }),
+    unique("wbs_change_operation_unique").on(table.tenantId, table.wbsId, table.operationId),
+    foreignKey({
+      name: "wbs_change_wbs_fk",
+      columns: [table.tenantId, table.wbsId],
+      foreignColumns: [wbs.tenantId, wbs.id],
+    }).onDelete("cascade"),
+    check("wbs_change_revision_positive", sql`${table.revision} >= 1`),
+    check("wbs_change_operation_id_not_blank", sql`length(trim(${table.operationId})) > 0`),
+    check("wbs_change_actor_id_not_blank", sql`length(trim(${table.actorId})) > 0`),
+  ],
+);
+
 export const commandReceipt = pgTable(
   "command_receipt",
   {
@@ -627,4 +661,5 @@ export const schema = {
   taskDependency,
   auditEvent,
   commandReceipt,
+  wbsChange,
 };
