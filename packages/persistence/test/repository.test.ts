@@ -60,7 +60,7 @@ describe("ProjectRepository", () => {
 
   beforeEach(async () => {
     batchedQueryCounts.length = 0;
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     await repository.save(demoProjectRecord);
   });
 

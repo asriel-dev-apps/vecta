@@ -70,7 +70,7 @@ describe("actuals.import (persisted)", () => {
   });
 
   beforeEach(async () => {
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     await repository.save(seedRecord);
     keyCounter = 0;
   });
@@ -135,8 +135,8 @@ describe("actuals.import (persisted)", () => {
   it("records the importing human in the audit log", async () => {
     await importCsv(`${HEADER}\n${firstLeaf.seq},2026-08-03,${memberName},1\n`);
     const audit = await client.query<{ actor_type: string; command_type: string }>(
-      `select actor_type, command_type from audit_events
-       where tenant_id = $1 and project_id = $2 order by sequence desc limit 1`,
+      `select actor_type, command_type from audit_event
+       where tenant_id = $1 and wbs_id = $2 order by sequence desc limit 1`,
       [tenantId, projectId],
     );
     expect(audit.rows[0]?.command_type).toBe("actuals.import");

@@ -14,19 +14,19 @@ import {
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
-  auditEvents,
-  baselineTasks,
-  projectBaselines,
-  commandReceipts,
-  members,
-  processes,
-  products,
-  projectCalendars,
-  projects,
+  auditEvent,
+  baselineTask,
+  baseline,
+  commandReceipt,
+  member,
+  process,
+  product,
+  calendar,
+  wbs,
   schema,
-  subtaskTemplates,
-  taskDependencies,
-  tasks,
+  subtaskTemplate,
+  taskDependency,
+  task,
 } from "./schema.js";
 
 function canonicalJson(value: unknown): string {
@@ -81,17 +81,17 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const findReceipt = () =>
         transaction
           .select()
-          .from(commandReceipts)
+          .from(commandReceipt)
           .where(
             and(
-              eq(commandReceipts.tenantId, request.tenantId),
-              eq(commandReceipts.projectId, request.projectId),
-              eq(commandReceipts.idempotencyKey, request.idempotencyKey),
+              eq(commandReceipt.tenantId, request.tenantId),
+              eq(commandReceipt.wbsId, request.projectId),
+              eq(commandReceipt.idempotencyKey, request.idempotencyKey),
             ),
           )
           .limit(1);
 
-      const replay = (receipt: typeof commandReceipts.$inferSelect) => {
+      const replay = (receipt: typeof commandReceipt.$inferSelect) => {
         if (receipt.requestHash !== fingerprint) {
           throw new IdempotencyConflictError(request.idempotencyKey);
         }
@@ -109,7 +109,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
 
       const lockedProject = await transaction.execute<{ revision: string }>(sql`
         select revision::text as revision
-        from projects
+        from wbs
         where tenant_id = ${request.tenantId} and id = ${request.projectId}
         for update
       `);
@@ -130,17 +130,17 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
 
       const [projectRow] = await transaction
         .select({
-          id: projects.id,
-          name: projects.name,
-          projectStart: projects.projectStart,
-          statusDate: projects.statusDate,
-          currency: projects.currency,
-          defaultCalendarId: projects.defaultCalendarId,
-          nextTaskSeq: projects.nextTaskSeq,
-          nextBaselineVersion: projects.nextBaselineVersion,
+          id: wbs.id,
+          name: wbs.name,
+          projectStart: wbs.projectStart,
+          statusDate: wbs.statusDate,
+          currency: wbs.currency,
+          defaultCalendarId: wbs.defaultCalendarId,
+          nextTaskSeq: wbs.nextTaskSeq,
+          nextBaselineVersion: wbs.nextBaselineVersion,
         })
-        .from(projects)
-        .where(and(eq(projects.tenantId, request.tenantId), eq(projects.id, request.projectId)))
+        .from(wbs)
+        .where(and(eq(wbs.tenantId, request.tenantId), eq(wbs.id, request.projectId)))
         .limit(1);
       if (projectRow === undefined) {
         throw new ProjectNotFoundError(request.projectId);
@@ -151,61 +151,61 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
 
       const taskRows = await transaction
         .select()
-        .from(tasks)
-        .where(and(eq(tasks.tenantId, request.tenantId), eq(tasks.projectId, request.projectId)))
-        .orderBy(asc(tasks.sortOrder));
+        .from(task)
+        .where(and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId)))
+        .orderBy(asc(task.sortOrder));
       const calendarRows = await transaction
         .select()
-        .from(projectCalendars)
+        .from(calendar)
         .where(
           and(
-            eq(projectCalendars.tenantId, request.tenantId),
-            eq(projectCalendars.projectId, request.projectId),
+            eq(calendar.tenantId, request.tenantId),
+            eq(calendar.wbsId, request.projectId),
           ),
         )
-        .orderBy(asc(projectCalendars.id));
+        .orderBy(asc(calendar.id));
       const memberRows = await transaction
         .select()
-        .from(members)
-        .where(and(eq(members.tenantId, request.tenantId), eq(members.projectId, request.projectId)))
-        .orderBy(asc(members.id));
+        .from(member)
+        .where(and(eq(member.tenantId, request.tenantId), eq(member.wbsId, request.projectId)))
+        .orderBy(asc(member.id));
       const processRows = await transaction
         .select()
-        .from(processes)
+        .from(process)
         .where(
-          and(eq(processes.tenantId, request.tenantId), eq(processes.projectId, request.projectId)),
+          and(eq(process.tenantId, request.tenantId), eq(process.wbsId, request.projectId)),
         )
-        .orderBy(asc(processes.sortOrder), asc(processes.id));
+        .orderBy(asc(process.sortOrder), asc(process.id));
       const productRows = await transaction
         .select()
-        .from(products)
+        .from(product)
         .where(
-          and(eq(products.tenantId, request.tenantId), eq(products.projectId, request.projectId)),
+          and(eq(product.tenantId, request.tenantId), eq(product.wbsId, request.projectId)),
         )
-        .orderBy(asc(products.sortOrder), asc(products.id));
+        .orderBy(asc(product.sortOrder), asc(product.id));
       const templateRows = await transaction
         .select()
-        .from(subtaskTemplates)
+        .from(subtaskTemplate)
         .where(
           and(
-            eq(subtaskTemplates.tenantId, request.tenantId),
-            eq(subtaskTemplates.projectId, request.projectId),
+            eq(subtaskTemplate.tenantId, request.tenantId),
+            eq(subtaskTemplate.wbsId, request.projectId),
           ),
         )
-        .orderBy(asc(subtaskTemplates.sortOrder), asc(subtaskTemplates.id));
+        .orderBy(asc(subtaskTemplate.sortOrder), asc(subtaskTemplate.id));
       const dependencyRows = await transaction
         .select()
-        .from(taskDependencies)
+        .from(taskDependency)
         .where(
           and(
-            eq(taskDependencies.tenantId, request.tenantId),
-            eq(taskDependencies.projectId, request.projectId),
+            eq(taskDependency.tenantId, request.tenantId),
+            eq(taskDependency.wbsId, request.projectId),
           ),
         )
         .orderBy(
-          asc(taskDependencies.successorTaskId),
-          asc(taskDependencies.predecessorTaskId),
-          asc(taskDependencies.type),
+          asc(taskDependency.successorTaskId),
+          asc(taskDependency.predecessorTaskId),
+          asc(taskDependency.type),
         );
 
       const dependenciesByTask = new Map<
@@ -314,18 +314,18 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       // Free all self-FK (parent), assignee, process, and product references so
       // deletes and inserts never collide with RESTRICT constraints.
       await transaction
-        .delete(taskDependencies)
+        .delete(taskDependency)
         .where(
           and(
-            eq(taskDependencies.tenantId, request.tenantId),
-            eq(taskDependencies.projectId, request.projectId),
+            eq(taskDependency.tenantId, request.tenantId),
+            eq(taskDependency.wbsId, request.projectId),
           ),
         );
       if (taskRows.length > 0) {
         await transaction
-          .update(tasks)
+          .update(task)
           .set({ parentTaskId: null, assigneeMemberId: null, processId: null, productId: null })
-          .where(and(eq(tasks.tenantId, request.tenantId), eq(tasks.projectId, request.projectId)));
+          .where(and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId)));
       }
 
       // Members: insert / update present, delete removed (now unreferenced).
@@ -341,7 +341,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const memberValues = next.members.map((member) => ({
         id: member.id,
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         name: member.name,
         calendarId: member.calendarId,
         dailyCapacityMinutes: member.dailyCapacityMinutes,
@@ -349,10 +349,10 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       }));
       if (memberValues.length > 0) {
         await transaction
-          .insert(members)
+          .insert(member)
           .values(memberValues)
           .onConflictDoUpdate({
-            target: [members.tenantId, members.projectId, members.id],
+            target: [member.tenantId, member.wbsId, member.id],
             set: {
               name: sql`excluded.name`,
               calendarId: sql`excluded.calendar_id`,
@@ -367,12 +367,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         .map((member) => member.id);
       if (removedMemberIds.length > 0) {
         await transaction
-          .delete(members)
+          .delete(member)
           .where(
             and(
-              eq(members.tenantId, request.tenantId),
-              eq(members.projectId, request.projectId),
-              inArray(members.id, removedMemberIds),
+              eq(member.tenantId, request.tenantId),
+              eq(member.wbsId, request.projectId),
+              inArray(member.id, removedMemberIds),
             ),
           );
       }
@@ -381,16 +381,16 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const processValues = next.processes.map((process) => ({
         id: process.id,
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         name: process.name,
         sortOrder: process.sortOrder,
       }));
       if (processValues.length > 0) {
         await transaction
-          .insert(processes)
+          .insert(process)
           .values(processValues)
           .onConflictDoUpdate({
-            target: [processes.tenantId, processes.projectId, processes.id],
+            target: [process.tenantId, process.wbsId, process.id],
             set: {
               name: sql`excluded.name`,
               sortOrder: sql`excluded.sort_order`,
@@ -403,12 +403,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         .map((process) => process.id);
       if (removedProcessIds.length > 0) {
         await transaction
-          .delete(processes)
+          .delete(process)
           .where(
             and(
-              eq(processes.tenantId, request.tenantId),
-              eq(processes.projectId, request.projectId),
-              inArray(processes.id, removedProcessIds),
+              eq(process.tenantId, request.tenantId),
+              eq(process.wbsId, request.projectId),
+              inArray(process.id, removedProcessIds),
             ),
           );
       }
@@ -417,16 +417,16 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const productValues = next.products.map((product) => ({
         id: product.id,
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         name: product.name,
         sortOrder: product.sortOrder,
       }));
       if (productValues.length > 0) {
         await transaction
-          .insert(products)
+          .insert(product)
           .values(productValues)
           .onConflictDoUpdate({
-            target: [products.tenantId, products.projectId, products.id],
+            target: [product.tenantId, product.wbsId, product.id],
             set: {
               name: sql`excluded.name`,
               sortOrder: sql`excluded.sort_order`,
@@ -439,12 +439,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         .map((product) => product.id);
       if (removedProductIds.length > 0) {
         await transaction
-          .delete(products)
+          .delete(product)
           .where(
             and(
-              eq(products.tenantId, request.tenantId),
-              eq(products.projectId, request.projectId),
-              inArray(products.id, removedProductIds),
+              eq(product.tenantId, request.tenantId),
+              eq(product.wbsId, request.projectId),
+              inArray(product.id, removedProductIds),
             ),
           );
       }
@@ -455,17 +455,17 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       const templateValues = next.templates.map((template) => ({
         id: template.id,
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         name: template.name,
         sortOrder: template.sortOrder,
         subtasks: template.subtasks,
       }));
       if (templateValues.length > 0) {
         await transaction
-          .insert(subtaskTemplates)
+          .insert(subtaskTemplate)
           .values(templateValues)
           .onConflictDoUpdate({
-            target: [subtaskTemplates.tenantId, subtaskTemplates.projectId, subtaskTemplates.id],
+            target: [subtaskTemplate.tenantId, subtaskTemplate.wbsId, subtaskTemplate.id],
             set: {
               name: sql`excluded.name`,
               sortOrder: sql`excluded.sort_order`,
@@ -479,12 +479,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         .map((template) => template.id);
       if (removedTemplateIds.length > 0) {
         await transaction
-          .delete(subtaskTemplates)
+          .delete(subtaskTemplate)
           .where(
             and(
-              eq(subtaskTemplates.tenantId, request.tenantId),
-              eq(subtaskTemplates.projectId, request.projectId),
-              inArray(subtaskTemplates.id, removedTemplateIds),
+              eq(subtaskTemplate.tenantId, request.tenantId),
+              eq(subtaskTemplate.wbsId, request.projectId),
+              inArray(subtaskTemplate.id, removedTemplateIds),
             ),
           );
       }
@@ -497,12 +497,12 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         .map((task) => task.id);
       if (removedTaskIds.length > 0) {
         await transaction
-          .delete(tasks)
+          .delete(task)
           .where(
             and(
-              eq(tasks.tenantId, request.tenantId),
-              eq(tasks.projectId, request.projectId),
-              inArray(tasks.id, removedTaskIds),
+              eq(task.tenantId, request.tenantId),
+              eq(task.wbsId, request.projectId),
+              inArray(task.id, removedTaskIds),
             ),
           );
       }
@@ -522,20 +522,20 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       // becomes Postgres' question, asked once for the set, instead of ours asked
       // per row.
       //
-      // The conflict target is the COMPOSITE `tasks_tenant_project_id_unique`,
+      // The conflict target is the COMPOSITE `task_tenant_wbs_id_unique`,
       // not the `id` primary key, and that is the tenancy fence. Task ids are
       // supplied by the client (`AddTaskCommand.task` carries `id`), so a request
       // scoped to project A can name a task id that lives in project B. Targeting
       // `id` alone made that a silent cross-project UPDATE: `tenant_id` and
-      // `project_id` are absent from the `set` list, so the victim's row stayed
+      // `wbs_id` are absent from the `set` list, so the victim's row stayed
       // where it was and took this project's name, seq, plan and a nulled parent.
       // Against the composite the row is not a conflict at all, so Postgres
-      // attempts the INSERT and `tasks_pkey` rejects it — which is exactly what
+      // attempts the INSERT and `task_pkey` rejects it — which is exactly what
       // the per-row loop this replaced did. Fail closed, as before.
       const taskValues = next.tasks.map((task) => ({
         id: task.id,
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         // Parent deferred to the second statement so every parent target exists
         // before the self-FK is set — the same reason the two loops were in this
         // order, unchanged.
@@ -564,10 +564,10 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       }));
       if (taskValues.length > 0) {
         await transaction
-          .insert(tasks)
+          .insert(task)
           .values(taskValues)
           .onConflictDoUpdate({
-            target: [tasks.tenantId, tasks.projectId, tasks.id],
+            target: [task.tenantId, task.wbsId, task.id],
             set: {
               parentTaskId: sql`null`,
               sortOrder: sql`excluded.sort_order`,
@@ -600,18 +600,18 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           sql`, `,
         );
         await transaction.execute(sql`
-          update ${tasks} set parent_task_id = v.parent_task_id
+          update ${task} set parent_task_id = v.parent_task_id
           from (values ${pairs}) as v(id, parent_task_id)
-          where ${tasks.tenantId} = ${request.tenantId}
-            and ${tasks.projectId} = ${request.projectId}
-            and ${tasks.id} = v.id
+          where ${task.tenantId} = ${request.tenantId}
+            and ${task.wbsId} = ${request.projectId}
+            and ${task.id} = v.id
         `);
       }
 
       const dependencyValues = next.tasks.flatMap((task) =>
         task.dependencies.map((dependency) => ({
           tenantId: request.tenantId,
-          projectId: request.projectId,
+          wbsId: request.projectId,
           predecessorTaskId: dependency.predecessorId,
           successorTaskId: task.id,
           type: dependency.type,
@@ -619,7 +619,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         })),
       );
       if (dependencyValues.length > 0) {
-        await transaction.insert(taskDependencies).values(dependencyValues);
+        await transaction.insert(taskDependency).values(dependencyValues);
       }
 
       // Design 0009. The snapshot is taken from `current` — the state AT
@@ -637,9 +637,9 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         // predicate. Two hand-written copies agree by transcription, which is not
         // a property anything enforces.
         const leaves = leafTaskIds(current.tasks);
-        await transaction.insert(projectBaselines).values({
+        await transaction.insert(baseline).values({
           tenantId: request.tenantId,
-          projectId: request.projectId,
+          wbsId: request.projectId,
           version: current.nextBaselineVersion,
           sourceRevision: actualRevision,
           publishedByActorType: request.actor.type,
@@ -649,7 +649,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           .filter((task) => leaves.has(task.id))
           .map((task) => ({
             tenantId: request.tenantId,
-            projectId: request.projectId,
+            wbsId: request.projectId,
             version: current.nextBaselineVersion,
             taskId: task.id,
             parentTaskId: task.parentId,
@@ -660,7 +660,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
             seq: task.seq,
           }));
         if (frozen.length > 0) {
-          await transaction.insert(baselineTasks).values(frozen);
+          await transaction.insert(baselineTask).values(frozen);
         }
       }
 
@@ -670,7 +670,7 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       // generateSubtasks batch leaves `next.nextTaskSeq` ahead by the number of
       // tasks created; every other command leaves it unchanged.
       await transaction
-        .update(projects)
+        .update(wbs)
         .set({
           revision: resultRevision,
           nextTaskSeq: next.nextTaskSeq,
@@ -679,15 +679,15 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         })
         .where(
           and(
-            eq(projects.tenantId, request.tenantId),
-            eq(projects.id, request.projectId),
-            eq(projects.revision, actualRevision),
+            eq(wbs.tenantId, request.tenantId),
+            eq(wbs.id, request.projectId),
+            eq(wbs.revision, actualRevision),
           ),
         );
-      await transaction.insert(auditEvents).values({
+      await transaction.insert(auditEvent).values({
         tenantId: request.tenantId,
-        projectId: request.projectId,
-        projectRevision: resultRevision,
+        wbsId: request.projectId,
+        wbsRevision: resultRevision,
         actorType: request.actor.type,
         actorId: request.actor.id,
         commandType: request.command.type,
@@ -697,9 +697,9 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           idempotencyKey: request.idempotencyKey,
         },
       });
-      await transaction.insert(commandReceipts).values({
+      await transaction.insert(commandReceipt).values({
         tenantId: request.tenantId,
-        projectId: request.projectId,
+        wbsId: request.projectId,
         idempotencyKey: request.idempotencyKey,
         requestHash: fingerprint,
         resultRevision,

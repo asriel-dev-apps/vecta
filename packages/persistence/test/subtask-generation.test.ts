@@ -58,7 +58,7 @@ describe("subtask template generation (write path + scheduler)", () => {
   });
 
   beforeEach(async () => {
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     await repository.save(demoProjectRecord);
   });
 

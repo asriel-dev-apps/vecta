@@ -1,18 +1,18 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
-  baselineTasks,
-  projectBaselines,
-  members,
-  processes,
-  products,
-  projectCalendars,
-  projects,
+  baselineTask,
+  baseline,
+  member,
+  process,
+  product,
+  calendar,
+  wbs,
   schema,
-  subtaskTemplates,
-  taskDependencies,
-  tasks,
-  tenants,
+  subtaskTemplate,
+  taskDependency,
+  task,
+  tenant,
 } from "./schema.js";
 
 /**
@@ -28,7 +28,7 @@ export type ProjectReadDatabase = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 /**
  * The project header: identity, schedule anchors, and the optimistic-concurrency
- * revision. Joined to `tenants` for the tenant name, and always keyed on the
+ * revision. Joined to `tenant` for the tenant name, and always keyed on the
  * composite `(tenantId, id)` so a row is never reachable by global id alone.
  */
 export function projectHeaderQuery(
@@ -38,29 +38,29 @@ export function projectHeaderQuery(
 ) {
   return database
     .select({
-      tenantId: tenants.id,
-      tenantName: tenants.name,
-      projectId: projects.id,
-      name: projects.name,
-      currency: projects.currency,
-      timezone: projects.timezone,
-      projectStart: projects.projectStart,
-      statusDate: projects.statusDate,
-      defaultCalendarId: projects.defaultCalendarId,
-      revision: projects.revision,
-      nextTaskSeq: projects.nextTaskSeq,
-      nextBaselineVersion: projects.nextBaselineVersion,
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      projectId: wbs.id,
+      name: wbs.name,
+      currency: wbs.currency,
+      timezone: wbs.timezone,
+      projectStart: wbs.projectStart,
+      statusDate: wbs.statusDate,
+      defaultCalendarId: wbs.defaultCalendarId,
+      revision: wbs.revision,
+      nextTaskSeq: wbs.nextTaskSeq,
+      nextBaselineVersion: wbs.nextBaselineVersion,
     })
-    .from(projects)
-    .innerJoin(tenants, eq(tenants.id, projects.tenantId))
-    .where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId)))
+    .from(wbs)
+    .innerJoin(tenant, eq(tenant.id, wbs.tenantId))
+    .where(and(eq(wbs.tenantId, tenantId), eq(wbs.id, projectId)))
     .limit(1);
 }
 
 /**
  * The seven child-table reads that make up a project's workspace, each ordered
  * deterministically so both render sides (SSR + hydrate) see the same sequence.
- * `auditEvents` is deliberately NOT among them: the read model
+ * `auditEvent` is deliberately NOT among them: the read model
  * (`toProjectState`) never looks at it, and it is the one table that grows
  * without bound, so reading it was pure cost on every page view.
  */
@@ -72,57 +72,57 @@ export function projectDetailQueries(
   return {
     calendars: database
       .select()
-      .from(projectCalendars)
+      .from(calendar)
       .where(
         and(
-          eq(projectCalendars.tenantId, tenantId),
-          eq(projectCalendars.projectId, projectId),
+          eq(calendar.tenantId, tenantId),
+          eq(calendar.wbsId, projectId),
         ),
       )
-      .orderBy(asc(projectCalendars.id)),
+      .orderBy(asc(calendar.id)),
     members: database
       .select()
-      .from(members)
-      .where(and(eq(members.tenantId, tenantId), eq(members.projectId, projectId)))
-      .orderBy(asc(members.id)),
+      .from(member)
+      .where(and(eq(member.tenantId, tenantId), eq(member.wbsId, projectId)))
+      .orderBy(asc(member.id)),
     processes: database
       .select()
-      .from(processes)
-      .where(and(eq(processes.tenantId, tenantId), eq(processes.projectId, projectId)))
-      .orderBy(asc(processes.sortOrder), asc(processes.id)),
+      .from(process)
+      .where(and(eq(process.tenantId, tenantId), eq(process.wbsId, projectId)))
+      .orderBy(asc(process.sortOrder), asc(process.id)),
     products: database
       .select()
-      .from(products)
-      .where(and(eq(products.tenantId, tenantId), eq(products.projectId, projectId)))
-      .orderBy(asc(products.sortOrder), asc(products.id)),
+      .from(product)
+      .where(and(eq(product.tenantId, tenantId), eq(product.wbsId, projectId)))
+      .orderBy(asc(product.sortOrder), asc(product.id)),
     templates: database
       .select()
-      .from(subtaskTemplates)
+      .from(subtaskTemplate)
       .where(
         and(
-          eq(subtaskTemplates.tenantId, tenantId),
-          eq(subtaskTemplates.projectId, projectId),
+          eq(subtaskTemplate.tenantId, tenantId),
+          eq(subtaskTemplate.wbsId, projectId),
         ),
       )
-      .orderBy(asc(subtaskTemplates.sortOrder), asc(subtaskTemplates.id)),
+      .orderBy(asc(subtaskTemplate.sortOrder), asc(subtaskTemplate.id)),
     tasks: database
       .select()
-      .from(tasks)
-      .where(and(eq(tasks.tenantId, tenantId), eq(tasks.projectId, projectId)))
-      .orderBy(asc(tasks.sortOrder), asc(tasks.id)),
+      .from(task)
+      .where(and(eq(task.tenantId, tenantId), eq(task.wbsId, projectId)))
+      .orderBy(asc(task.sortOrder), asc(task.id)),
     dependencies: database
       .select()
-      .from(taskDependencies)
+      .from(taskDependency)
       .where(
         and(
-          eq(taskDependencies.tenantId, tenantId),
-          eq(taskDependencies.projectId, projectId),
+          eq(taskDependency.tenantId, tenantId),
+          eq(taskDependency.wbsId, projectId),
         ),
       )
       .orderBy(
-        asc(taskDependencies.successorTaskId),
-        asc(taskDependencies.predecessorTaskId),
-        asc(taskDependencies.type),
+        asc(taskDependency.successorTaskId),
+        asc(taskDependency.predecessorTaskId),
+        asc(taskDependency.type),
       ),
     // Design 0009. In the SAME batch, so the baseline costs no extra round trip —
     // and a second batch for the dashboard alone WOULD be one, which the 2026-07-26
@@ -131,23 +131,23 @@ export function projectDetailQueries(
     // project's baseline is one header plus its leaves.
     baseline: database
       .select()
-      .from(projectBaselines)
+      .from(baseline)
       .where(
         and(
-          eq(projectBaselines.tenantId, tenantId),
-          eq(projectBaselines.projectId, projectId),
+          eq(baseline.tenantId, tenantId),
+          eq(baseline.wbsId, projectId),
         ),
       )
       // Newest first: the read path takes max(version), and ordering here means the
       // caller never has to sort to find it.
-      .orderBy(desc(projectBaselines.version))
+      .orderBy(desc(baseline.version))
       .limit(1),
     baselineTasks: database
       .select()
-      .from(baselineTasks)
+      .from(baselineTask)
       .where(
-        and(eq(baselineTasks.tenantId, tenantId), eq(baselineTasks.projectId, projectId)),
+        and(eq(baselineTask.tenantId, tenantId), eq(baselineTask.wbsId, projectId)),
       )
-      .orderBy(desc(baselineTasks.version), asc(baselineTasks.seq)),
+      .orderBy(desc(baselineTask.version), asc(baselineTask.seq)),
   };
 }

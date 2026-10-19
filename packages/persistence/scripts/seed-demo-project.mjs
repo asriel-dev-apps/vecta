@@ -187,7 +187,7 @@ try {
   // inert. This one cannot be derived: a database holding a project that is not
   // this seed's is somebody's real workspace, whatever DEPLOY_ENV claimed.
   const foreign = await client.query({
-    text: "select count(*)::int as count from projects where id <> $1",
+    text: "select count(*)::int as count from wbs where id <> $1",
     values: [projectId],
   });
   if (foreign.rows[0].count > 0) {
@@ -197,7 +197,7 @@ try {
   }
 
   const existing = await client.query({
-    text: "select 1 from projects where id = $1 and tenant_id = $2",
+    text: "select 1 from wbs where id = $1 and tenant_id = $2",
     values: [projectId, tenantId],
   });
   if (existing.rowCount > 0) {
@@ -205,7 +205,7 @@ try {
     // die on a primary key halfway through and leave the project half-written.
     // Refuse loudly instead.
     if (!reset) fail("the project already exists; pass --reset to replace it");
-    await client.query({ text: "delete from tenants where id = $1", values: [tenantId] });
+    await client.query({ text: "delete from tenant where id = $1", values: [tenantId] });
   }
 
   const database = createPersistenceDatabase(client);
@@ -214,7 +214,7 @@ try {
   await client.query("begin");
   try {
     const principal = await client.query({
-      text: `insert into principals (id, issuer, subject, type, display_name, allowed_scopes)
+      text: `insert into principal (id, issuer, subject, type, display_name, allowed_scopes)
              values ($1, $2, $3, 'HUMAN', $4, '{}'::text[])
              on conflict (issuer, subject) do update set display_name = excluded.display_name
              returning id`,
@@ -222,16 +222,18 @@ try {
     });
     const resolvedPrincipalId = principal.rows[0].id;
     await client.query({
-      text: `insert into tenant_memberships (tenant_id, principal_id, role)
+      text: `insert into tenant_membership (tenant_id, principal_id, role)
              values ($1, $2, 'OWNER')
              on conflict (tenant_id, principal_id) do update set role = 'OWNER'`,
       values: [tenantId, resolvedPrincipalId],
     });
     await client.query({
-      text: `insert into project_memberships (tenant_id, project_id, principal_id, role)
-             values ($1, $2, $3, 'OWNER')
+      text: `insert into project_membership (tenant_id, project_id, principal_id, role)
+             select w.tenant_id, w.project_id, $2, 'OWNER'
+             from wbs w
+             where w.id = $1
              on conflict (tenant_id, project_id, principal_id) do update set role = 'OWNER'`,
-      values: [tenantId, projectId, resolvedPrincipalId],
+      values: [projectId, resolvedPrincipalId],
     });
     await client.query("commit");
     console.log(

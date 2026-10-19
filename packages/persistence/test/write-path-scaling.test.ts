@@ -74,7 +74,7 @@ describe("write path scaling", () => {
     options: typeof SMALL,
     name: string,
   ): Promise<{ statements: number; tasks: number }> {
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     const record = createSeedProjectRecord(options);
     const repository = new ProjectRepository(createPersistenceDatabase(client));
     await repository.save(record);

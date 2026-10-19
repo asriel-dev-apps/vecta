@@ -8,10 +8,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { ProjectReadDatabase } from "./project-read-queries.js";
 import {
-  principals,
-  projectMemberships,
+  principal,
+  projectMembership,
   schema,
-  tenantMemberships,
+  tenantMembership,
+  wbs,
 } from "./schema.js";
 
 export type AgentScope = "project:progress:write" | "project:actuals:write";
@@ -56,12 +57,12 @@ export class ProjectAccessRepository {
     await this.database.transaction(async (transaction) => {
       const [existing] = await transaction
         .select()
-        .from(principals)
-        .where(eq(principals.id, provision.principal.id))
+        .from(principal)
+        .where(eq(principal.id, provision.principal.id))
         .limit(1);
       const allowedScopes = [...new Set(provision.principal.allowedScopes)];
       if (existing === undefined) {
-        await transaction.insert(principals).values({
+        await transaction.insert(principal).values({
           ...provision.principal,
           allowedScopes,
         });
@@ -74,34 +75,44 @@ export class ProjectAccessRepository {
           throw new Error("Principal identity cannot be reassigned");
         }
         await transaction
-          .update(principals)
+          .update(principal)
           .set({ displayName: provision.principal.displayName, allowedScopes })
-          .where(eq(principals.id, provision.principal.id));
+          .where(eq(principal.id, provision.principal.id));
       }
       await transaction
-        .insert(tenantMemberships)
+        .insert(tenantMembership)
         .values({
           tenantId: provision.tenantId,
           principalId: provision.principal.id,
           role: provision.tenantRole,
         })
         .onConflictDoUpdate({
-          target: [tenantMemberships.tenantId, tenantMemberships.principalId],
+          target: [tenantMembership.tenantId, tenantMembership.principalId],
           set: { role: provision.tenantRole },
         });
+      // `provision.projectId` is the WBS id. Membership is stored on the project
+      // that owns that WBS.
+      const [wbsRow] = await transaction
+        .select({ projectId: wbs.projectId })
+        .from(wbs)
+        .where(and(eq(wbs.tenantId, provision.tenantId), eq(wbs.id, provision.projectId)))
+        .limit(1);
+      if (wbsRow === undefined) {
+        throw new Error("Project access provision is invalid");
+      }
       await transaction
-        .insert(projectMemberships)
+        .insert(projectMembership)
         .values({
           tenantId: provision.tenantId,
-          projectId: provision.projectId,
+          projectId: wbsRow.projectId,
           principalId: provision.principal.id,
           role: provision.projectRole,
         })
         .onConflictDoUpdate({
           target: [
-            projectMemberships.tenantId,
-            projectMemberships.projectId,
-            projectMemberships.principalId,
+            projectMembership.tenantId,
+            projectMembership.projectId,
+            projectMembership.principalId,
           ],
           set: { role: provision.projectRole },
         });
@@ -133,32 +144,36 @@ export class PostgresProjectAccessGrantResolver implements ProjectAccessGrantRes
   ): Promise<ProjectAccessGrant | null> {
     const [grant] = await this.database
       .select({
-        principalId: principals.id,
-        principalType: principals.type,
-        projectRole: projectMemberships.role,
-        allowedScopes: principals.allowedScopes,
+        principalId: principal.id,
+        principalType: principal.type,
+        projectRole: projectMembership.role,
+        allowedScopes: principal.allowedScopes,
       })
-      .from(principals)
+      .from(principal)
       .innerJoin(
-        tenantMemberships,
+        tenantMembership,
         and(
-          eq(tenantMemberships.tenantId, request.tenantId),
-          eq(tenantMemberships.principalId, principals.id),
+          eq(tenantMembership.tenantId, request.tenantId),
+          eq(tenantMembership.principalId, principal.id),
         ),
       )
       .innerJoin(
-        projectMemberships,
+        wbs,
+        and(eq(wbs.tenantId, request.tenantId), eq(wbs.id, request.projectId)),
+      )
+      .innerJoin(
+        projectMembership,
         and(
-          eq(projectMemberships.tenantId, request.tenantId),
-          eq(projectMemberships.projectId, request.projectId),
-          eq(projectMemberships.principalId, principals.id),
+          eq(projectMembership.tenantId, wbs.tenantId),
+          eq(projectMembership.projectId, wbs.projectId),
+          eq(projectMembership.principalId, principal.id),
         ),
       )
       .where(
         and(
-          eq(principals.issuer, request.identity.issuer),
-          eq(principals.subject, subject),
-          isNull(principals.disabledAt),
+          eq(principal.issuer, request.identity.issuer),
+          eq(principal.subject, subject),
+          isNull(principal.disabledAt),
         ),
       )
       .limit(1);

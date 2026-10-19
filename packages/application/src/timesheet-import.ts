@@ -50,7 +50,7 @@ export const TIMESHEET_HEADERS = {
  * Data-row ceiling. 12 members × 20 working days × 5 tasks ≈ 1,200 rows, so a
  * month of a whole project fits with room to spare. The cap exists because the
  * whole import travels as one command payload and is written verbatim into
- * `audit_events`, and an unbounded audit row is a different problem.
+ * `audit_event`, and an unbounded audit row is a different problem.
  */
 export const TIMESHEET_MAX_ROWS = 2_000;
 

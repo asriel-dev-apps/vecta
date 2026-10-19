@@ -9,7 +9,7 @@ import { errorName } from "./api/edge-security.server";
  *
  * Not "there is not enough logging". `operations/monitoring-and-alerts.md` lists
  * "changes in 401/403" as a REQUIRED signal on the OIDC boundary, and nothing in
- * this app produced it: `audit_events` records only SUCCESSFUL project changes,
+ * this app produced it: `audit_event` records only SUCCESSFUL project changes,
  * and the one HTTP log (`writeHttpRequestLog`) exists only on `/api` and `/mcp`.
  *
  * And the required signal is unsatisfiable as written, because the browser

@@ -27,40 +27,48 @@ describe("PostgresProjectListReader", () => {
   }, 60_000);
 
   beforeEach(async () => {
-    await client.query("truncate table principals, tenants cascade");
-    await client.query("insert into tenants (id, name) values ($1, 'Tenant 1')", [
+    await client.query("truncate table principal, tenant cascade");
+    await client.query("insert into tenant (id, name) values ($1, 'Tenant 1')", [
       TENANT_ID,
     ]);
     // Three synthetic projects, inserted out of alphabetical order to prove the
-    // reader sorts by name.
+    // reader sorts by name. Each WBS shares its id with its parent project so
+    // membership rows can keep using that id.
     await client.query(
-      `insert into projects (id, tenant_id, name, project_start, status_date) values
-         ($1, $4, 'Gamma project', '2026-07-13', '2026-07-13'),
-         ($2, $4, 'Alpha project', '2026-07-13', '2026-07-13'),
-         ($3, $4, 'Beta project',  '2026-07-13', '2026-07-13')`,
+      `insert into project (id, tenant_id, name) values
+         ($1, $4, 'Gamma project'),
+         ($2, $4, 'Alpha project'),
+         ($3, $4, 'Beta project')`,
       [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
     );
     await client.query(
-      `insert into principals (id, issuer, subject, type, display_name) values
+      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date) values
+         ($1, $4, $1, 'Gamma project', '2026-07-13', '2026-07-13'),
+         ($2, $4, $2, 'Alpha project', '2026-07-13', '2026-07-13'),
+         ($3, $4, $3, 'Beta project',  '2026-07-13', '2026-07-13')`,
+      [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
+    );
+    await client.query(
+      `insert into principal (id, issuer, subject, type, display_name) values
          ($1, 'https://identity.example.test/', 'principal-1', 'HUMAN', 'Principal 1'),
          ($2, 'https://identity.example.test/', 'principal-2', 'HUMAN', 'Principal 2')`,
       [PRINCIPAL_ID, OTHER_PRINCIPAL_ID],
     );
     await client.query(
-      `insert into tenant_memberships (tenant_id, principal_id, role) values
+      `insert into tenant_membership (tenant_id, principal_id, role) values
          ($1, $2, 'MEMBER'), ($1, $3, 'MEMBER')`,
       [TENANT_ID, PRINCIPAL_ID, OTHER_PRINCIPAL_ID],
     );
     // The principal is a member of 2 of the 3 projects (Alpha, Gamma), not Beta.
     await client.query(
-      `insert into project_memberships (tenant_id, project_id, principal_id, role) values
+      `insert into project_membership (tenant_id, project_id, principal_id, role) values
          ($1, $2, $4, 'VIEWER'),
          ($1, $3, $4, 'OWNER')`,
       [TENANT_ID, ALPHA_ID, GAMMA_ID, PRINCIPAL_ID],
     );
     // A second principal is a member of Beta only, so the filter must exclude it.
     await client.query(
-      `insert into project_memberships (tenant_id, project_id, principal_id, role) values
+      `insert into project_membership (tenant_id, project_id, principal_id, role) values
          ($1, $2, $3, 'EDITOR')`,
       [TENANT_ID, BETA_ID, OTHER_PRINCIPAL_ID],
     );
@@ -81,7 +89,7 @@ describe("PostgresProjectListReader", () => {
 
   it("returns an empty list for a principal with no project memberships", async () => {
     await client.query(
-      `insert into principals (id, issuer, subject, type, display_name)
+      `insert into principal (id, issuer, subject, type, display_name)
        values ($1, 'https://identity.example.test/', 'principal-3', 'HUMAN', 'Principal 3')`,
       ["90000000-0000-4000-8000-000000000003"],
     );
@@ -110,16 +118,16 @@ describe("PostgresProjectListReader", () => {
     // (ADR 0012 Step 5a).
     const emailPrincipalId = "90000000-0000-4000-8000-0000000000ee";
     await client.query(
-      `insert into principals (id, issuer, subject, type, display_name)
+      `insert into principal (id, issuer, subject, type, display_name)
        values ($1, 'https://identity.example.test/', 'email:seed@example.test', 'HUMAN', 'Seeded by email')`,
       [emailPrincipalId],
     );
     await client.query(
-      "insert into tenant_memberships (tenant_id, principal_id, role) values ($1, $2, 'MEMBER')",
+      "insert into tenant_membership (tenant_id, principal_id, role) values ($1, $2, 'MEMBER')",
       [TENANT_ID, emailPrincipalId],
     );
     await client.query(
-      `insert into project_memberships (tenant_id, project_id, principal_id, role)
+      `insert into project_membership (tenant_id, project_id, principal_id, role)
        values ($1, $2, $3, 'EDITOR')`,
       [TENANT_ID, BETA_ID, emailPrincipalId],
     );
@@ -158,16 +166,16 @@ describe("PostgresProjectListReader", () => {
     // mirroring the resolver's per-project "direct subject, else email" precedence.
     const emailPrincipalId = "90000000-0000-4000-8000-0000000000ef";
     await client.query(
-      `insert into principals (id, issuer, subject, type, display_name)
+      `insert into principal (id, issuer, subject, type, display_name)
        values ($1, 'https://identity.example.test/', 'email:seed@example.test', 'HUMAN', 'Seeded by email')`,
       [emailPrincipalId],
     );
     await client.query(
-      "insert into tenant_memberships (tenant_id, principal_id, role) values ($1, $2, 'MEMBER')",
+      "insert into tenant_membership (tenant_id, principal_id, role) values ($1, $2, 'MEMBER')",
       [TENANT_ID, emailPrincipalId],
     );
     await client.query(
-      `insert into project_memberships (tenant_id, project_id, principal_id, role) values
+      `insert into project_membership (tenant_id, project_id, principal_id, role) values
          ($1, $2, $4, 'EDITOR'),
          ($1, $3, $4, 'VIEWER')`,
       [TENANT_ID, BETA_ID, GAMMA_ID, emailPrincipalId],

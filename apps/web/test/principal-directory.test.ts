@@ -1,7 +1,7 @@
 import {
-  principals,
-  projectMemberships,
-  tenantMemberships,
+  principal,
+  projectMembership,
+  tenantMembership,
   type NeonHttpReadDatabase,
 } from "@vecta/persistence";
 import { describe, expect, it } from "vitest";
@@ -38,6 +38,7 @@ function queryStub() {
       node.table = table;
       return node;
     },
+    innerJoin: () => node,
     where: () => node,
     limit: () => node,
   };
@@ -78,9 +79,9 @@ describe("createNeonPrincipalDirectory.loadPrincipal", () => {
 
     expect(batches).toHaveLength(1);
     expect(batches[0]!.map((query) => query.table)).toEqual([
-      principals,
-      tenantMemberships,
-      projectMemberships,
+      principal,
+      tenantMembership,
+      projectMembership,
     ]);
     // The destructure must line up with the order the queries went out in.
     expect(resolved).toEqual({

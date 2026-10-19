@@ -22,14 +22,14 @@ import { startTestDatabase, type TestDatabase } from "./database.js";
  *
  * The per-row write loop that the batching replaced was scoped
  * `where tenant = … and project = … and id = …`, so a foreign id was classified
- * as new, INSERTed, and rejected by `tasks_pkey`. The first batched version
+ * as new, INSERTed, and rejected by `task_pkey`. The first batched version
  * targeted `ON CONFLICT (id)` — the bare primary key — which turned that hard
- * failure into a silent UPDATE of the victim's row: `tenant_id` and `project_id`
+ * failure into a silent UPDATE of the victim's row: `tenant_id` and `wbs_id`
  * are not in the `set` list, so the row stayed in project B and took project A's
  * name, seq, plan and a nulled parent.
  *
- * The fix targets the composite `tasks_tenant_project_id_unique`, so a foreign id
- * is not a conflict, the INSERT is attempted, and `tasks_pkey` rejects it exactly
+ * The fix targets the composite `task_tenant_wbs_id_unique`, so a foreign id
+ * is not a conflict, the INSERT is attempted, and `task_pkey` rejects it exactly
  * as before.
  */
 
@@ -55,18 +55,22 @@ describe("task ids cannot cross a project boundary", () => {
   });
 
   beforeEach(async () => {
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     await repository.save(demoProjectRecord);
     // A SECOND project under the SAME tenant, holding one task. Inserted
     // directly rather than through the repository, which writes its own tenant
     // row and would collide.
     await client.query(
-      `insert into projects (id, tenant_id, name, project_start, status_date)
-       values ($1, $2, 'Other project', '2026-01-05', '2026-03-02')`,
+      `insert into project (id, tenant_id, name) values ($1, $2, 'Other project')`,
       [VICTIM_PROJECT_ID, TENANT_ID],
     );
     await client.query(
-      `insert into tasks (id, tenant_id, project_id, seq, name, sort_order, planned_effort_minutes)
+      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
+       values ($1, $2, $1, 'Other project', '2026-01-05', '2026-03-02')`,
+      [VICTIM_PROJECT_ID, TENANT_ID],
+    );
+    await client.query(
+      `insert into task (id, tenant_id, wbs_id, seq, name, sort_order, planned_effort_minutes)
        values ($1, $2, $3, 1, $4, 10, 480)`,
       [VICTIM_TASK_ID, TENANT_ID, VICTIM_PROJECT_ID, VICTIM_NAME],
     );
@@ -80,8 +84,8 @@ describe("task ids cannot cross a project boundary", () => {
 
   async function readVictim() {
     const { rows } = await client.query(
-      `select id, tenant_id, project_id, name, seq, sort_order, planned_effort_minutes, parent_task_id
-       from tasks where id = $1`,
+      `select id, tenant_id, wbs_id, name, seq, sort_order, planned_effort_minutes, parent_task_id
+       from task where id = $1`,
       [VICTIM_TASK_ID],
     );
     return rows[0];

@@ -71,6 +71,13 @@
       "when": 1785100000000,
       "tag": "0009_cost_rate",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785200000000,
+      "tag": "0010_m1_wbs_rename",
+      "breakpoints": true
     }
   ]
 }

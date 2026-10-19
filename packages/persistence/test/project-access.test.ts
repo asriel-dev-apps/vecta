@@ -32,7 +32,7 @@ describe("PostgreSQL project access", () => {
   }, 60_000);
 
   beforeEach(async () => {
-    await client.query("truncate table principals, tenants cascade");
+    await client.query("truncate table principal, tenant cascade");
     await new ProjectRepository(createPersistenceDatabase(client)).save(demoProjectRecord);
   });
 
@@ -169,18 +169,22 @@ describe("PostgreSQL project access", () => {
     });
     const secondTenantId = "00000000-0000-4000-8000-000000000099";
     const secondProjectId = "10000000-0000-4000-8000-000000000099";
-    await client.query("insert into tenants (id, name) values ($1, 'Second tenant')", [
+    await client.query("insert into tenant (id, name) values ($1, 'Second tenant')", [
       secondTenantId,
     ]);
     await client.query("begin");
     await client.query(
-      `insert into projects (id, tenant_id, name, project_start, status_date)
-       values ($1, $2, 'Second project', '2026-07-13', '2026-07-13')`,
+      `insert into project (id, tenant_id, name) values ($1, $2, 'Second project')`,
       [secondProjectId, secondTenantId],
     );
     await client.query(
-      `insert into project_calendars
-         (tenant_id, project_id, id, name, working_weekdays, non_working_dates)
+      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
+       values ($1, $2, $1, 'Second project', '2026-07-13', '2026-07-13')`,
+      [secondProjectId, secondTenantId],
+    );
+    await client.query(
+      `insert into calendar
+         (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
        values ($1, $2, 'standard', 'Standard', array[1,2,3,4,5], array[]::date[])`,
       [secondTenantId, secondProjectId],
     );

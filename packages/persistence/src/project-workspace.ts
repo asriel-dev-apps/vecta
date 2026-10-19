@@ -50,7 +50,7 @@ export interface ProjectWorkspace {
 
 /**
  * The read model never looks at the audit trail, so it is typed out of the
- * mapper's input: readers that skip the `audit_events` table (the batched HTTP
+ * mapper's input: readers that skip the `audit_event` table (the batched HTTP
  * one) satisfy this directly, and a full {@link PersistedProjectRecord} still
  * does too.
  */

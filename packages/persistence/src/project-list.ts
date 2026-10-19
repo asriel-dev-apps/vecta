@@ -1,7 +1,7 @@
 import type { AuthenticatedIdentity, ProjectRole } from "@vecta/application";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import type { ProjectReadDatabase } from "./project-read-queries.js";
-import { principals, projectMemberships, projects } from "./schema.js";
+import { principal, projectMembership, wbs } from "./schema.js";
 
 /**
  * One accessible project for a principal: the project identity + the principal's
@@ -17,11 +17,12 @@ export interface AccessibleProject {
 }
 
 /**
- * Principal-keyed project list. A single `project_memberships ⨝ projects` join
- * filtered by `principalId` — the composite FK
- * (`project_memberships_tenant_membership_fk`) already guarantees the matching
- * tenant membership, so no third join to `tenant_memberships` is needed. Sorted
+ * Principal-keyed WBS list. Membership is per project, so the join is
+ * `project_membership ⨝ wbs` on `wbs.project_id`. The composite FK
+ * (`project_membership_tenant_membership_fk`) already guarantees the matching
+ * tenant membership, so no third join to `tenant_membership` is needed. Sorted
  * by name (then id, since names are not unique) so the result is deterministic.
+ * The returned `id` is the WBS id.
  */
 export class PostgresProjectListReader {
   constructor(private readonly database: ProjectReadDatabase) {}
@@ -31,21 +32,21 @@ export class PostgresProjectListReader {
   ): Promise<readonly AccessibleProject[]> {
     return this.database
       .select({
-        id: projects.id,
-        tenantId: projects.tenantId,
-        name: projects.name,
-        role: projectMemberships.role,
+        id: wbs.id,
+        tenantId: wbs.tenantId,
+        name: wbs.name,
+        role: projectMembership.role,
       })
-      .from(projectMemberships)
+      .from(projectMembership)
       .innerJoin(
-        projects,
+        wbs,
         and(
-          eq(projects.tenantId, projectMemberships.tenantId),
-          eq(projects.id, projectMemberships.projectId),
+          eq(wbs.tenantId, projectMembership.tenantId),
+          eq(wbs.projectId, projectMembership.projectId),
         ),
       )
-      .where(eq(projectMemberships.principalId, principalId))
-      .orderBy(asc(projects.name), asc(projects.id));
+      .where(eq(projectMembership.principalId, principalId))
+      .orderBy(asc(wbs.name), asc(wbs.id));
   }
 
   /**
@@ -61,8 +62,8 @@ export class PostgresProjectListReader {
    * falls back per project: an identity that has both a subject-keyed principal
    * (≥1 membership) and an `email:`-seeded principal can write the latter's
    * projects, so those projects must not be absent from `/api/projects`. Joins
-   * through `principals` so the `disabledAt IS NULL` guard the resolver applies
-   * also holds; the composite `project_memberships_tenant_membership_fk` still
+   * through `principal` so the `disabledAt IS NULL` guard the resolver applies
+   * also holds; the composite `project_membership_tenant_membership_fk` still
    * guarantees the tenant membership, so no third join is needed (as in
    * {@link listForPrincipal}).
    */
@@ -100,30 +101,30 @@ export class PostgresProjectListReader {
   ): Promise<readonly AccessibleProject[]> {
     return this.database
       .select({
-        id: projects.id,
-        tenantId: projects.tenantId,
-        name: projects.name,
-        role: projectMemberships.role,
+        id: wbs.id,
+        tenantId: wbs.tenantId,
+        name: wbs.name,
+        role: projectMembership.role,
       })
-      .from(principals)
+      .from(principal)
       .innerJoin(
-        projectMemberships,
-        eq(projectMemberships.principalId, principals.id),
+        projectMembership,
+        eq(projectMembership.principalId, principal.id),
       )
       .innerJoin(
-        projects,
+        wbs,
         and(
-          eq(projects.tenantId, projectMemberships.tenantId),
-          eq(projects.id, projectMemberships.projectId),
+          eq(wbs.tenantId, projectMembership.tenantId),
+          eq(wbs.projectId, projectMembership.projectId),
         ),
       )
       .where(
         and(
-          eq(principals.issuer, issuer),
-          eq(principals.subject, subject),
-          isNull(principals.disabledAt),
+          eq(principal.issuer, issuer),
+          eq(principal.subject, subject),
+          isNull(principal.disabledAt),
         ),
       )
-      .orderBy(asc(projects.name), asc(projects.id));
+      .orderBy(asc(wbs.name), asc(wbs.id));
   }
 }

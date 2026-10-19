@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { instrumentPoolRoundTrips } from "../src/neon-database.js";
 import { openNeonHttpReadDatabase } from "../src/neon-http-database.js";
 import * as schema from "../src/schema.js";
-import { members, tasks } from "../src/schema.js";
+import { member, task } from "../src/schema.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
 
 /**
@@ -43,7 +43,7 @@ describe("HTTP read round trips", () => {
     const durations: number[] = [];
     const database = openNeonHttpReadDatabase(UNREACHABLE, (ms) => durations.push(ms));
 
-    await expect(database.select().from(tasks).limit(1)).rejects.toThrow();
+    await expect(database.select().from(task).limit(1)).rejects.toThrow();
     expect(durations).toHaveLength(1);
 
     // The batching claim, asserted rather than assumed: `db.batch` builds one
@@ -52,7 +52,7 @@ describe("HTTP read round trips", () => {
     // execute the statements separately, which is the read transport's whole
     // reason for existing.
     await expect(
-      database.batch([database.select().from(tasks).limit(1), database.select().from(members).limit(1)]),
+      database.batch([database.select().from(task).limit(1), database.select().from(member).limit(1)]),
     ).rejects.toThrow();
     expect(durations).toHaveLength(2);
   });
@@ -77,7 +77,7 @@ describe("HTTP read round trips", () => {
 
   it("CONTROL: no observer means no wrapping, and the client still works the same way", async () => {
     const database = openNeonHttpReadDatabase(UNREACHABLE);
-    await expect(database.select().from(tasks).limit(1)).rejects.toThrow();
+    await expect(database.select().from(task).limit(1)).rejects.toThrow();
   });
 });
 

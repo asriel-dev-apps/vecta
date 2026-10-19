@@ -122,12 +122,18 @@ if (dryRun) {
     await client.query("begin");
     try {
       await client.query({
-        text: "insert into tenants (id, name) values ($1, $2) on conflict (id) do update set name = excluded.name",
+        text: "insert into tenant (id, name) values ($1, $2) on conflict (id) do update set name = excluded.name",
         values: [tenantId, tenantName],
       });
       await client.query({
-        text: `insert into projects (id, tenant_id, name, project_start, status_date)
-               values ($1, $2, $3, $4, $5)
+        text: `insert into project (id, tenant_id, name)
+               values ($1, $2, $3)
+               on conflict (id) do update set name = excluded.name`,
+        values: [projectId, tenantId, projectName],
+      });
+      await client.query({
+        text: `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
+               values ($1, $2, $1, $3, $4, $5)
                on conflict (id) do update set
                  name = excluded.name,
                  project_start = excluded.project_start,
@@ -135,7 +141,7 @@ if (dryRun) {
         values: [projectId, tenantId, projectName, projectStart, statusDate],
       });
       const principal = await client.query({
-        text: `insert into principals (id, issuer, subject, type, display_name, allowed_scopes)
+        text: `insert into principal (id, issuer, subject, type, display_name, allowed_scopes)
                values ($1, $2, $3, 'HUMAN', $4, '{}'::text[])
                on conflict (issuer, subject) do update set display_name = excluded.display_name
                returning id`,
@@ -143,13 +149,13 @@ if (dryRun) {
       });
       const resolvedPrincipalId = principal.rows[0].id;
       await client.query({
-        text: `insert into tenant_memberships (tenant_id, principal_id, role)
+        text: `insert into tenant_membership (tenant_id, principal_id, role)
                values ($1, $2, 'OWNER')
                on conflict (tenant_id, principal_id) do update set role = 'OWNER'`,
         values: [tenantId, resolvedPrincipalId],
       });
       await client.query({
-        text: `insert into project_memberships (tenant_id, project_id, principal_id, role)
+        text: `insert into project_membership (tenant_id, project_id, principal_id, role)
                values ($1, $2, $3, 'OWNER')
                on conflict (tenant_id, project_id, principal_id) do update set role = 'OWNER'`,
         values: [tenantId, projectId, resolvedPrincipalId],

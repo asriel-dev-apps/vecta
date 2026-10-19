@@ -1,7 +1,8 @@
 import {
-  principals,
-  projectMemberships,
-  tenantMemberships,
+  principal as principalTable,
+  projectMembership,
+  tenantMembership,
+  wbs,
 } from "@vecta/persistence";
 import { and, eq, isNull } from "drizzle-orm";
 import type { DbSession } from "../db-session.server";
@@ -31,18 +32,18 @@ export function createNeonPrincipalDirectory(
       const database = session.read();
       const [row] = await database
         .select({
-          id: principals.id,
-          issuer: principals.issuer,
-          subject: principals.subject,
-          displayName: principals.displayName,
-          type: principals.type,
+          id: principalTable.id,
+          issuer: principalTable.issuer,
+          subject: principalTable.subject,
+          displayName: principalTable.displayName,
+          type: principalTable.type,
         })
-        .from(principals)
+        .from(principalTable)
         .where(
           and(
-            eq(principals.issuer, issuer),
-            eq(principals.subject, subject),
-            isNull(principals.disabledAt),
+            eq(principalTable.issuer, issuer),
+            eq(principalTable.subject, subject),
+            isNull(principalTable.disabledAt),
           ),
         )
         .limit(1);
@@ -54,32 +55,39 @@ export function createNeonPrincipalDirectory(
       const [[principal], tenants, projects] = await database.batch([
         database
           .select({
-            id: principals.id,
-            issuer: principals.issuer,
-            subject: principals.subject,
-            displayName: principals.displayName,
-            type: principals.type,
+            id: principalTable.id,
+            issuer: principalTable.issuer,
+            subject: principalTable.subject,
+            displayName: principalTable.displayName,
+            type: principalTable.type,
           })
-          .from(principals)
+          .from(principalTable)
           .where(
-            and(eq(principals.id, principalId), isNull(principals.disabledAt)),
+            and(eq(principalTable.id, principalId), isNull(principalTable.disabledAt)),
           )
           .limit(1),
         database
           .select({
-            tenantId: tenantMemberships.tenantId,
-            role: tenantMemberships.role,
+            tenantId: tenantMembership.tenantId,
+            role: tenantMembership.role,
           })
-          .from(tenantMemberships)
-          .where(eq(tenantMemberships.principalId, principalId)),
+          .from(tenantMembership)
+          .where(eq(tenantMembership.principalId, principalId)),
         database
           .select({
-            tenantId: projectMemberships.tenantId,
-            projectId: projectMemberships.projectId,
-            role: projectMemberships.role,
+            tenantId: wbs.tenantId,
+            projectId: wbs.id,
+            role: projectMembership.role,
           })
-          .from(projectMemberships)
-          .where(eq(projectMemberships.principalId, principalId)),
+          .from(projectMembership)
+          .innerJoin(
+            wbs,
+            and(
+              eq(wbs.tenantId, projectMembership.tenantId),
+              eq(wbs.projectId, projectMembership.projectId),
+            ),
+          )
+          .where(eq(projectMembership.principalId, principalId)),
       ]);
       if (principal === undefined) {
         return null;

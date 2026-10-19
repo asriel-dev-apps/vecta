@@ -48,7 +48,7 @@ describe("baseline.publish", () => {
   });
 
   beforeEach(async () => {
-    await client.query("truncate table tenants cascade");
+    await client.query("truncate table tenant cascade");
     await repository.save(demoProjectRecord);
   });
 
@@ -74,7 +74,7 @@ describe("baseline.publish", () => {
 
   const frozenRows = () =>
     client.query<{ task_id: string; name: string; daily_plan: Record<string, number> }>(
-      "select task_id, name, daily_plan from baseline_tasks where project_id = $1 order by seq",
+      "select task_id, name, daily_plan from baseline_task where wbs_id = $1 order by seq",
       [projectId],
     );
 
@@ -94,7 +94,7 @@ describe("baseline.publish", () => {
     }
 
     const header = await client.query<{ version: number; source_revision: string }>(
-      "select version, source_revision::text as source_revision from project_baselines where project_id = $1",
+      "select version, source_revision::text as source_revision from baseline where wbs_id = $1",
       [projectId],
     );
     expect(header.rows[0]?.version).toBe(1);
@@ -106,7 +106,7 @@ describe("baseline.publish", () => {
   it("CONTROL: editing the current plan afterwards does not move the frozen plot", async () => {
     await publish();
     const before = await frozenRows();
-    await client.query("update tasks set daily_plan = $1::jsonb where id = $2", [
+    await client.query("update task set daily_plan = $1::jsonb where id = $2", [
       JSON.stringify({ "2099-01-01": 9_999 }),
       firstLeaf.id,
     ]);
@@ -128,7 +128,7 @@ describe("baseline.publish", () => {
     // Measured 2026-08-05: BAC comes from the daily plot, so an unplotted leaf is
     // worth ZERO to the baseline and every later SV is kinder by that amount —
     // permanently, and with nothing on screen to say so.
-    await client.query("update tasks set daily_plan = '{}'::jsonb where id = $1", [firstLeaf.id]);
+    await client.query("update task set daily_plan = '{}'::jsonb where id = $1", [firstLeaf.id]);
     await expect(publish()).rejects.toThrow(/empty or inconsistent daily plot/u);
 
     const acknowledged = await publish({
@@ -142,7 +142,7 @@ describe("baseline.publish", () => {
     await publish();
     await publish({ type: "baseline.publish" }, 2n);
     const versions = await client.query<{ version: number }>(
-      "select version from project_baselines where project_id = $1 order by version",
+      "select version from baseline where wbs_id = $1 order by version",
       [projectId],
     );
     expect(versions.rows.map((row) => row.version)).toEqual([1, 2]);
@@ -155,7 +155,7 @@ describe("baseline.publish", () => {
       actor_id: string;
       command_type: string;
     }>(
-      "select actor_type, actor_id, command_type from audit_events where project_id = $1 and command_type = 'baseline.publish'",
+      "select actor_type, actor_id, command_type from audit_event where wbs_id = $1 and command_type = 'baseline.publish'",
       [projectId],
     );
     expect(audit.rows[0]?.actor_type).toBe("HUMAN");
@@ -175,7 +175,7 @@ describe("baseline.publish", () => {
       parent_task_id: string | null;
       daily_plan: Record<string, number>;
     }>(
-      "select task_id, parent_task_id, daily_plan from baseline_tasks where project_id = $1",
+      "select task_id, parent_task_id, daily_plan from baseline_task where wbs_id = $1",
       [projectId],
     );
     const live = demoProjectRecord.tasks;
@@ -217,7 +217,7 @@ describe("baseline.publish", () => {
     await publish();
     const read = async () => {
       const rows = await client.query<{ task_id: string; daily_plan: Record<string, number> }>(
-        "select task_id, daily_plan from baseline_tasks where project_id = $1 order by task_id",
+        "select task_id, daily_plan from baseline_task where wbs_id = $1 order by task_id",
         [projectId],
       );
       return calculateBaselineEvm({
@@ -230,15 +230,15 @@ describe("baseline.publish", () => {
     expect(before.bac).toBeGreaterThan(0);
 
     const mutations: readonly [string, string, unknown[]][] = [
-      ["progress", "update tasks set progress_basis_points = 10000 where id = $1", [firstLeaf.id]],
-      ["actuals", "update tasks set actual_effort_minutes = 99999 where id = $1", [firstLeaf.id]],
-      ["estimate", "update tasks set planned_effort_minutes = 99999 where id = $1", [firstLeaf.id]],
-      ["name", "update tasks set name = 'Renamed after publishing' where id = $1", [firstLeaf.id]],
-      ["reparent", "update tasks set parent_task_id = null where id = $1", [firstLeaf.id]],
-      ["member name", "update members set name = 'Renamed member' where project_id = $1", [projectId]],
+      ["progress", "update task set progress_basis_points = 10000 where id = $1", [firstLeaf.id]],
+      ["actuals", "update task set actual_effort_minutes = 99999 where id = $1", [firstLeaf.id]],
+      ["estimate", "update task set planned_effort_minutes = 99999 where id = $1", [firstLeaf.id]],
+      ["name", "update task set name = 'Renamed after publishing' where id = $1", [firstLeaf.id]],
+      ["reparent", "update task set parent_task_id = null where id = $1", [firstLeaf.id]],
+      ["member name", "update member set name = 'Renamed member' where wbs_id = $1", [projectId]],
       [
         "calendar",
-        "update project_calendars set non_working_dates = '{2026-08-01}' where project_id = $1",
+        "update calendar set non_working_dates = '{2026-08-01}' where wbs_id = $1",
         [projectId],
       ],
     ];
@@ -249,8 +249,8 @@ describe("baseline.publish", () => {
     }
 
     // Deleting a task must not move it either — and the frozen row survives.
-    await client.query("delete from task_dependencies where tenant_id = $1", [tenantId]);
-    await client.query("delete from tasks where id = $1", [firstLeaf.id]);
+    await client.query("delete from task_dependency where tenant_id = $1", [tenantId]);
+    await client.query("delete from task where id = $1", [firstLeaf.id]);
     expect(await read()).toEqual(before);
   });
 

@@ -1,6 +1,7 @@
 import { and, asc, eq, type ExtractTablesWithRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import type {
+  AuditEventRecord,
   MemberRecord,
   PersistedProjectRecord,
   ProcessRecord,
@@ -15,17 +16,18 @@ import {
   projectHeaderQuery,
 } from "./project-read-queries.js";
 import {
-  auditEvents,
-  members,
-  processes,
-  products,
-  projectCalendars,
-  projects,
+  auditEvent,
+  calendar,
+  member,
+  process,
+  product,
+  project,
   schema,
-  subtaskTemplates,
-  taskDependencies,
-  tasks,
-  tenants,
+  subtaskTemplate,
+  task,
+  taskDependency,
+  tenant,
+  wbs,
 } from "./schema.js";
 
 function withoutGeneratedFields<T extends object>(
@@ -39,6 +41,26 @@ function withoutGeneratedFields<T extends object>(
   return copy;
 }
 
+/** Record field `projectId` is the WBS id; the column is `wbs_id`. */
+function toWbsColumn<T extends { projectId: string }>(
+  row: T,
+): Omit<T, "projectId"> & { wbsId: string } {
+  const { projectId, ...rest } = row;
+  return { ...rest, wbsId: projectId };
+}
+
+function fromWbsColumn<T extends { wbsId: string }>(
+  row: T,
+): Omit<T, "wbsId"> & { projectId: string } {
+  const { wbsId, ...rest } = row;
+  return { ...rest, projectId: wbsId };
+}
+
+function auditToRow(event: AuditEventRecord) {
+  const { projectId, projectRevision, ...rest } = event;
+  return { ...rest, wbsId: projectId, wbsRevision: projectRevision };
+}
+
 export class ProjectRepository {
   constructor(
     private readonly database:
@@ -48,31 +70,45 @@ export class ProjectRepository {
 
   async save(record: PersistedProjectRecord): Promise<void> {
     await this.database.transaction(async (transaction) => {
-      await transaction.insert(tenants).values(record.tenant);
-      await transaction.insert(projects).values(record.project);
+      await transaction.insert(tenant).values(record.tenant);
+      const [parent] = await transaction
+        .insert(project)
+        .values({
+          tenantId: record.project.tenantId,
+          name: record.project.name,
+        })
+        .returning({ id: project.id });
+      if (parent === undefined) {
+        throw new Error("project row was not created");
+      }
+      await transaction.insert(wbs).values({
+        ...record.project,
+        projectId: parent.id,
+        tags: [],
+      });
 
       if (record.calendars.length > 0) {
-        await transaction.insert(projectCalendars).values(
-          record.calendars.map((calendar) => ({
-            ...calendar,
-            workingWeekdays: [...calendar.workingWeekdays],
-            nonWorkingDates: [...calendar.nonWorkingDates],
+        await transaction.insert(calendar).values(
+          record.calendars.map((row) => ({
+            ...toWbsColumn(row),
+            workingWeekdays: [...row.workingWeekdays],
+            nonWorkingDates: [...row.nonWorkingDates],
           })),
         );
       }
       if (record.members.length > 0) {
-        await transaction.insert(members).values([...record.members]);
+        await transaction.insert(member).values(record.members.map((row) => toWbsColumn(row)));
       }
       if (record.processes.length > 0) {
-        await transaction.insert(processes).values([...record.processes]);
+        await transaction.insert(process).values(record.processes.map((row) => toWbsColumn(row)));
       }
       if (record.products.length > 0) {
-        await transaction.insert(products).values([...record.products]);
+        await transaction.insert(product).values(record.products.map((row) => toWbsColumn(row)));
       }
       if (record.templates.length > 0) {
-        await transaction.insert(subtaskTemplates).values(
+        await transaction.insert(subtaskTemplate).values(
           record.templates.map((template) => ({
-            ...template,
+            ...toWbsColumn(template),
             subtasks: template.subtasks,
           })),
         );
@@ -80,15 +116,17 @@ export class ProjectRepository {
       if (record.tasks.length > 0) {
         // Self-referential parent FK is satisfied within a single batched
         // insert (immediate constraints are checked at statement end).
-        await transaction.insert(tasks).values(
-          record.tasks.map((task) => ({ ...task, dailyPlan: task.dailyPlan })),
+        await transaction.insert(task).values(
+          record.tasks.map((row) => ({ ...toWbsColumn(row), dailyPlan: row.dailyPlan })),
         );
       }
       if (record.dependencies.length > 0) {
-        await transaction.insert(taskDependencies).values([...record.dependencies]);
+        await transaction
+          .insert(taskDependency)
+          .values(record.dependencies.map((row) => toWbsColumn(row)));
       }
       if (record.auditEvents.length > 0) {
-        await transaction.insert(auditEvents).values([...record.auditEvents]);
+        await transaction.insert(auditEvent).values(record.auditEvents.map((row) => auditToRow(row)));
       }
     });
   }
@@ -113,9 +151,9 @@ export class ProjectRepository {
     // and it is read here only (see `project-read-queries.ts`).
     const auditRows = await this.database
       .select()
-      .from(auditEvents)
-      .where(and(eq(auditEvents.tenantId, tenantId), eq(auditEvents.projectId, projectId)))
-      .orderBy(asc(auditEvents.sequence));
+      .from(auditEvent)
+      .where(and(eq(auditEvent.tenantId, tenantId), eq(auditEvent.wbsId, projectId)))
+      .orderBy(asc(auditEvent.sequence));
 
     return {
       ...toProjectDetailRecord(projectHeader, {
@@ -128,7 +166,13 @@ export class ProjectRepository {
         dependencies: dependencyRows,
       }),
       auditEvents: auditRows.map((row) => ({
-        ...withoutGeneratedFields(row, ["sequence"]),
+        id: row.id,
+        tenantId: row.tenantId,
+        projectId: row.wbsId,
+        projectRevision: row.wbsRevision,
+        actorType: row.actorType,
+        actorId: row.actorId,
+        commandType: row.commandType,
         payload: row.payload as Readonly<Record<string, unknown>>,
         occurredAt: new Date(row.occurredAt).toISOString(),
       })),
@@ -180,32 +224,32 @@ export function toProjectDetailRecord(
       nextBaselineVersion: projectHeader.nextBaselineVersion,
     },
     calendars: rows.calendars.map((row) =>
-      withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+      withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
     ),
     members: rows.members.map(
-      (row): MemberRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+      (row): MemberRecord => withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
     ),
     processes: rows.processes.map(
-      (row): ProcessRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+      (row): ProcessRecord => withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
     ),
     products: rows.products.map(
-      (row): ProductRecord => withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+      (row): ProductRecord => withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
     ),
     templates: rows.templates.map(
       (row): TemplateRecord => ({
-        ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+        ...withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
         subtasks: row.subtasks as readonly SubtaskTemplateStepRecord[],
       }),
     ),
     tasks: rows.tasks.map(
       (row): TaskRecord => ({
-        ...withoutGeneratedFields(row, ["createdAt", "updatedAt"]),
+        ...withoutGeneratedFields(fromWbsColumn(row), ["createdAt", "updatedAt"]),
         dailyPlan: row.dailyPlan as Record<string, number>,
         datedActuals: row.datedActuals as Record<string, number>,
       }),
     ),
     dependencies: rows.dependencies.map(
-      (row): TaskDependencyRecord => withoutGeneratedFields(row, ["createdAt"]),
+      (row): TaskDependencyRecord => withoutGeneratedFields(fromWbsColumn(row), ["createdAt"]),
     ),
   };
 }
