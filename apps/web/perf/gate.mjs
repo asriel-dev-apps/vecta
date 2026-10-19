@@ -92,21 +92,22 @@ function movementFailures(lane, runs) {
   return [...out];
 }
 
+/** [message, isTiming]: timing messages are not reported when the machine load makes the run invalid. */
 function laneFailures(id, scenario) {
   const lane = LANES[id];
-  if (lane === undefined) return [`${id}: unknown lane`];
+  if (lane === undefined) return [[`${id}: unknown lane`, false]];
   const out = [];
   const gate = GATES[lane.tier];
   const work = scenario.work ?? [];
   const control = scenario.control ?? [];
-  for (const message of scenario.correctness ?? ["no correctness evidence"]) out.push(`${id}: correctness: ${message}`);
-  for (const message of workGate(work, gate).failures) out.push(`${id}: ${message}`);
+  for (const message of scenario.correctness ?? ["no correctness evidence"]) out.push([`${id}: correctness: ${message}`, false]);
+  for (const message of workGate(work, gate).failures) out.push([`${id}: ${message}`, true]);
   for (const message of workGate(control, gate).failures) {
-    out.push(`${id}: CONTROL lane (empty scroller) ${message}: the measurement is invalid`);
+    out.push([`${id}: CONTROL lane (empty scroller) ${message}: the measurement is invalid`, true]);
   }
   if (lane.wheel !== undefined) {
-    for (const message of movementFailures(lane, work)) out.push(`${id}: correctness: ${message}`);
-    for (const message of movementFailures(lane, control)) out.push(`${id}: CONTROL lane: ${message}: the measurement is invalid`);
+    for (const message of movementFailures(lane, work)) out.push([`${id}: correctness: ${message}`, false]);
+    for (const message of movementFailures(lane, control)) out.push([`${id}: CONTROL lane: ${message}: the measurement is invalid`, false]);
   }
   return out;
 }
@@ -130,41 +131,53 @@ function loadFailures(side, load, runs) {
   return out;
 }
 
+/** Every timed run (lane runs, load probes of both sides) needs finite 1-minute load readings and no loadInvalid flag. */
+function loadInvalid(doc) {
+  const records = [];
+  for (const scenario of Object.values(doc.scenarios ?? {})) {
+    for (const run of [...(scenario.work ?? []), ...(scenario.control ?? [])]) records.push({ ...run.loadavg, loadInvalid: run.loadInvalid });
+  }
+  for (const load of [doc.load, doc.before?.load]) for (const entry of Object.values(load ?? {})) records.push(...(entry.loads ?? [{}]));
+  return records.length === 0 || records.some((r) => r.loadInvalid === true || !Number.isFinite(r.before) || !Number.isFinite(r.after));
+}
+
 /**
  * doc: { runs, builds: {before, candidate}, order: ("B"|"C")[],
  *        scenarios: {id: {work[], control[], correctness: string[]}},
  *        load: {cols: {firstRowMs[], editMs[], editFailures[]}},
  *        before: { load } }   (before measured in the same session, interleaved)
+ * Result: {ok, diagnostic, invalid, failures}. invalid = a qualifying run was not measured on a quiet
+ * machine (flagged loadInvalid, or load readings missing): timing messages are then withheld and the
+ * verdict is neither pass nor timing FAIL; correctness failures still fail.
  * opts.diagnostic: a partial run (--only / --no-before): absent lanes, load
  *   metrics and before are not failures, and the result is labelled diagnostic.
  */
 export function evaluate(doc, opts = {}) {
   const diagnostic = opts.diagnostic === true;
-  const failures = [];
+  const all = []; // [message, isTiming]
+  const add = (messages, timing = false) => all.push(...messages.map((message) => [message, timing]));
   const scenarios = doc.scenarios ?? {};
-  if (!diagnostic) {
-    for (const id of Object.keys(LANES)) if (scenarios[id] === undefined) failures.push(`${id}: lane missing`);
-  }
-  for (const [id, scenario] of Object.entries(scenarios)) failures.push(...laneFailures(id, scenario));
-  if (!diagnostic || doc.load !== undefined) failures.push(...loadFailures("", doc.load, diagnostic ? undefined : doc.runs));
+  if (!diagnostic) add(Object.keys(LANES).filter((id) => scenarios[id] === undefined).map((id) => `${id}: lane missing`));
+  for (const [id, scenario] of Object.entries(scenarios)) all.push(...laneFailures(id, scenario));
+  if (!diagnostic || doc.load !== undefined) add(loadFailures("", doc.load, diagnostic ? undefined : doc.runs));
 
   if (doc.before === undefined) {
-    if (!diagnostic) failures.push("no before measurement");
+    if (!diagnostic) add(["no before measurement"]);
   } else {
     const { before: was, candidate: now } = doc.builds ?? {};
-    if (was === undefined || now === undefined || was === now) failures.push("before and candidate are the same build (or their identity is missing)");
+    if (was === undefined || now === undefined || was === now) add(["before and candidate are the same build (or their identity is missing)"]);
     const order = doc.order ?? [];
-    if (order.length === 0 || order.some((side, index) => side !== (index % 2 === 0 ? "B" : "C"))) {
-      failures.push("probes were not interleaved B,C,B,C,...");
-    }
-    failures.push(...loadFailures("before ", doc.before.load, doc.runs));
+    if (order.length === 0 || order.some((side, index) => side !== (index % 2 === 0 ? "B" : "C"))) add(["probes were not interleaved B,C,B,C,..."]);
+    add(loadFailures("before ", doc.before.load, doc.runs));
     for (const cols of LOAD_COLS) {
       for (const metric of ["firstRowMs", "editMs"]) {
         const head = median(doc.load?.[cols]?.[metric] ?? []);
         const base = median(doc.before.load?.[cols]?.[metric] ?? []);
-        if (!withinTolerance(base, head)) failures.push(`${metric}@${cols}: ${head} > max(${base} x 1.10, ${base} + 20)`);
+        if (!withinTolerance(base, head)) add([`${metric}@${cols}: ${head} > max(${base} x 1.10, ${base} + 20)`], true);
       }
     }
   }
-  return { ok: failures.length === 0, diagnostic, failures };
+  const invalid = !diagnostic && loadInvalid(doc);
+  const failures = all.filter(([, timing]) => !(invalid && timing)).map(([message]) => message);
+  return { ok: failures.length === 0 && !invalid, diagnostic, invalid, failures };
 }

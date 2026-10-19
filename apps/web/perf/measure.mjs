@@ -6,6 +6,8 @@
 //   --only=W500,V500   partial run: diagnostic, never "pass"
 //   --no-before        candidate only: diagnostic (also how a single build is probed)
 //   --runs=5  --no-build  --label=run
+//   --max-load=3 --load-wait=600: each run waits (15 s polls) for the 1-min load average <= max-load;
+//   after load-wait it runs anyway and is flagged loadInvalid (verdict INVALID, exit 2)
 //   proof hooks (one-time harness proofs, see the decisions file):
 //   --sabotage=blank|no-mouse|control-direct|smooth|busy:<ms>
 import { spawn, spawnSync } from "node:child_process";
@@ -30,6 +32,8 @@ const port = Number(arg("port", "4177"));
 const beforePort = Number(arg("before-port", "4178"));
 const beforeDir = arg("before-dir", "");
 const sabotage = arg("sabotage", "");
+const maxLoad = Number(arg("max-load", "3"));
+const loadWait = Number(arg("load-wait", "600"));
 const noBuild = process.argv.includes("--no-build");
 const withBefore = beforeDir !== "" && !process.argv.includes("--no-before");
 const diagnostic = only !== "" || !withBefore;
@@ -91,12 +95,21 @@ try {
     recordedAt: new Date().toISOString(),
     machine: { os: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0]?.model ?? "unknown", chrome: browser.version() },
     runs,
+    maxLoad,
+    loadavgStart: Number(os.loadavg()[0].toFixed(2)),
     viewport: { width: 1440, height: 900 },
     builds: { candidate: targets.C.build, before: targets.B?.build },
     order: [],
     scenarios: {},
   };
   const newContext = () => browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const load = () => Number(os.loadavg()[0].toFixed(2));
+  async function calm() {
+    const deadline = Date.now() + loadWait * 1000;
+    while (load() > maxLoad && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 15_000));
+    return { before: load(), loadInvalid: load() > maxLoad };
+  }
+  const readings = (calmed) => ({ loadavg: { before: calmed.before, after: load() }, loadInvalid: calmed.loadInvalid });
   const busyMs = sabotage.startsWith("busy:") ? Number(sabotage.slice(5)) : 0;
 
   async function jumpRun(context, page, kind, dims) {
@@ -141,12 +154,13 @@ try {
     const work = [];
     const control = [];
     for (let run = 0; run < runs; run += 1) {
+      const calmed = await calm();
       const context = await newContext();
       const { page, errors } = await openPerfPage(context, targets.C.base, cols);
       const dims = await page.evaluate(() => window.__PERF__.dims());
       const result = wheel === undefined ? await jumpRun(context, page, kind, dims) : await wheelLane(id, context, page, dims);
-      work.push(result.work);
-      control.push(result.control);
+      work.push({ ...result.work, ...readings(calmed) });
+      control.push({ ...result.control, ...readings(calmed) });
       if (errors.length > 0) console.warn(`${id} run ${run}: page errors ${errors.join(" | ")}`);
       await context.close();
     }
@@ -167,7 +181,7 @@ try {
     doc.scenarios[id] = { cols, work, control, correctness };
     const w = workGate(work).summary;
     const c = workGate(control).summary;
-    console.log(`${id.padEnd(5)} WORK p95=${w.p95.toFixed(1)}ms max=${w.max.toFixed(1)}ms | CONTROL p95=${c.p95.toFixed(1)}ms max=${c.max.toFixed(1)}ms | destination failures=${correctness.length}`);
+    console.log(`${id.padEnd(5)} WORK p95=${w.p95.toFixed(1)}ms max=${w.max.toFixed(1)}ms | CONTROL p95=${c.p95.toFixed(1)}ms max=${c.max.toFixed(1)}ms | destination failures=${correctness.length} | load ${work[0].loadavg.before}->${work.at(-1).loadavg.after} (peak ${Math.max(...work.flatMap((r) => [r.loadavg.before, r.loadavg.after]))})${work.some((r) => r.loadInvalid) ? " LOAD-INVALID" : ""}`);
   }
 
   if (only === "") {
@@ -177,7 +191,8 @@ try {
     for (let run = 0; run < runs; run += 1) {
       for (const cols of LOAD_COLS) {
         for (const side of withBefore ? ["B", "C"] : ["C"]) {
-          const entry = ((side === "B" ? doc.before.load : doc.load)[cols] ??= { firstRowMs: [], editMs: [], editFailures: [] });
+          const entry = ((side === "B" ? doc.before.load : doc.load)[cols] ??= { firstRowMs: [], editMs: [], editFailures: [], loads: [] });
+          const calmed = await calm();
           const context = await newContext();
           const { page, firstRowMs } = await openPerfPage(context, targets[side].base, cols);
           const edit = await runEdit(page, cols).catch((error) => ({ ms: -1, failures: [`edit probe could not run: ${String(error.message ?? error).split("\n")[0]}`] }));
@@ -185,6 +200,7 @@ try {
           entry.editMs.push(edit.ms);
           entry.editFailures.push(...edit.failures);
           if (edit.ms < 0) entry.editFailures.push("edit never reached the expected BAC/hours literals");
+          entry.loads.push({ before: calmed.before, after: load(), loadInvalid: calmed.loadInvalid });
           doc.order.push(side);
           await context.close();
         }
@@ -200,7 +216,11 @@ try {
   const out = path.join(dir, "results", `${label}.json`);
   fs.writeFileSync(out, `${JSON.stringify(doc, null, 2)}\n`);
   console.log(`\nwrote ${path.relative(webDir, out)}`);
-  if (!verdict.ok) {
+  if (verdict.invalid) {
+    console.log(`GATE: INVALID (machine load above ${maxLoad})`);
+    for (const message of verdict.failures) console.log(`  - ${message}`);
+    exitCode = verdict.failures.length > 0 ? 1 : 2;
+  } else if (!verdict.ok) {
     console.log("GATE: FAIL");
     for (const message of verdict.failures) console.log(`  - ${message}`);
     exitCode = 1;

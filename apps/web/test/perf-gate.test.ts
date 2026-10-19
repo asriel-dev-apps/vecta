@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { evaluate, median, percentile95, withinTolerance, workGate, workStats, type PerfDoc, type WorkSample } from "../perf/gate.mjs";
 
-const run = (p95: number, max: number): WorkSample => ({ p95, max });
+const calmLoad = { loadavg: { before: 1.2, after: 1.5 } };
+const run = (p95: number, max: number): WorkSample => ({ p95, max, ...calmLoad });
 // A wheel run that did what the lane says: 60 steps, 60 wheel events, offsets moved by (dy, dx) from (60000, 1728).
 const wheel = (dy: number, dx: number, p95 = 8, max = 20): WorkSample => ({
   p95,
   max,
+  ...calmLoad,
   steps: 60,
   wheelEvents: 60,
   start: { top: 60_000, left: 1728 },
@@ -23,7 +25,7 @@ const lanes = {
   H500: () => run(8, 20),
   D500: () => run(8, 20),
 } as const;
-const load = (first: number, edit: number) => ({ firstRowMs: [first, first, first], editMs: [edit, edit, edit], editFailures: [] });
+const load = (first: number, edit: number) => ({ firstRowMs: [first, first, first], editMs: [edit, edit, edit], editFailures: [], loads: [calmLoad.loadavg, calmLoad.loadavg, calmLoad.loadavg] });
 const full = (): PerfDoc => ({
   runs: 3,
   builds: { before: "aaa", candidate: "bbb" },
@@ -42,7 +44,7 @@ const withLane = (id: string, patch: { work?: WorkSample[]; control?: WorkSample
 
 describe("a complete, valid document", () => {
   it("passes", () => {
-    expect(evaluate(full())).toEqual({ ok: true, diagnostic: false, failures: [] });
+    expect(evaluate(full())).toEqual({ ok: true, diagnostic: false, invalid: false, failures: [] });
   });
   it("an empty document fails, it does not pass for lack of evidence", () => {
     const result = evaluate({ scenarios: {}, load: {} } as PerfDoc);
@@ -67,8 +69,43 @@ describe("a complete, valid document", () => {
     const partial = { ...full(), scenarios: { W500: full().scenarios.W500! } };
     delete partial.before;
     delete (partial as Partial<PerfDoc>).load;
-    expect(evaluate(partial as PerfDoc, { diagnostic: true })).toEqual({ ok: true, diagnostic: true, failures: [] });
+    expect(evaluate(partial as PerfDoc, { diagnostic: true })).toEqual({ ok: true, diagnostic: true, invalid: false, failures: [] });
     expect(evaluate(partial as PerfDoc).ok).toBe(false);
+  });
+});
+
+describe("machine load", () => {
+  it("a valid document with one run flagged loadInvalid is invalid: not a pass, not a timing FAIL", () => {
+    const doc = withLane("W500", { work: [{ ...wheel(6000, 0), loadavg: { before: 4.1, after: 4.3 }, loadInvalid: true }] });
+    expect(evaluate(doc)).toEqual({ ok: false, diagnostic: false, invalid: true, failures: [] });
+  });
+  it("timing misses on a loadInvalid document are withheld, correctness failures still fail", () => {
+    const slow = { ...wheel(6000, 0, 27, 20), loadavg: { before: 17, after: 17 }, loadInvalid: true };
+    expect(evaluate(withLane("W500", { work: [slow] }))).toEqual({ ok: false, diagnostic: false, invalid: true, failures: [] });
+    const broken = evaluate(withLane("W500", { work: [slow], correctness: ["row 2004 is not in the DOM"] }));
+    expect(broken).toEqual({ ok: false, diagnostic: false, invalid: true, failures: ["W500: correctness: row 2004 is not in the DOM"] });
+  });
+  it("a loadInvalid load probe on either side invalidates", () => {
+    const doc = full();
+    doc.load![45]!.loads![1] = { before: 5, after: 5, loadInvalid: true };
+    expect(evaluate(doc).invalid).toBe(true);
+    const before = full();
+    before.before!.load![500]!.loads![0] = { before: 5, after: 5, loadInvalid: true };
+    expect(evaluate(before).invalid).toBe(true);
+  });
+  it("a diagnostic document stays diagnostic, even with a loadInvalid run", () => {
+    const partial = { ...full(), scenarios: { W500: { ...full().scenarios.W500!, work: [{ ...wheel(6000, 0), loadInvalid: true }] } } };
+    delete partial.before;
+    delete (partial as Partial<PerfDoc>).load;
+    expect(evaluate(partial as PerfDoc, { diagnostic: true })).toEqual({ ok: true, diagnostic: true, invalid: false, failures: [] });
+  });
+  it("missing load readings in a qualifying document are invalid", () => {
+    const noReading = full();
+    delete noReading.scenarios.V500!.work[0]!.loadavg;
+    expect(evaluate(noReading)).toEqual({ ok: false, diagnostic: false, invalid: true, failures: [] });
+    const noProbeLoads = full();
+    delete noProbeLoads.load![500]!.loads;
+    expect(evaluate(noProbeLoads).invalid).toBe(true);
   });
 });
 
@@ -179,15 +216,16 @@ describe("tolerance: head <= max(baseline x 1.10, baseline + 20 ms), on medians,
     }
   });
   it("is judged on the median: one outlier in the before samples does not move the baseline", () => {
+    const entry = (firstRowMs: number[], editMs: number[]) => ({ firstRowMs, editMs, editFailures: [], loads: Array(5).fill(calmLoad.loadavg) });
+    const flat = [100, 100, 100, 100, 100];
     const doc = full();
-    doc.before!.load![500] = { firstRowMs: [100, 100, 100, 100, 900], editMs: [100, 100, 100, 100, 900], editFailures: [] };
     doc.runs = 5;
-    const five = { firstRowMs: [100, 100, 100, 100, 100], editMs: [100, 100, 100, 100, 100], editFailures: [] };
-    doc.load![45] = five;
-    doc.before!.load![45] = five;
-    doc.load![500] = { firstRowMs: [130, 130, 130, 130, 130], editMs: [100, 100, 100, 100, 100], editFailures: [] };
+    doc.load![45] = entry(flat, flat);
+    doc.before!.load![45] = entry(flat, flat);
+    doc.before!.load![500] = entry([100, 100, 100, 100, 900], [100, 100, 100, 100, 900]);
+    doc.load![500] = entry([130, 130, 130, 130, 130], flat);
     expect(evaluate(doc).failures).toEqual([expect.stringContaining("firstRowMs@500")]);
-    doc.load![500] = { firstRowMs: [100, 100, 100, 100, 900], editMs: [100, 100, 100, 100, 100], editFailures: [] };
+    doc.load![500] = entry([100, 100, 100, 100, 900], flat);
     expect(evaluate(doc).failures).toEqual([]);
   });
   it("a before probe that failed or has no number invalidates the baseline", () => {

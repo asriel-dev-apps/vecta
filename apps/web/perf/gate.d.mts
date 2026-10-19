@@ -5,11 +5,14 @@ export interface WorkSample {
   start?: { top: number; left: number };
   end?: { top: number; left: number };
   wheelEvents?: number;
+  loadavg?: { before: number; after: number };
+  loadInvalid?: boolean;
 }
 export interface LoadEntry {
   firstRowMs: number[];
   editMs: number[];
   editFailures: string[];
+  loads?: { before: number; after: number; loadInvalid?: boolean }[];
 }
 export interface PerfDoc {
   runs?: number;
@@ -37,4 +40,4 @@ export function percentile95(values: number[]): number;
 export function workStats(stepMs: number[]): { p95: number; max: number; mean: number; steps: number };
 export function withinTolerance(baseline: number, head: number): boolean;
 export function workGate(runs: WorkSample[], gate?: { p95AtMostMs: number; maxBelowMs: number }): { pass: boolean; failures: string[]; summary: { p95: number; max: number } };
-export function evaluate(doc: PerfDoc, opts?: { diagnostic?: boolean }): { ok: boolean; diagnostic: boolean; failures: string[] };
+export function evaluate(doc: PerfDoc, opts?: { diagnostic?: boolean }): { ok: boolean; diagnostic: boolean; invalid: boolean; failures: string[] };
