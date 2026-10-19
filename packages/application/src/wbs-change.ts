@@ -467,8 +467,9 @@ function dependencyEdgeMarks(successorId: string, before: readonly ProjectDepend
       marks.push(direct(target, ""));
       continue;
     }
-    marks.push(direct(target, "type"));
-    marks.push(direct(target, "lagWorkingDays"));
+    if (beforeByTarget.get(target)!.lagWorkingDays !== afterByTarget.get(target)!.lagWorkingDays) {
+      marks.push(direct(target, "lagWorkingDays"));
+    }
   }
   return marks;
 }
@@ -638,14 +639,8 @@ function diffRow(target: string, beforeRow: RowBody | undefined, afterRow: RowBo
     markByField.set(mark.field, stronger(markByField.get(mark.field), mark.kind));
   }
 
-  if (beforeRow === undefined && afterRow === undefined) {
-    const changes: FieldChange[] = [];
-    for (const [field, kind] of markByField) {
-      if (kind !== "direct") continue;
-      changes.push(toChange(target, field, ABSENT, ABSENT, "direct"));
-    }
-    return changes;
-  }
+  // Added and removed within one operation: nothing to record or replay.
+  if (beforeRow === undefined && afterRow === undefined) return [];
 
   // A row that appears or disappears is one whole-row entry. Edits later in
   // the same operation are inside that before/after value, so a generated or
