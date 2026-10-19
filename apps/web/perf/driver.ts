@@ -62,6 +62,8 @@ export interface PerfApi {
   sweep(kind: SweepKind): Promise<Sweep>;
   check(kind: SweepKind): Promise<Check>;
   checkAt(top: number, left: number): Promise<Check>;
+  /** Passive check of whatever is on screen now: never scrolls, never waits. */
+  observe(): Check;
   scrollTo(top: number, left: number): Promise<void>;
   isVisible(element: Element): boolean;
   taskId(index: number): string;
@@ -251,6 +253,13 @@ export function installDriver(
     return { steps: 1, ...counters, failures };
   };
 
+  const observe = (): Check => {
+    const failures: string[] = [];
+    const counters: Counters = { rowsChecked: 0, cellsChecked: 0, nonzeroCellsChecked: 0, headersChecked: 0, emptyDayWindows: 0, zeroNonzeroSteps: 0 };
+    checkNow(failures, counters);
+    return { steps: 1, ...counters, failures };
+  };
+
   const sweep = async (kind: SweepKind): Promise<Sweep> => {
     const el = scroller();
     const positions = sweepPositions(kind, dims());
@@ -311,6 +320,7 @@ export function installDriver(
     sweep,
     check,
     checkAt,
+    observe,
     scrollTo: async (top, left) => {
       const el = scroller();
       el.scrollTop = top;

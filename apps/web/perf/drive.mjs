@@ -1,20 +1,120 @@
 /* global window, document, performance, requestAnimationFrame, setTimeout, MutationObserver -- page.evaluate callbacks run in the browser */
 // Shared by measure.mjs and grid-scroll.spec.ts: server identity, page opening,
 // and the real-input edit probe.
+import { chromium } from "@playwright/test";
 import { EDIT } from "./expected.mjs";
+import { LANES, NOTCHES, START_LEFT, START_ROW } from "./gate.mjs";
 
-export const PORT = 4177;
+export const PORT = Number(process.env.PERF_PORT ?? 4177);
 export const BASE = `http://127.0.0.1:${PORT}`;
 export const FIXTURE_ID = "vecta-perf-v1";
 const ROW_H = 30;
-const V_LEFT = 1728;
+const V_LEFT = START_LEFT;
 
+/** Returns the build hash the server reports; throws if the port is not the perf fixture server. */
 export async function assertServerIdentity(base = BASE) {
   const response = await fetch(`${base}/__perf-identity`);
   const body = await response.json().catch(() => null);
-  if (!response.ok || body?.fixture !== FIXTURE_ID) {
+  if (!response.ok || body?.fixture !== FIXTURE_ID || typeof body.build !== "string") {
     throw new Error(`${base} is not the perf fixture server (got ${response.status})`);
   }
+  return body.build;
+}
+
+/** Real wheel input only works unanimated with smooth scrolling off; smoothing is a proof-only toggle. */
+export async function launchBrowser({ smooth = false } = {}) {
+  const args = smooth ? [] : ["--disable-smooth-scrolling"];
+  for (const options of [{ channel: "chrome", headless: true, args }, { headless: true, args }]) {
+    try {
+      return await chromium.launch(options);
+    } catch {
+      // try the next channel
+    }
+  }
+  throw new Error("no browser could be launched");
+}
+
+/** Renderer main-thread time (ms) so far: CDP Performance TaskDuration of this page. */
+export async function taskTimer(page) {
+  const client = await page.context().newCDPSession(page);
+  await client.send("Performance.enable");
+  return {
+    now: async () => (await client.send("Performance.getMetrics")).metrics.find((m) => m.name === "TaskDuration").value * 1000,
+    detach: () => client.detach(),
+  };
+}
+
+const GRID = '[data-testid="wbs-grid"]';
+const raf2 = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+/** An empty scroller with the grid's scrollable size, the control for the wheel lanes. */
+export async function openControlPage(context, dims) {
+  const page = await context.newPage();
+  await page.setContent(
+    `<div id="s" style="width:${dims.clientWidth}px;height:${dims.clientHeight}px;overflow:auto"><div style="width:${dims.scrollWidth}px;height:${dims.scrollHeight}px"></div></div>`,
+  );
+  return page;
+}
+
+/**
+ * The wheel procedure of a primary lane: go to row START_ROW, put the mouse over
+ * the scroller, send NOTCHES real wheel inputs of the lane's delta. Shared by the
+ * gate (timed), the destination replay (observe after each notch) and the spec.
+ * selector: the scroller; move:false skips the mouse move (proof only);
+ * control: no observe, "direct" assigns the scroll offset instead of a wheel (proof only).
+ * Returns the per-notch work time (ms) and the scroll offsets read from the DOM.
+ */
+export async function wheelRun(page, laneId, { selector = GRID, move = true, timed = true, observe = false, direct = false } = {}) {
+  const { dx, dy } = LANES[laneId].wheel;
+  const read = () => page.evaluate((s) => ({ top: document.querySelector(s).scrollTop, left: document.querySelector(s).scrollLeft }), selector);
+  const place = async () => {
+    await page.evaluate(
+      ([s, top, left]) => {
+        const el = document.querySelector(s);
+        el.scrollTop = top;
+        el.scrollLeft = left;
+        window.__wheels = 0;
+      },
+      [selector, START_ROW * ROW_H, START_LEFT],
+    );
+    await page.evaluate(raf2);
+  };
+  await page.evaluate((s) => document.querySelector(s).addEventListener("wheel", () => (window.__wheels += 1), { passive: true }), selector);
+  await place();
+  if (move) {
+    const box = await page.locator(selector).boundingBox();
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.5);
+  }
+  // The first wheel input of a fresh page costs ~40-50 ms of browser input setup on an empty
+  // scroller too (measured); one down/up pair outside the window, then back to the start.
+  if (!direct) {
+    await page.mouse.wheel(dx, dy);
+    await page.evaluate(raf2);
+    await page.mouse.wheel(-dx, -dy);
+    await page.evaluate(raf2);
+    await place();
+  }
+  const timer = timed ? await taskTimer(page) : null;
+  const start = await read();
+  const stepMs = [];
+  const failures = [];
+  for (let notch = 0; notch < NOTCHES; notch += 1) {
+    const before = timer === null ? 0 : await timer.now();
+    if (direct) await page.evaluate(([s, x, y]) => { document.querySelector(s).scrollBy(x, y); }, [selector, dx, dy]);
+    else await page.mouse.wheel(dx, dy);
+    await page.evaluate(raf2);
+    if (timer !== null) stepMs.push((await timer.now()) - before);
+    if (observe) {
+      const check = await page.evaluate(() => window.__PERF__.observe());
+      for (const message of check.failures) if (failures.length < 25) failures.push(`notch ${notch + 1} ${message}`);
+      if (failures.length < 25 && check.rowsChecked === 0) failures.push(`notch ${notch + 1}: no row was checked`);
+      // vertical lanes stay on the stamped day columns: a nonzero fixture cell must be in view
+      if (failures.length < 25 && dx === 0 && check.nonzeroCellsChecked === 0) failures.push(`notch ${notch + 1}: no nonzero fixture cell in view`);
+    }
+  }
+  const end = await read();
+  await timer?.detach();
+  return { stepMs, start, end, wheelEvents: await page.evaluate(() => window.__wheels), failures };
 }
 
 /** Opens the perf page and waits until real rows exist; fails if the fixture is not the requested one. */

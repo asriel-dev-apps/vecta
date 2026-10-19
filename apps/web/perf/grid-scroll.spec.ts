@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { BASE, assertServerIdentity, openPerfPage, runEdit } from "./drive.mjs";
+import { BASE, assertServerIdentity, openControlPage, openPerfPage, runEdit, wheelRun } from "./drive.mjs";
 import { EDIT } from "./expected.mjs";
 import { DAILY_COL_W, META_WIDTH, PINNED_WIDTH, ROW_H } from "./geometry";
 import type { Check } from "./driver";
@@ -56,10 +56,8 @@ test("geometry constants match the real DOM", async ({ page }) => {
   });
 });
 
-test("the hidden-cell control: an overscan cell under the pinned region is rendered but not visible", async ({ page }) => {
-  const current = await open(page, 500);
-  await current.evaluate(() => window.__PERF__!.scrollTo(30_000, 6000));
-  const result = await current.evaluate(() => {
+async function hiddenCellControl(current: Page) {
+  return current.evaluate(() => {
     const api = window.__PERF__!;
     const box = document.querySelector<HTMLElement>('[data-testid="wbs-grid"]')!.getBoundingClientRect();
     const row = [...document.querySelectorAll<HTMLElement>("[data-row-id]")].find((candidate) => api.isVisible(candidate))!;
@@ -72,8 +70,37 @@ test("the hidden-cell control: an overscan cell under the pinned region is rende
       shownVisible: shown === undefined ? null : api.isVisible(shown),
     };
   });
-  expect(result).toEqual({ hiddenRendered: true, hiddenVisible: false, shownVisible: true });
+}
+
+test("the hidden-cell control: an overscan cell under the pinned region is rendered but not visible", async ({ page }) => {
+  const current = await open(page, 500);
+  await current.evaluate(() => window.__PERF__!.scrollTo(30_000, 6000));
+  expect(await hiddenCellControl(current)).toEqual({ hiddenRendered: true, hiddenVisible: false, shownVisible: true });
 });
+
+// Wheel lanes (60 real notches from row 2000, smoothing off): literal end offsets,
+// 60 wheel events, every notch's destination drawn, and the same on an empty scroller.
+for (const [id, cols, end, rowName] of [
+  ["W45", 45, { top: 66_000, left: 1728 }, "Subtask 367.4"],
+  ["W500", 500, { top: 66_000, left: 1728 }, "Subtask 367.4"],
+  ["WH500", 500, { top: 60_000, left: 7728 }, "Subtask 334.2"],
+  ["WF500", 500, { top: 78_000, left: 1728 }, "Subtask 434.2"],
+] as const) {
+  test(`wheel ${id}: 60 notches land at ${end.top}/${end.left}, each destination is drawn, the empty scroller moves the same`, async ({ page }) => {
+    const current = await open(page, cols);
+    const dims = await current.evaluate(() => window.__PERF__!.dims());
+    const run = await wheelRun(current, id, { timed: false, observe: true });
+    expect(run.failures).toEqual([]);
+    expect(run.end).toEqual(end);
+    expect(run.wheelEvents).toBe(60);
+    await expect(current.locator('[data-row-id] [data-col="name"]', { hasText: rowName })).toHaveCount(1);
+    if (id === "WH500") expect(await hiddenCellControl(current)).toEqual({ hiddenRendered: true, hiddenVisible: false, shownVisible: true });
+
+    const control = await wheelRun(await openControlPage(current.context(), dims), id, { selector: "#s", timed: false });
+    expect(control.end).toEqual(end);
+    expect(control.wheelEvents).toBe(60);
+  });
+}
 
 test("rows: the last row of a 5,000-row grid is the 4,999th with its literal name", async ({ page }) => {
   const current = await open(page, 45);

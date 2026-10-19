@@ -1,21 +1,35 @@
 // Pure pass/fail logic of the perf gate (design 0016 §5 #1). Unit-tested in
 // `pnpm check`; measure.mjs only collects numbers and calls evaluate().
 //
-// The gate is MAIN-THREAD WORK TIME per scroll step, not frame intervals: the
-// interval between rAF callbacks measures vsync scheduling and machine load (an
-// empty scroller driven the same way showed p95 100-117 ms under load), the
-// work time does not. An empty-scroller control lane is measured the same way
-// and must pass the same gate, otherwise the measurement itself is invalid.
+// The gate is MAIN-THREAD WORK TIME per scroll step, not frame intervals (those
+// track vsync and machine load). Lane definitions, tiers and expected
+// displacements live HERE, keyed by lane id: a document can never pick its own
+// gate or its own expected movement. A control lane (an empty scroller driven by
+// the same wheel input) must pass the same gate, otherwise the measurement is
+// invalid.
 
-export const WORK_GATE = { p95AtMostMs: 16, maxBelowMs: 50 };
-export const SCENARIOS = {
-  V45c: { kind: "V45c", cols: 45 },
-  V45: { kind: "V", cols: 45 },
-  H45: { kind: "H", cols: 45 },
-  V500: { kind: "V", cols: 500 },
-  H500: { kind: "H", cols: 500 },
-  D500: { kind: "D", cols: 500 },
+export const NOTCHES = 60;
+export const START_ROW = 2000;
+export const START_LEFT = 1728;
+/** Harness choice (not in the design): rounding slack between expected and observed scroll offsets. */
+export const MOVE_TOLERANCE_PX = 1;
+export const GATES = {
+  primary: { p95AtMostMs: 16, maxBelowMs: 50 },
+  secondary: { p95AtMostMs: 33, maxBelowMs: 100 },
 };
+export const LANES = {
+  W45: { tier: "primary", cols: 45, wheel: { dx: 0, dy: 100 } },
+  W500: { tier: "primary", cols: 500, wheel: { dx: 0, dy: 100 } },
+  WH500: { tier: "primary", cols: 500, wheel: { dx: 100, dy: 0 } },
+  WF500: { tier: "primary", cols: 500, wheel: { dx: 0, dy: 300 } },
+  V45c: { tier: "secondary", cols: 45, kind: "V45c" },
+  V45: { tier: "secondary", cols: 45, kind: "V" },
+  H45: { tier: "secondary", cols: 45, kind: "H" },
+  V500: { tier: "secondary", cols: 500, kind: "V" },
+  H500: { tier: "secondary", cols: 500, kind: "H" },
+  D500: { tier: "secondary", cols: 500, kind: "D" },
+};
+export const LOAD_COLS = [45, 500];
 
 export function median(values) {
   if (values.length === 0) return Number.NaN;
@@ -45,50 +59,112 @@ export function withinTolerance(baseline, head) {
   return head <= Math.max(baseline * 1.1, baseline + 20);
 }
 
-export function sameMachine(left, right) {
-  return left?.os === right?.os && left?.cpu === right?.cpu && left?.chrome === right?.chrome;
-}
-
 /** runs: one {p95, max} per run. p95 = median over runs; max = maximum over all runs. */
-export function workGate(runs) {
+export function workGate(runs, gate = GATES.primary) {
   const failures = [];
   const p95 = median(runs.map((run) => run.p95));
   const max = Math.max(...runs.map((run) => run.max));
-  if (!(p95 <= WORK_GATE.p95AtMostMs)) failures.push(`work p95 ${p95.toFixed(1)} ms > ${WORK_GATE.p95AtMostMs} ms`);
-  if (!(max < WORK_GATE.maxBelowMs)) failures.push(`work max ${max.toFixed(1)} ms >= ${WORK_GATE.maxBelowMs} ms`);
+  if (runs.length === 0) failures.push("no runs");
+  else {
+    if (!(p95 <= gate.p95AtMostMs)) failures.push(`work p95 ${p95.toFixed(1)} ms > ${gate.p95AtMostMs} ms`);
+    if (!(max < gate.maxBelowMs)) failures.push(`work max ${max.toFixed(1)} ms >= ${gate.maxBelowMs} ms`);
+  }
   return { pass: failures.length === 0, failures, summary: { p95, max } };
 }
 
-/**
- * doc: { machine, scenarios: {id: {work[], control[], correctness: string[]}},
- *        load: {cols: {firstRowMs[], editMs[], editFailures[]}} }
- * baseline: a doc from the same script, or null (then only absolute gates apply).
- */
-export function evaluate(doc, baseline) {
-  const failures = [];
-  if (baseline !== null && baseline !== undefined && !sameMachine(doc.machine, baseline.machine)) {
-    return { ok: false, failures: ["baseline was recorded on a different machine/browser: refusing to compare"] };
-  }
-  for (const [id, scenario] of Object.entries(doc.scenarios)) {
-    for (const message of scenario.correctness) failures.push(`${id}: correctness: ${message}`);
-    for (const message of workGate(scenario.work).failures) failures.push(`${id}: ${message}`);
-    for (const message of workGate(scenario.control).failures) {
-      failures.push(`${id}: CONTROL lane (empty scroller) ${message}: the measurement is invalid`);
-    }
-  }
-  for (const [cols, load] of Object.entries(doc.load)) {
-    for (const message of load.editFailures) failures.push(`edit@${cols}: ${message}`);
-    if (baseline === null || baseline === undefined) continue;
-    const before = baseline.load?.[cols];
-    if (before === undefined) {
-      failures.push(`baseline has no ${cols}-column load numbers`);
+/** Movement evidence of a wheel run (work or control) against the lane's constants. */
+function movementFailures(lane, runs) {
+  const expectedTop = NOTCHES * lane.wheel.dy;
+  const expectedLeft = NOTCHES * lane.wheel.dx;
+  const out = new Set();
+  for (const run of runs) {
+    if (run.start === undefined || run.end === undefined || run.wheelEvents === undefined) {
+      out.add("no movement evidence (start/end offsets, wheel events)");
       continue;
     }
+    const top = run.end.top - run.start.top;
+    const left = run.end.left - run.start.left;
+    if (!(Math.abs(top - expectedTop) <= MOVE_TOLERANCE_PX)) out.add(`scrolled ${top} px vertically, expected ${expectedTop}`);
+    if (!(Math.abs(left - expectedLeft) <= MOVE_TOLERANCE_PX)) out.add(`scrolled ${left} px horizontally, expected ${expectedLeft}`);
+    if (run.wheelEvents !== NOTCHES) out.add(`received ${run.wheelEvents} wheel events, expected ${NOTCHES}`);
+    if (run.steps !== NOTCHES) out.add(`measured ${run.steps} steps, expected ${NOTCHES}`);
+  }
+  return [...out];
+}
+
+function laneFailures(id, scenario) {
+  const lane = LANES[id];
+  if (lane === undefined) return [`${id}: unknown lane`];
+  const out = [];
+  const gate = GATES[lane.tier];
+  const work = scenario.work ?? [];
+  const control = scenario.control ?? [];
+  for (const message of scenario.correctness ?? ["no correctness evidence"]) out.push(`${id}: correctness: ${message}`);
+  for (const message of workGate(work, gate).failures) out.push(`${id}: ${message}`);
+  for (const message of workGate(control, gate).failures) {
+    out.push(`${id}: CONTROL lane (empty scroller) ${message}: the measurement is invalid`);
+  }
+  if (lane.wheel !== undefined) {
+    for (const message of movementFailures(lane, work)) out.push(`${id}: correctness: ${message}`);
+    for (const message of movementFailures(lane, control)) out.push(`${id}: CONTROL lane: ${message}: the measurement is invalid`);
+  }
+  return out;
+}
+
+const finite = (values) => Array.isArray(values) && values.length > 0 && values.every((value) => Number.isFinite(value));
+
+function loadFailures(side, load, runs) {
+  const out = [];
+  for (const cols of LOAD_COLS) {
+    const entry = load?.[cols];
+    if (entry === undefined) {
+      out.push(`${side}load@${cols}: missing`);
+      continue;
+    }
+    for (const message of entry.editFailures ?? ["no edit evidence"]) out.push(`${side}edit@${cols}: ${message}`);
     for (const metric of ["firstRowMs", "editMs"]) {
-      const was = median(before[metric]);
-      const now = median(load[metric]);
-      if (!withinTolerance(was, now)) failures.push(`${metric}@${cols}: ${now} > max(${was} x 1.10, ${was} + 20)`);
+      if (!finite(entry[metric])) out.push(`${side}${metric}@${cols}: missing or non-numeric measurement`);
+      else if (runs !== undefined && entry[metric].length < runs) out.push(`${side}${metric}@${cols}: ${entry[metric].length} samples, expected ${runs}`);
     }
   }
-  return { ok: failures.length === 0, failures };
+  return out;
+}
+
+/**
+ * doc: { runs, builds: {before, candidate}, order: ("B"|"C")[],
+ *        scenarios: {id: {work[], control[], correctness: string[]}},
+ *        load: {cols: {firstRowMs[], editMs[], editFailures[]}},
+ *        before: { load } }   (before measured in the same session, interleaved)
+ * opts.diagnostic: a partial run (--only / --no-before): absent lanes, load
+ *   metrics and before are not failures, and the result is labelled diagnostic.
+ */
+export function evaluate(doc, opts = {}) {
+  const diagnostic = opts.diagnostic === true;
+  const failures = [];
+  const scenarios = doc.scenarios ?? {};
+  if (!diagnostic) {
+    for (const id of Object.keys(LANES)) if (scenarios[id] === undefined) failures.push(`${id}: lane missing`);
+  }
+  for (const [id, scenario] of Object.entries(scenarios)) failures.push(...laneFailures(id, scenario));
+  if (!diagnostic || doc.load !== undefined) failures.push(...loadFailures("", doc.load, diagnostic ? undefined : doc.runs));
+
+  if (doc.before === undefined) {
+    if (!diagnostic) failures.push("no before measurement");
+  } else {
+    const { before: was, candidate: now } = doc.builds ?? {};
+    if (was === undefined || now === undefined || was === now) failures.push("before and candidate are the same build (or their identity is missing)");
+    const order = doc.order ?? [];
+    if (order.length === 0 || order.some((side, index) => side !== (index % 2 === 0 ? "B" : "C"))) {
+      failures.push("probes were not interleaved B,C,B,C,...");
+    }
+    failures.push(...loadFailures("before ", doc.before.load, doc.runs));
+    for (const cols of LOAD_COLS) {
+      for (const metric of ["firstRowMs", "editMs"]) {
+        const head = median(doc.load?.[cols]?.[metric] ?? []);
+        const base = median(doc.before.load?.[cols]?.[metric] ?? []);
+        if (!withinTolerance(base, head)) failures.push(`${metric}@${cols}: ${head} > max(${base} x 1.10, ${base} + 20)`);
+      }
+    }
+  }
+  return { ok: failures.length === 0, diagnostic, failures };
 }

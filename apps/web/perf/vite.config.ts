@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -8,12 +10,27 @@ import { FIXTURE_ID } from "./fixture";
 // measurement. Not a product route; never imported by app code.
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
-/** Lets a script tell this server from any other process that holds the port. */
+/** Hash of index.html and assets/ of the built dist (path + bytes): a dirty build differs from its commit's build. */
+function distHash(outDir: string): string {
+  const hash = createHash("sha256");
+  const walk = (current: string): void => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else hash.update(path.relative(outDir, full)).update(fs.readFileSync(full));
+    }
+  };
+  walk(path.join(outDir, "assets"));
+  hash.update(fs.readFileSync(path.join(outDir, "index.html")));
+  return hash.digest("hex");
+}
+
+/** Lets a script tell this server from any other process that holds the port, and which build it serves. */
 function identity(): Plugin {
   const handler = (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
     if (request.url !== "/__perf-identity") return next();
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ fixture: FIXTURE_ID }));
+    response.end(JSON.stringify({ fixture: FIXTURE_ID, build: distHash(outDir) }));
   };
   return {
     name: "perf-identity",
@@ -22,10 +39,12 @@ function identity(): Plugin {
   };
 }
 
+const outDir = path.resolve(dir, "dist");
+
 export default defineConfig({
   root: dir,
   plugins: [identity()],
   resolve: { alias: { "~": path.resolve(dir, "../app") } },
   esbuild: { jsx: "automatic" },
-  build: { outDir: path.resolve(dir, "dist"), emptyOutDir: true, sourcemap: true },
+  build: { outDir, emptyOutDir: true, sourcemap: true },
 });

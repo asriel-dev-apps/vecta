@@ -6,7 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
 // server is started with --strictPort and never reused, and readiness is the
 // identity endpoint, so an unrelated process on the port fails the run instead
 // of being tested. Run: `pnpm --filter @vecta/web e2e:grid`.
-const PORT = 4177;
+const PORT = Number(process.env.PERF_PORT ?? 4177);
 const webDir = fileURLToPath(new URL("..", import.meta.url));
 
 export default defineConfig({
@@ -21,6 +21,8 @@ export default defineConfig({
   use: {
     ...devices["Desktop Chrome"],
     viewport: { width: 1440, height: 900 },
+    // Real wheel input is only compared against exact offsets with smooth scrolling off.
+    launchOptions: { args: ["--disable-smooth-scrolling"] },
     baseURL: `http://127.0.0.1:${PORT}`,
   },
   webServer: {
