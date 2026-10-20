@@ -304,10 +304,37 @@ export type ProjectCommand =
 
 const DEPENDENCY_TYPES: ReadonlySet<DependencyType> = new Set(["FS", "SS", "FF", "SF"]);
 
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  if (month === 4 || month === 6 || month === 9 || month === 11) return 30;
+  return 31;
+}
+
+// Same accept/reject set as `new Date(`${value}T00:00:00.000Z`)` plus the
+// `toISOString` round-trip, without allocating a Date per cell. A 5,000×45
+// rename was spending the bulk of validation here.
 function isIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  if (value.length !== 10 || value.charCodeAt(4) !== 45 || value.charCodeAt(7) !== 45) return false;
+  let year = 0;
+  for (let index = 0; index < 4; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+    year = year * 10 + (code - 48);
+  }
+  let month = 0;
+  for (let index = 5; index < 7; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+    month = month * 10 + (code - 48);
+  }
+  let day = 0;
+  for (let index = 8; index < 10; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+    day = day * 10 + (code - 48);
+  }
+  if (month < 1 || month > 12 || day < 1) return false;
+  return day <= daysInMonth(year, month);
 }
 
 function validateWholeNonNegative(value: number, message: string): void {
@@ -462,6 +489,14 @@ function validateProject(project: ProjectState): void {
     taskIds.add(task.id);
   }
 
+  const knownIsoDates = new Set<string>();
+  const cachedIsoDate = (value: string): boolean => {
+    if (knownIsoDates.has(value)) return true;
+    if (!isIsoDate(value)) return false;
+    knownIsoDates.add(value);
+    return true;
+  };
+
   for (const task of project.tasks) {
     if (task.name.trim().length === 0) {
       throw new Error(`Task ${task.id} requires a name`);
@@ -502,11 +537,13 @@ function validateProject(project: ProjectState): void {
     if (task.productId !== null && !productIds.has(task.productId)) {
       throw new Error(`Task ${task.id} references an unknown product: ${task.productId}`);
     }
-    for (const [date, value] of Object.entries(task.dailyPlan)) {
-      if (!isIsoDate(date)) {
+    const dailyPlan = task.dailyPlan;
+    for (const date of Object.keys(dailyPlan)) {
+      const value = dailyPlan[date];
+      if (!cachedIsoDate(date)) {
         throw new Error(`Task ${task.id} daily plan has an invalid date: ${date}`);
       }
-      if (!Number.isFinite(value) || value < 0) {
+      if (value === undefined || !Number.isFinite(value) || value < 0) {
         throw new Error(`Task ${task.id} daily plan values must be finite and >= 0`);
       }
     }
@@ -523,17 +560,17 @@ function validateProject(project: ProjectState): void {
     // daily, which is the same situation one column to the left.
     for (const [key, value] of Object.entries(task.datedActuals)) {
       const parts = parseDatedActualKey(key);
-      if (parts === null || !isIsoDate(parts.workDate) || !memberIds.has(parts.memberId)) {
+      if (parts === null || !cachedIsoDate(parts.workDate) || !memberIds.has(parts.memberId)) {
         throw new Error(`Task ${task.id} dated actuals have an invalid key: ${key}`);
       }
       if (!Number.isInteger(value) || value < 0) {
         throw new Error(`Task ${task.id} dated actuals must be whole minutes >= 0`);
       }
     }
-    if (task.actualStart !== null && !isIsoDate(task.actualStart)) {
+    if (task.actualStart !== null && !cachedIsoDate(task.actualStart)) {
       throw new Error(`Task ${task.id} has an invalid actual start`);
     }
-    if (task.actualFinish !== null && !isIsoDate(task.actualFinish)) {
+    if (task.actualFinish !== null && !cachedIsoDate(task.actualFinish)) {
       throw new Error(`Task ${task.id} has an invalid actual finish`);
     }
     if (

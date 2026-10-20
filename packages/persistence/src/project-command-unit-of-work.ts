@@ -47,6 +47,45 @@ type CommandTransaction = Parameters<
 const DEPENDENCY_TYPES = ["FF", "FS", "SF", "SS"] as const;
 type DependencyTypeName = (typeof DEPENDENCY_TYPES)[number];
 
+/** Shared empty map for loads that do not read stored cells. Frozen so a stray write throws. */
+const EMPTY_CELLS: Record<string, number> = Object.freeze({});
+
+/**
+ * Fields a `task.update` can change without reading `daily_plan` or
+ * `dated_actuals`. Anything else (or any other command) still loads the jsonb,
+ * because the change record or the scheduler needs the stored cells.
+ */
+const CELL_FREE_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  "parentId",
+  "sortOrder",
+  "name",
+  "processId",
+  "productId",
+  "note",
+  "contract",
+  "assigneeMemberId",
+  "plannedEffortMinutes",
+  "progressBasisPoints",
+  "actualEffortMinutes",
+  "prorationWeightBp",
+  "actualStart",
+  "actualFinish",
+  "dependencies",
+]);
+
+function commandsOmitStoredCells(
+  commands: readonly { readonly type: string; readonly changes?: object }[],
+): boolean {
+  if (commands.length === 0) return false;
+  for (const command of commands) {
+    if (command.type !== "task.update" || command.changes === undefined) return false;
+    for (const key of Object.keys(command.changes)) {
+      if (!CELL_FREE_UPDATE_FIELDS.has(key)) return false;
+    }
+  }
+  return true;
+}
+
 interface DependencyIdentity {
   readonly successorId: string;
   readonly predecessorId: string;
@@ -581,11 +620,51 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         throw new Error(`Unsupported application currency: ${projectRow.currency}`);
       }
 
-      const taskRows = await transaction
-        .select()
-        .from(task)
-        .where(and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId)))
-        .orderBy(asc(task.sortOrder));
+      const lastSnapshot = lastSnapshotOf(lockedRow);
+      const due = isSnapshotDue(actualRevision, lastSnapshot, interval);
+      // A name (or other scalar) edit cannot make an untouched daily cell invalid:
+      // the cell was validated on the write that stored it, and this command does
+      // not replace the map. Skip the jsonb unless we are about to snapshot the
+      // loaded state, which must still be the full plan.
+      const omitCells = lastSnapshot !== null && !due && commandsOmitStoredCells(request.commands);
+      const taskFilter = and(eq(task.tenantId, request.tenantId), eq(task.wbsId, request.projectId));
+      const taskScalars = {
+        id: task.id,
+        parentTaskId: task.parentTaskId,
+        sortOrder: task.sortOrder,
+        seq: task.seq,
+        name: task.name,
+        processId: task.processId,
+        productId: task.productId,
+        note: task.note,
+        contract: task.contract,
+        assigneeMemberId: task.assigneeMemberId,
+        plannedEffortMinutes: task.plannedEffortMinutes,
+        progressBasisPoints: task.progressBasisPoints,
+        actualEffortMinutes: task.actualEffortMinutes,
+        prorationWeightBp: task.prorationWeightBp,
+        actualStart: task.actualStart,
+        actualFinish: task.actualFinish,
+      };
+      const taskRows = omitCells
+        ? (
+            await transaction
+              .select(taskScalars)
+              .from(task)
+              .where(taskFilter)
+              .orderBy(asc(task.sortOrder))
+          ).map((row) => ({ ...row, dailyPlan: EMPTY_CELLS, datedActuals: EMPTY_CELLS }))
+        : (
+            await transaction
+              .select({ ...taskScalars, dailyPlan: task.dailyPlan, datedActuals: task.datedActuals })
+              .from(task)
+              .where(taskFilter)
+              .orderBy(asc(task.sortOrder))
+          ).map((row) => ({
+            ...row,
+            dailyPlan: row.dailyPlan as Record<string, number>,
+            datedActuals: row.datedActuals as Record<string, number>,
+          }));
       const calendarRows = await transaction
         .select()
         .from(calendar)
@@ -698,8 +777,6 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         })),
       };
 
-      const lastSnapshot = lastSnapshotOf(lockedRow);
-      const due = isSnapshotDue(actualRevision, lastSnapshot, interval);
       if (lastSnapshot === null) {
         await takeWbsSnapshot(
           transaction,

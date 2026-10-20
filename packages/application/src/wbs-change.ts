@@ -419,7 +419,7 @@ function putRow(rows: Map<string, RowBody>, target: string, row: RowBody): void 
   rows.set(target, row);
 }
 
-function flatten(state: ProjectState): FlatState {
+function flatten(state: ProjectState, taskIds?: ReadonlySet<string>): FlatState {
   const wbs = new Map<string, JsonValue>();
   wbs.set("name", state.name);
   wbs.set("projectStart", state.projectStart);
@@ -435,6 +435,7 @@ function flatten(state: ProjectState): FlatState {
   for (const product of state.products) putRow(rows, `product:${product.id}`, namedSortSnapshot(product));
   for (const template of state.templates) putRow(rows, `template:${template.id}`, templateSnapshot(template));
   for (const task of state.tasks) {
+    if (taskIds !== undefined && !taskIds.has(task.id)) continue;
     putRow(rows, `task:${task.id}`, taskSnapshot(task));
     for (const dependency of task.dependencies) {
       putRow(
@@ -683,8 +684,9 @@ function diffRow(target: string, beforeRow: RowBody | undefined, afterRow: RowBo
   }
 
   const rowMark = markByField.get("");
-  const wholesEqual = canonicalJson(beforeRow.whole) === canonicalJson(afterRow.whole);
-  if (rowMark === "direct" || (rowMark === "structural" && !wholesEqual)) {
+  if (rowMark === "direct") {
+    changes.push(toChange(target, "", beforeRow.whole, afterRow.whole, rowMark));
+  } else if (rowMark === "structural" && canonicalJson(beforeRow.whole) !== canonicalJson(afterRow.whole)) {
     changes.push(toChange(target, "", beforeRow.whole, afterRow.whole, rowMark));
   }
   return changes;
@@ -729,6 +731,40 @@ function diffFlat(before: FlatState, after: FlatState, marks: readonly Mark[]): 
   return changes;
 }
 
+function markedTaskIds(marks: readonly Mark[]): Set<string> {
+  const ids = new Set<string>();
+  for (const mark of marks) {
+    const target = mark.target;
+    if (target.startsWith("task:")) {
+      const id = target.slice("task:".length);
+      if (id.length > 0) ids.add(id);
+      continue;
+    }
+    if (!target.startsWith("dependency:")) continue;
+    const body = target.slice("dependency:".length);
+    const arrow = body.indexOf("<-");
+    if (arrow > 0) ids.add(body.slice(0, arrow));
+  }
+  return ids;
+}
+
+/** Tasks whose snapshots can differ, or that a mark forces into the record. */
+function tasksToDiff(before: ProjectState, after: ProjectState, marks: readonly Mark[]): Set<string> {
+  const marked = markedTaskIds(marks);
+  const beforeById = new Map<string, ProjectTask>();
+  for (const task of before.tasks) beforeById.set(task.id, task);
+  const afterById = new Map<string, ProjectTask>();
+  for (const task of after.tasks) afterById.set(task.id, task);
+  const ids = new Set<string>();
+  for (const [id, task] of beforeById) {
+    if (marked.has(id) || task !== afterById.get(id)) ids.add(id);
+  }
+  for (const id of afterById.keys()) {
+    if (!beforeById.has(id)) ids.add(id);
+  }
+  return ids;
+}
+
 export function diffOperation(
   before: ProjectState,
   commands: readonly ProjectCommand[],
@@ -740,9 +776,12 @@ export function diffOperation(
     marks.push(...classify(after, command, next));
     after = next;
   }
+  const merged = mergeMarks(marks);
+  const taskIds = tasksToDiff(before, after, merged);
+  const change = diffFlat(flatten(before, taskIds), flatten(after, taskIds), merged);
   return {
     after,
-    change: { format: WBS_CHANGE_FORMAT, changes: diffFlat(flatten(before), flatten(after), mergeMarks(marks)) },
+    change: { format: WBS_CHANGE_FORMAT, changes: change },
   };
 }
 
