@@ -17,7 +17,7 @@
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
     "@hono/zod-openapi": "1.5.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@tanstack/react-table": "8.21.3",
     "@tanstack/react-virtual": "3.14.8",
     "@vecta/application": "workspace:*",
@@ -43,7 +43,7 @@
     "@types/react-dom": "19.2.3",
     "happy-dom": "20.11.1",
     "typescript": "6.0.3",
-    "vite": "8.1.5",
+    "vite": "8.1.6",
     "vite-tsconfig-paths": "6.1.1",
     "vitest": "4.1.10",
     "wrangler": "4.114.0"
