@@ -119,9 +119,7 @@ function script(record: PersistedProjectRecord): readonly (readonly ProjectComma
     /* 12 */ [{ type: "member.update", memberId: record.members[0]!.id, changes: { name: "Renamed member" } }],
     /* 13 */ [{ type: "baseline.publish", acknowledgeUnplottedTasks: true }],
     /* 14 */ [
-      newTask(PASTE_IDS[0]!, 300, "Pasted 1"),
-      newTask(PASTE_IDS[1]!, 301, "Pasted 2", [{ predecessorId: PASTE_IDS[0]!, type: "FS", lagWorkingDays: 0 }]),
-      newTask(PASTE_IDS[2]!, 302, "Pasted 3"),
+      newTask(PASTE_IDS[0]!, 300, "Pasted 1", [{ predecessorId: l0.id, type: "FS", lagWorkingDays: 0 }]),
     ],
   ];
 }

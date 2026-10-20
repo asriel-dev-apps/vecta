@@ -74,6 +74,9 @@ export function createProjectCommandService(
       ) {
         throw new Error("Project command envelope is invalid");
       }
+      if (request.commands.length > 1 && request.commands.some((command) => command.type !== "task.update")) {
+        throw new ProjectCommandValidationError("Only task.update commands may be combined in one operation");
+      }
 
       return unitOfWork.execute(request);
     },

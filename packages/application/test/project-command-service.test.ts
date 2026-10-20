@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createProjectCommandService,
   diffOperation,
+  ProjectCommandValidationError,
   type ProjectCommandExecution,
   type ProjectCommandRequest,
   type ProjectCommandUnitOfWork,
@@ -95,5 +96,42 @@ describe("ProjectCommandService", () => {
       progressBasisPoints: 5_500,
       actualEffortMinutes: 900,
     });
+  });
+
+  it("allows several task.update commands and rejects any other mix", async () => {
+    const taskId = initialProject.tasks[0]!.id;
+    const request = {
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      projectId: initialProject.id,
+      expectedRevision: 4n,
+      operationId: "command-batch",
+      actor: { type: "HUMAN" as const, id: "user-001" },
+    };
+    const updating = new InMemoryProjectCommandUnitOfWork();
+    await createProjectCommandService(updating).execute({
+      ...request,
+      commands: [
+        { type: "task.update", taskId, changes: { name: "One" } },
+        { type: "task.update", taskId, changes: { name: "Two" } },
+      ],
+    });
+    expect(updating.readProject().tasks[0]?.name).toBe("Two");
+
+    const mixed = new InMemoryProjectCommandUnitOfWork();
+    let error: unknown;
+    try {
+      await createProjectCommandService(mixed).execute({
+        ...request,
+        commands: [
+          { type: "task.update", taskId, changes: { name: "One" } },
+          { type: "baseline.publish" },
+        ],
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ProjectCommandValidationError);
+    expect(error).toMatchObject({ message: "Only task.update commands may be combined in one operation" });
+    expect(mixed.readProject().tasks[0]?.name).toBe("Subtask");
   });
 });

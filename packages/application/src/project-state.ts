@@ -738,6 +738,38 @@ export function unplottedLeafTasks(state: ProjectState): readonly ProjectTask[] 
   });
 }
 
+/**
+ * Fields a `task.update` can change without reading stored `dailyPlan` or
+ * `datedActuals`. The transition does not derive cells from these. The
+ * persistence fast path skips the jsonb columns only when every command in
+ * the operation returns false here.
+ */
+const CELL_FREE_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  "parentId",
+  "sortOrder",
+  "name",
+  "processId",
+  "productId",
+  "note",
+  "contract",
+  "assigneeMemberId",
+  "plannedEffortMinutes",
+  "progressBasisPoints",
+  "actualEffortMinutes",
+  "prorationWeightBp",
+  "actualStart",
+  "actualFinish",
+  "dependencies",
+]);
+
+export function commandReadsStoredCells(command: ProjectCommand): boolean {
+  if (command.type !== "task.update") return true;
+  for (const key of Object.keys(command.changes)) {
+    if (!CELL_FREE_UPDATE_FIELDS.has(key)) return true;
+  }
+  return false;
+}
+
 export function applyProjectCommand(
   state: ProjectState,
   command: ProjectCommand,

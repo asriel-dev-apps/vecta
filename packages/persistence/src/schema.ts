@@ -367,8 +367,7 @@ export const task = pgTable(
     prorationWeightBp: integer("proration_weight_bp"),
     dailyPlan: jsonb("daily_plan").notNull().default(sql`'{}'::jsonb`),
     // Dated expended effort (Design 0011): `"YYYY-MM-DD|<memberId>"` → minutes.
-    // The actuals side's `daily_plan`. A change that touches any cell rewrites
-    // this task's whole value from the after state.
+    // The actuals side's `daily_plan`. Cell entries patch this jsonb in place.
     datedActuals: jsonb("dated_actuals").notNull().default(sql`'{}'::jsonb`),
     actualStart: date("actual_start", { mode: "string" }),
     actualFinish: date("actual_finish", { mode: "string" }),

@@ -5,11 +5,13 @@ import {
   canonicalJson,
   canonicalWbsState,
   creationChange,
+  decodeWbsChange,
   deriveSubtaskId,
   diffOperation,
   emptyWbsState,
   hashWbsState,
   readWbsChange,
+  WbsChangeCorruptError,
   type JsonValue,
   type ProjectCommand,
   type ProjectState,
@@ -803,6 +805,28 @@ describe("diffOperation: several commands", () => {
     });
   });
 
+  it("remove then re-add of one edge records the row and the user's lag as direct", () => {
+    expect(
+      run(S0, [
+        { type: "task.update", taskId: "t3", changes: { dependencies: [] } },
+        {
+          type: "task.update",
+          taskId: "t3",
+          changes: { dependencies: [{ predecessorId: "t2", type: "FS", lagWorkingDays: 2 }] },
+        },
+      ]).changes,
+    ).toStrictEqual([
+      {
+        target: "dependency:t3<-t2:FS",
+        field: "",
+        before: { predecessorId: "t2", type: "FS", lagWorkingDays: 0 },
+        after: { predecessorId: "t2", type: "FS", lagWorkingDays: 2 },
+        kind: "direct",
+      },
+      { target: "dependency:t3<-t2:FS", field: "lagWorkingDays", before: 0, after: 2, kind: "direct" },
+    ]);
+  });
+
   it("kind merge: direct then derived stays direct", () => {
     const changes = run(G, [
       { type: "task.update", taskId: C0, changes: { plannedEffortMinutes: 77 } },
@@ -1021,6 +1045,15 @@ describe("applyWbsChange guards", () => {
     expect(canonicalWbsState(applyWbsChange(frozen, rename))).not.toBe(before);
     expect(canonicalWbsState(applyWbsChange(frozen, generate))).not.toBe(before);
     expect(canonicalWbsState(frozen)).toBe(before);
+  });
+
+  it("rejects a task field the record cannot name, before any value is applied", () => {
+    expect(() =>
+      decodeWbsChange({
+        format: 1,
+        changes: [{ target: "task:t2", field: "notAColumn", after: 1, kind: "direct" }],
+      }),
+    ).toThrow(WbsChangeCorruptError);
   });
 
   it("an after-less entry removes the cell instead of storing undefined", () => {

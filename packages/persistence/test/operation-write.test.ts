@@ -814,6 +814,55 @@ describe("operation write (one operation, one transaction, one revision)", () =>
       );
     }, 30_000);
 
+    it("remove and re-add of b<-a:FS in one batch updates the edge and records the lag as direct", async () => {
+      const record = richRecord();
+      await seed(record);
+      const predecessor = leafAt(record, 0);
+      const successor = leafAt(record, 1);
+      const target = `dependency:${successor.id}<-${predecessor.id}:FS`;
+      const beforeEdge = { predecessorId: predecessor.id, type: "FS" as const, lagWorkingDays: 0 };
+      const afterEdge = { predecessorId: predecessor.id, type: "FS" as const, lagWorkingDays: 2 };
+      const commands: ProjectCommand[] = [
+        { type: "task.update", taskId: successor.id, changes: { dependencies: [] } },
+        { type: "task.update", taskId: successor.id, changes: { dependencies: [afterEdge] } },
+      ];
+      const before = await readWbs(record);
+      const rows = await probeRows(RECEIPT_INSERT, () => operation(record, 1n, "op-edge-readd", commands));
+      const rec = await storedChange(record, 2);
+      const after = await readWbs(record);
+      expect(rec.changes).toEqual([
+        { target, field: "", before: beforeEdge, after: afterEdge, kind: "direct" },
+        { target, field: "lagWorkingDays", before: 0, after: 2, kind: "direct" },
+      ]);
+      expect(await hashWbsState(applyWbsChange(before, rec))).toBe(await hashWbsState(after));
+      const stored = await client.query<{
+        predecessor_task_id: string;
+        successor_task_id: string;
+        type: string;
+        lag_working_days: number;
+      }>(
+        `select predecessor_task_id, successor_task_id, type, lag_working_days::int as lag_working_days
+           from task_dependency
+          where wbs_id = $1 and successor_task_id = $2 and predecessor_task_id = $3 and type = 'FS'`,
+        [record.project.id, successor.id, predecessor.id],
+      );
+      expect(stored.rows).toEqual([
+        {
+          predecessor_task_id: predecessor.id,
+          successor_task_id: successor.id,
+          type: "FS",
+          lag_working_days: 2,
+        },
+      ]);
+      expect(expectedRows(rows, {
+        task_dependency: { ins: 0, upd: 1, del: 0 },
+        wbs: { ins: 0, upd: 1, del: 0 },
+        command_receipt: { ins: 1, upd: 0, del: 0 },
+        audit_event: { ins: 1, upd: 0, del: 0 },
+        wbs_change: { ins: 1, upd: 0, del: 0 },
+      })).toEqual(rows);
+    }, 30_000);
+
     it("baseline.publish freezes one row per leaf (as baseline-publish.test.ts pins)", async () => {
       const record = richRecord();
       await seed(record);

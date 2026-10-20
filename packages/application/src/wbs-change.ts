@@ -86,7 +86,7 @@ interface Draft {
   nextBaselineVersion: number;
 }
 
-const WBS_FIELDS = [
+export const WBS_FIELDS = [
   "name",
   "projectStart",
   "statusDate",
@@ -95,9 +95,9 @@ const WBS_FIELDS = [
   "nextBaselineVersion",
 ] as const;
 
-type WbsField = (typeof WBS_FIELDS)[number];
+export type WbsField = (typeof WBS_FIELDS)[number];
 
-const TASK_SCALARS = [
+export const TASK_SCALARS = [
   "parentId",
   "sortOrder",
   "seq",
@@ -115,7 +115,7 @@ const TASK_SCALARS = [
   "actualFinish",
 ] as const;
 
-type TaskScalar = (typeof TASK_SCALARS)[number];
+export type TaskScalar = (typeof TASK_SCALARS)[number];
 
 const DEPENDENCY_TYPES: readonly DependencyType[] = ["FF", "FS", "SF", "SS"];
 
@@ -487,11 +487,17 @@ function dependencyEdgeMarks(successorId: string, before: readonly ProjectDepend
   }
   const marks: Mark[] = [];
   for (const target of new Set([...beforeByTarget.keys(), ...afterByTarget.keys()])) {
-    if (!beforeByTarget.has(target) || !afterByTarget.has(target)) {
+    const beforeEdge = beforeByTarget.get(target);
+    const afterEdge = afterByTarget.get(target);
+    if (beforeEdge === undefined || afterEdge === undefined) {
       marks.push(direct(target, ""));
+      // An added edge includes the lag the user put on it. A remove and re-add
+      // in one operation leaves the row on both sides of the net diff, and that
+      // lag has to stay direct rather than fall out as derived.
+      if (afterEdge !== undefined) marks.push(direct(target, "lagWorkingDays"));
       continue;
     }
-    if (beforeByTarget.get(target)!.lagWorkingDays !== afterByTarget.get(target)!.lagWorkingDays) {
+    if (beforeEdge.lagWorkingDays !== afterEdge.lagWorkingDays) {
       marks.push(direct(target, "lagWorkingDays"));
     }
   }
@@ -750,16 +756,9 @@ function diffFlat(before: FlatState, after: FlatState, marks: readonly Mark[]): 
 function markedTaskIds(marks: readonly Mark[]): Set<string> {
   const ids = new Set<string>();
   for (const mark of marks) {
-    const target = mark.target;
-    if (target.startsWith("task:")) {
-      const id = target.slice("task:".length);
-      if (id.length > 0) ids.add(id);
-      continue;
-    }
-    if (!target.startsWith("dependency:")) continue;
-    const body = target.slice("dependency:".length);
-    const arrow = body.indexOf("<-");
-    if (arrow > 0) ids.add(body.slice(0, arrow));
+    const target = readChangeTarget(mark.target);
+    if (target?.kind === "task") ids.add(target.id);
+    else if (target?.kind === "dependency") ids.add(target.successorId);
   }
   return ids;
 }
@@ -1219,6 +1218,43 @@ interface ParsedDependencyTarget {
   readonly type: DependencyType;
 }
 
+const ROW_TARGET_KINDS = ["task", "calendar", "member", "process", "product", "template"] as const;
+type RowTargetKind = (typeof ROW_TARGET_KINDS)[number];
+
+export type ChangeTarget =
+  | { readonly kind: "wbs" }
+  | { readonly kind: RowTargetKind; readonly id: string }
+  | ({ readonly kind: "dependency" } & ParsedDependencyTarget);
+
+/**
+ * The one reader of a change-record target (`task:<id>`, `dependency:<s><-<p>:<type>`, …).
+ * Replay and the table writer both call this; the grammar is not copied beside either.
+ */
+export function changeTarget(target: string): ChangeTarget {
+  const decoded = readChangeTarget(target);
+  if (decoded !== undefined) return decoded;
+  for (const kind of ROW_TARGET_KINDS) {
+    if (target.startsWith(`${kind}:`) && target.length === kind.length + 1) {
+      throw invalid(`empty id in ${target}`);
+    }
+  }
+  throw invalid(`unknown target ${target}`);
+}
+
+function readChangeTarget(target: string): ChangeTarget | undefined {
+  if (target === "wbs") return { kind: "wbs" };
+  const dependency = parseDependencyTarget(target);
+  if (dependency !== undefined) return { kind: "dependency", ...dependency };
+  for (const kind of ROW_TARGET_KINDS) {
+    const prefix = `${kind}:`;
+    if (!target.startsWith(prefix)) continue;
+    const id = target.slice(prefix.length);
+    if (id.length === 0) return undefined;
+    return { kind, id };
+  }
+  return undefined;
+}
+
 function parseDependencyTarget(target: string): ParsedDependencyTarget | undefined {
   const prefix = "dependency:";
   if (!target.startsWith(prefix)) return undefined;
@@ -1281,10 +1317,18 @@ function applyDependencyField(draft: Draft, parsed: ParsedDependencyTarget, fiel
   replaceTask(draft, parsed.successorId, { ...current, dependencies });
 }
 
-function rowId(target: string, prefix: string): string {
-  const id = target.slice(prefix.length);
-  if (id.length === 0) throw invalid(`empty id in ${target}`);
-  return id;
+function parseMemberRow(id: string, value: JsonValue): ProjectMember {
+  const record = expectObject(value, `member:${id}`);
+  expectExact(record, ["calendarId", "costRateMinorPerHour", "dailyCapacityMinutes", "id", "name"], `member:${id}`);
+  const rowIdValue = expectString(requiredKey(record, "id", `member:${id}`), "id");
+  if (rowIdValue !== id) throw invalid(`member:${id} id`);
+  return {
+    id,
+    name: expectString(requiredKey(record, "name", id), "name"),
+    calendarId: expectString(requiredKey(record, "calendarId", id), "calendarId"),
+    dailyCapacityMinutes: expectNumber(requiredKey(record, "dailyCapacityMinutes", id), "dailyCapacityMinutes"),
+    costRateMinorPerHour: expectNullableNumber(requiredKey(record, "costRateMinorPerHour", id), "costRateMinorPerHour"),
+  };
 }
 
 function applyMemberRow(draft: Draft, id: string, after: MaybeValue): void {
@@ -1292,17 +1336,7 @@ function applyMemberRow(draft: Draft, id: string, after: MaybeValue): void {
     draft.members = draft.members.filter((member) => member.id !== id);
     return;
   }
-  const record = expectObject(after, `member:${id}`);
-  expectExact(record, ["calendarId", "costRateMinorPerHour", "dailyCapacityMinutes", "id", "name"], `member:${id}`);
-  const rowIdValue = expectString(requiredKey(record, "id", `member:${id}`), "id");
-  if (rowIdValue !== id) throw invalid(`member:${id} id`);
-  const member: ProjectMember = {
-    id,
-    name: expectString(requiredKey(record, "name", id), "name"),
-    calendarId: expectString(requiredKey(record, "calendarId", id), "calendarId"),
-    dailyCapacityMinutes: expectNumber(requiredKey(record, "dailyCapacityMinutes", id), "dailyCapacityMinutes"),
-    costRateMinorPerHour: expectNullableNumber(requiredKey(record, "costRateMinorPerHour", id), "costRateMinorPerHour"),
-  };
+  const member = parseMemberRow(id, after);
   const index = draft.members.findIndex((entry) => entry.id === id);
   if (index < 0) draft.members.push(member);
   else draft.members[index] = member;
@@ -1333,21 +1367,25 @@ function applyMemberField(draft: Draft, id: string, field: string, after: MaybeV
   draft.members[index] = next;
 }
 
-function applyCalendarRow(draft: Draft, id: string, after: MaybeValue): void {
-  if (after === ABSENT) {
-    draft.calendars = draft.calendars.filter((calendar) => calendar.id !== id);
-    return;
-  }
-  const record = expectObject(after, `calendar:${id}`);
+function parseCalendarRow(id: string, value: JsonValue): ProjectCalendar {
+  const record = expectObject(value, `calendar:${id}`);
   expectExact(record, ["id", "name", "nonWorkingDates", "workingWeekdays"], `calendar:${id}`);
   const rowIdValue = expectString(requiredKey(record, "id", `calendar:${id}`), "id");
   if (rowIdValue !== id) throw invalid(`calendar:${id} id`);
-  const calendar: ProjectCalendar = {
+  return {
     id,
     name: expectString(requiredKey(record, "name", id), "name"),
     workingWeekdays: expectNumberArray(requiredKey(record, "workingWeekdays", id), "workingWeekdays"),
     nonWorkingDates: expectStringArray(requiredKey(record, "nonWorkingDates", id), "nonWorkingDates"),
   };
+}
+
+function applyCalendarRow(draft: Draft, id: string, after: MaybeValue): void {
+  if (after === ABSENT) {
+    draft.calendars = draft.calendars.filter((calendar) => calendar.id !== id);
+    return;
+  }
+  const calendar = parseCalendarRow(id, after);
   const index = draft.calendars.findIndex((entry) => entry.id === id);
   if (index < 0) draft.calendars.push(calendar);
   else draft.calendars[index] = calendar;
@@ -1375,6 +1413,22 @@ function applyCalendarField(draft: Draft, id: string, field: string, after: Mayb
   draft.calendars[index] = next;
 }
 
+function parseNamedSortRow(
+  collection: "processes" | "products",
+  id: string,
+  value: JsonValue,
+): { id: string; name: string; sortOrder: number } {
+  const record = expectObject(value, `${collection}:${id}`);
+  expectExact(record, ["id", "name", "sortOrder"], `${collection}:${id}`);
+  const rowIdValue = expectString(requiredKey(record, "id", id), "id");
+  if (rowIdValue !== id) throw invalid(`${collection}:${id} id`);
+  return {
+    id,
+    name: expectString(requiredKey(record, "name", id), "name"),
+    sortOrder: expectNumber(requiredKey(record, "sortOrder", id), "sortOrder"),
+  };
+}
+
 function applyNamedSortRow(
   collection: "processes" | "products",
   draft: Draft,
@@ -1386,15 +1440,7 @@ function applyNamedSortRow(
     draft[collection] = items.filter((entry) => entry.id !== id);
     return;
   }
-  const record = expectObject(after, `${collection}:${id}`);
-  expectExact(record, ["id", "name", "sortOrder"], `${collection}:${id}`);
-  const rowIdValue = expectString(requiredKey(record, "id", id), "id");
-  if (rowIdValue !== id) throw invalid(`${collection}:${id} id`);
-  const row = {
-    id,
-    name: expectString(requiredKey(record, "name", id), "name"),
-    sortOrder: expectNumber(requiredKey(record, "sortOrder", id), "sortOrder"),
-  };
+  const row = parseNamedSortRow(collection, id, after);
   const index = items.findIndex((entry) => entry.id === id);
   if (index < 0) items.push(row);
   else items[index] = row;
@@ -1417,21 +1463,25 @@ function applyNamedSortField(
   else throw invalid(`unknown ${collection} field ${field}`);
 }
 
-function applyTemplateRow(draft: Draft, id: string, after: MaybeValue): void {
-  if (after === ABSENT) {
-    draft.templates = draft.templates.filter((template) => template.id !== id);
-    return;
-  }
-  const record = expectObject(after, `template:${id}`);
+function parseTemplateRow(id: string, value: JsonValue): SubtaskTemplate {
+  const record = expectObject(value, `template:${id}`);
   expectExact(record, ["id", "name", "sortOrder", "subtasks"], `template:${id}`);
   const rowIdValue = expectString(requiredKey(record, "id", id), "id");
   if (rowIdValue !== id) throw invalid(`template:${id} id`);
-  const template: SubtaskTemplate = {
+  return {
     id,
     name: expectString(requiredKey(record, "name", id), "name"),
     sortOrder: expectNumber(requiredKey(record, "sortOrder", id), "sortOrder"),
     subtasks: jsonToSubtasks(requiredKey(record, "subtasks", id)),
   };
+}
+
+function applyTemplateRow(draft: Draft, id: string, after: MaybeValue): void {
+  if (after === ABSENT) {
+    draft.templates = draft.templates.filter((template) => template.id !== id);
+    return;
+  }
+  const template = parseTemplateRow(id, after);
   const index = draft.templates.findIndex((entry) => entry.id === id);
   if (index < 0) draft.templates.push(template);
   else draft.templates[index] = template;
@@ -1459,59 +1509,382 @@ function applyTemplateField(draft: Draft, id: string, field: string, after: Mayb
   draft.templates[index] = next;
 }
 
+const MEMBER_FIELDS = ["name", "calendarId", "dailyCapacityMinutes", "costRateMinorPerHour"] as const;
+type MemberField = (typeof MEMBER_FIELDS)[number];
+const CALENDAR_FIELDS = ["name", "workingWeekdays", "nonWorkingDates"] as const;
+type CalendarField = (typeof CALENDAR_FIELDS)[number];
+const NAMED_FIELDS = ["name", "sortOrder"] as const;
+type NamedField = (typeof NAMED_FIELDS)[number];
+const TEMPLATE_FIELDS = ["name", "sortOrder", "subtasks"] as const;
+type TemplateField = (typeof TEMPLATE_FIELDS)[number];
+
+/** One decoded record entry. Replay applies it; the table writer turns it into SQL. */
+export type DecodedEntry =
+  | { readonly kind: "wbs"; readonly field: WbsField; readonly value: string | number }
+  | {
+      readonly kind: "task-row";
+      readonly id: string;
+      readonly existed: boolean;
+      readonly row: Omit<ProjectTask, "dependencies"> | null;
+    }
+  | { readonly kind: "task-scalar"; readonly id: string; readonly field: TaskScalar; readonly value: string | number | null }
+  | {
+      readonly kind: "task-cell";
+      readonly id: string;
+      readonly map: "dailyPlan" | "datedActuals";
+      readonly key: string;
+      readonly value: number | null;
+    }
+  | {
+      readonly kind: "dependency-row";
+      readonly successorId: string;
+      readonly predecessorId: string;
+      readonly type: DependencyType;
+      readonly existed: boolean;
+      readonly lagWorkingDays: number | null;
+    }
+  | {
+      readonly kind: "dependency-lag";
+      readonly successorId: string;
+      readonly predecessorId: string;
+      readonly type: DependencyType;
+      readonly lagWorkingDays: number;
+    }
+  | {
+      readonly kind: "dependency-type";
+      readonly successorId: string;
+      readonly predecessorId: string;
+      readonly type: DependencyType;
+    }
+  | { readonly kind: "member-row"; readonly id: string; readonly existed: boolean; readonly row: ProjectMember | null }
+  | { readonly kind: "member-field"; readonly id: string; readonly field: MemberField; readonly value: string | number | null }
+  | { readonly kind: "calendar-row"; readonly id: string; readonly existed: boolean; readonly row: ProjectCalendar | null }
+  | {
+      readonly kind: "calendar-field";
+      readonly id: string;
+      readonly field: CalendarField;
+      readonly value: string | readonly number[] | readonly string[];
+    }
+  | {
+      readonly kind: "named-row";
+      readonly master: "process" | "product";
+      readonly id: string;
+      readonly existed: boolean;
+      readonly row: { readonly id: string; readonly name: string; readonly sortOrder: number } | null;
+    }
+  | {
+      readonly kind: "named-field";
+      readonly master: "process" | "product";
+      readonly id: string;
+      readonly field: NamedField;
+      readonly value: string | number;
+    }
+  | { readonly kind: "template-row"; readonly id: string; readonly existed: boolean; readonly row: SubtaskTemplate | null }
+  | {
+      readonly kind: "template-field";
+      readonly id: string;
+      readonly field: TemplateField;
+      readonly value: string | number | readonly SubtaskTemplateStep[];
+    };
+
+function missingAfter(entry: FieldChange): boolean {
+  return !Object.hasOwn(entry, "after");
+}
+
+function rowExisted(entry: FieldChange): boolean {
+  return Object.hasOwn(entry, "before");
+}
+
+function presentAfter(entry: FieldChange, label: string): JsonValue {
+  if (missingAfter(entry) || entry.after === undefined) throw invalid(label);
+  return entry.after;
+}
+
+function readTaskScalar(field: TaskScalar, value: JsonValue): string | number | null {
+  switch (field) {
+    case "parentId":
+    case "processId":
+    case "productId":
+    case "assigneeMemberId":
+    case "actualStart":
+    case "actualFinish":
+      return expectNullableString(value, field);
+    case "name":
+    case "note":
+    case "contract":
+      return expectString(value, field);
+    case "sortOrder":
+    case "seq":
+    case "plannedEffortMinutes":
+    case "progressBasisPoints":
+    case "actualEffortMinutes":
+      return expectNumber(value, field);
+    case "prorationWeightBp":
+      return expectNullableNumber(value, field);
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeWbsEntry(entry: FieldChange): DecodedEntry {
+  const field = entry.field;
+  if (!isWbsField(field)) throw invalid(`unknown wbs field ${field}`);
+  if (missingAfter(entry)) throw invalid(`wbs.${field} cannot be removed`);
+  const value = presentAfter(entry, field);
+  switch (field) {
+    case "name":
+    case "projectStart":
+    case "statusDate":
+    case "defaultCalendarId":
+      return { kind: "wbs", field, value: expectString(value, field) };
+    case "nextTaskSeq":
+    case "nextBaselineVersion":
+      return { kind: "wbs", field, value: expectNumber(value, field) };
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeCell(
+  entry: FieldChange,
+): { map: "dailyPlan" | "datedActuals"; key: string; value: number | null } | undefined {
+  const daily = entry.field.startsWith("dailyPlan.");
+  const actual = entry.field.startsWith("datedActuals.");
+  if (!daily && !actual) return undefined;
+  const map = daily ? "dailyPlan" : "datedActuals";
+  const key = entry.field.slice(map.length + 1);
+  if (key.length === 0) throw invalid(`${map} cell`);
+  if (missingAfter(entry)) return { map, key, value: null };
+  return { map, key, value: expectNumber(presentAfter(entry, entry.field), entry.field) };
+}
+
+function decodeTask(id: string, entry: FieldChange): DecodedEntry {
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "task-row", id, existed: rowExisted(entry), row: null };
+    return { kind: "task-row", id, existed: rowExisted(entry), row: parseTaskRow(id, presentAfter(entry, `task:${id}`)) };
+  }
+  const cell = decodeCell(entry);
+  if (cell !== undefined) return { kind: "task-cell", id, ...cell };
+  if (!isTaskScalar(entry.field)) throw invalid(`unknown task field ${entry.field}`);
+  if (missingAfter(entry)) throw invalid(`task field ${entry.field} cannot be removed`);
+  return { kind: "task-scalar", id, field: entry.field, value: readTaskScalar(entry.field, presentAfter(entry, entry.field)) };
+}
+
+function decodeDependency(target: ParsedDependencyTarget, entry: FieldChange): DecodedEntry {
+  const identity = { successorId: target.successorId, predecessorId: target.predecessorId, type: target.type };
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "dependency-row", ...identity, existed: rowExisted(entry), lagWorkingDays: null };
+    const row = parseDependencyRow(target.predecessorId, target.type, presentAfter(entry, "dependency"));
+    return { kind: "dependency-row", ...identity, existed: rowExisted(entry), lagWorkingDays: row.lagWorkingDays };
+  }
+  if (entry.field === "lagWorkingDays") {
+    if (missingAfter(entry)) throw invalid("lagWorkingDays cannot be removed");
+    return { kind: "dependency-lag", ...identity, lagWorkingDays: expectNumber(presentAfter(entry, entry.field), entry.field) };
+  }
+  if (entry.field === "type") {
+    if (missingAfter(entry)) throw invalid("type cannot be removed");
+    const type = expectDependencyType(presentAfter(entry, entry.field), entry.field);
+    if (type !== target.type) throw invalid("dependency type is part of its identity");
+    return { kind: "dependency-type", ...identity };
+  }
+  throw invalid(`unknown dependency field ${entry.field}`);
+}
+
+function decodeMember(id: string, entry: FieldChange): DecodedEntry {
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "member-row", id, existed: rowExisted(entry), row: null };
+    return { kind: "member-row", id, existed: rowExisted(entry), row: parseMemberRow(id, presentAfter(entry, `member:${id}`)) };
+  }
+  if (!(MEMBER_FIELDS as readonly string[]).includes(entry.field)) throw invalid(`unknown member field ${entry.field}`);
+  const field = entry.field as MemberField;
+  if (missingAfter(entry)) throw invalid(`member field ${field} cannot be removed`);
+  const value = presentAfter(entry, field);
+  switch (field) {
+    case "name":
+    case "calendarId":
+      return { kind: "member-field", id, field, value: expectString(value, field) };
+    case "dailyCapacityMinutes":
+      return { kind: "member-field", id, field, value: expectNumber(value, field) };
+    case "costRateMinorPerHour":
+      return { kind: "member-field", id, field, value: expectNullableNumber(value, field) };
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeCalendar(id: string, entry: FieldChange): DecodedEntry {
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "calendar-row", id, existed: rowExisted(entry), row: null };
+    return { kind: "calendar-row", id, existed: rowExisted(entry), row: parseCalendarRow(id, presentAfter(entry, `calendar:${id}`)) };
+  }
+  if (!(CALENDAR_FIELDS as readonly string[]).includes(entry.field)) throw invalid(`unknown calendar field ${entry.field}`);
+  const field = entry.field as CalendarField;
+  if (missingAfter(entry)) throw invalid(`calendar field ${field} cannot be removed`);
+  const value = presentAfter(entry, field);
+  switch (field) {
+    case "name":
+      return { kind: "calendar-field", id, field, value: expectString(value, field) };
+    case "workingWeekdays":
+      return { kind: "calendar-field", id, field, value: expectNumberArray(value, field) };
+    case "nonWorkingDates":
+      return { kind: "calendar-field", id, field, value: expectStringArray(value, field) };
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeNamed(master: "process" | "product", id: string, entry: FieldChange): DecodedEntry {
+  const collection = master === "process" ? "processes" : "products";
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "named-row", master, id, existed: rowExisted(entry), row: null };
+    return {
+      kind: "named-row",
+      master,
+      id,
+      existed: rowExisted(entry),
+      row: parseNamedSortRow(collection, id, presentAfter(entry, `${collection}:${id}`)),
+    };
+  }
+  if (!(NAMED_FIELDS as readonly string[]).includes(entry.field)) throw invalid(`unknown ${collection} field ${entry.field}`);
+  const field = entry.field as NamedField;
+  if (missingAfter(entry)) throw invalid(`${collection} field ${field} cannot be removed`);
+  const value = presentAfter(entry, field);
+  switch (field) {
+    case "name":
+      return { kind: "named-field", master, id, field, value: expectString(value, field) };
+    case "sortOrder":
+      return { kind: "named-field", master, id, field, value: expectNumber(value, field) };
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeTemplate(id: string, entry: FieldChange): DecodedEntry {
+  if (entry.field === "") {
+    if (missingAfter(entry)) return { kind: "template-row", id, existed: rowExisted(entry), row: null };
+    return { kind: "template-row", id, existed: rowExisted(entry), row: parseTemplateRow(id, presentAfter(entry, `template:${id}`)) };
+  }
+  if (!(TEMPLATE_FIELDS as readonly string[]).includes(entry.field)) throw invalid(`unknown template field ${entry.field}`);
+  const field = entry.field as TemplateField;
+  if (missingAfter(entry)) throw invalid(`template field ${field} cannot be removed`);
+  const value = presentAfter(entry, field);
+  switch (field) {
+    case "name":
+      return { kind: "template-field", id, field, value: expectString(value, field) };
+    case "sortOrder":
+      return { kind: "template-field", id, field, value: expectNumber(value, field) };
+    case "subtasks":
+      return { kind: "template-field", id, field, value: jsonToSubtasks(value) };
+    default: {
+      const unreachable: never = field;
+      throw invalid(unreachable);
+    }
+  }
+}
+
+function decodeChangeEntry(entry: FieldChange): DecodedEntry {
+  const target = changeTarget(entry.target);
+  switch (target.kind) {
+    case "wbs":
+      return decodeWbsEntry(entry);
+    case "task":
+      return decodeTask(target.id, entry);
+    case "dependency":
+      return decodeDependency(target, entry);
+    case "member":
+      return decodeMember(target.id, entry);
+    case "calendar":
+      return decodeCalendar(target.id, entry);
+    case "process":
+      return decodeNamed("process", target.id, entry);
+    case "product":
+      return decodeNamed("product", target.id, entry);
+    case "template":
+      return decodeTemplate(target.id, entry);
+    default: {
+      const unreachable: never = target;
+      throw invalid(`unknown target ${String(unreachable)}`);
+    }
+  }
+}
+
+/** Decode every entry, throwing before a caller writes if any entry cannot be mapped. */
+export function decodeWbsChange(change: WbsChange): readonly DecodedEntry[] {
+  if (change.format !== WBS_CHANGE_FORMAT) throw invalid("format");
+  assertUnique(change.changes);
+  return change.changes.map(decodeChangeEntry);
+}
+
 function applyEntry(draft: Draft, entry: FieldChange): void {
+  const decoded = decodeChangeEntry(entry);
   const after = entrySide(entry.after);
-  if (entry.target === "wbs") {
-    applyWbsField(draft, entry.field, after);
-    return;
+  switch (decoded.kind) {
+    case "wbs":
+      applyWbsField(draft, decoded.field, after);
+      return;
+    case "task-row":
+      applyTaskRow(draft, decoded.id, after);
+      return;
+    case "task-scalar":
+    case "task-cell":
+      applyTaskField(draft, decoded.id, entry.field, after);
+      return;
+    case "dependency-row":
+      applyDependencyRow(draft, decoded, after);
+      return;
+    case "dependency-lag":
+    case "dependency-type":
+      applyDependencyField(draft, decoded, entry.field, after);
+      return;
+    case "member-row":
+      applyMemberRow(draft, decoded.id, after);
+      return;
+    case "member-field":
+      applyMemberField(draft, decoded.id, entry.field, after);
+      return;
+    case "calendar-row":
+      applyCalendarRow(draft, decoded.id, after);
+      return;
+    case "calendar-field":
+      applyCalendarField(draft, decoded.id, entry.field, after);
+      return;
+    case "named-row":
+      applyNamedSortRow(decoded.master === "process" ? "processes" : "products", draft, decoded.id, after);
+      return;
+    case "named-field":
+      applyNamedSortField(
+        decoded.master === "process" ? "processes" : "products",
+        draft,
+        decoded.id,
+        entry.field,
+        after,
+      );
+      return;
+    case "template-row":
+      applyTemplateRow(draft, decoded.id, after);
+      return;
+    case "template-field":
+      applyTemplateField(draft, decoded.id, entry.field, after);
+      return;
+    default: {
+      const unreachable: never = decoded;
+      throw invalid(String(unreachable));
+    }
   }
-  const dependency = parseDependencyTarget(entry.target);
-  if (dependency !== undefined) {
-    if (entry.field === "") applyDependencyRow(draft, dependency, after);
-    else applyDependencyField(draft, dependency, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("task:")) {
-    const id = rowId(entry.target, "task:");
-    if (entry.field === "") applyTaskRow(draft, id, after);
-    else applyTaskField(draft, id, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("member:")) {
-    const id = rowId(entry.target, "member:");
-    if (entry.field === "") applyMemberRow(draft, id, after);
-    else applyMemberField(draft, id, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("calendar:")) {
-    const id = rowId(entry.target, "calendar:");
-    if (entry.field === "") applyCalendarRow(draft, id, after);
-    else applyCalendarField(draft, id, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("process:")) {
-    const id = rowId(entry.target, "process:");
-    if (entry.field === "") applyNamedSortRow("processes", draft, id, after);
-    else applyNamedSortField("processes", draft, id, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("product:")) {
-    const id = rowId(entry.target, "product:");
-    if (entry.field === "") applyNamedSortRow("products", draft, id, after);
-    else applyNamedSortField("products", draft, id, entry.field, after);
-    return;
-  }
-  if (entry.target.startsWith("template:")) {
-    const id = rowId(entry.target, "template:");
-    if (entry.field === "") applyTemplateRow(draft, id, after);
-    else applyTemplateField(draft, id, entry.field, after);
-    return;
-  }
-  throw invalid(`unknown target ${entry.target}`);
 }
 
 function isDependencyTarget(target: string): boolean {
-  return target.startsWith("dependency:");
+  return parseDependencyTarget(target) !== undefined;
 }
 
 export function applyWbsChange(state: ProjectState, change: WbsChange): ProjectState {
