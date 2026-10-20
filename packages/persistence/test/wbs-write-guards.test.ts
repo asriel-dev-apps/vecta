@@ -11,6 +11,7 @@ import {
   type PersistedProjectRecord,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { insertEmptyWbsChange } from "./wbs-write-marker.js";
 
 /**
  * Migration 0012 (Design 0016 §3.4): the database itself refuses a WBS write
@@ -166,7 +167,21 @@ describe("wbs write guards (migration 0012)", () => {
         `wbs_change missing for wbs ${A} revision 2`,
       );
       expect(await wbsRevision(A)).toBe("1");
-      expect(await count("wbs_change", "wbs_id = $1", [A])).toBe(0);
+      expect(await count("wbs_change", "wbs_id = $1 and revision = 3", [A])).toBe(0);
+      // save already wrote the creation row at revision 1; the failed bump added none.
+      expect(await count("wbs_change", "wbs_id = $1", [A])).toBe(1);
+    });
+
+    it("1e. a jump of two is refused even when that revision has a change row", async () => {
+      await expectRefusal(
+        inTx(async () => {
+          await insertChange(3);
+          await client.query("update wbs set revision = revision + 2 where id = $1", [A]);
+        }),
+        "wbs revision must advance by one",
+      );
+      expect(await wbsRevision(A)).toBe("1");
+      expect(await count("wbs_change", "wbs_id = $1 and revision = 3", [A])).toBe(0);
     });
 
     it("1d. CONTROL: a change that does not touch revision needs no change row", async () => {
@@ -176,7 +191,7 @@ describe("wbs write guards (migration 0012)", () => {
       expect(await wbsRevision(A)).toBe("1");
     });
 
-    it("4a. a task.update rename through the service commits: revision 1 -> 2 with one wbs_change row", async () => {
+    it("4a. a task.update rename through the service commits: revision 1 -> 2, rename row at revision 2", async () => {
       const leaf = record.tasks.find((task) => task.parentTaskId !== null)!;
       const execution = await service().execute({
         tenantId: T,
@@ -189,7 +204,7 @@ describe("wbs write guards (migration 0012)", () => {
       expect(execution.revision).toBe(2n);
       expect(await wbsRevision(A)).toBe("2");
       expect(await count("wbs_change", "wbs_id = $1 and revision = 2", [A])).toBe(1);
-      expect(await count("wbs_change", "wbs_id = $1", [A])).toBe(1);
+      expect(await count("wbs_change", "wbs_id = $1", [A])).toBe(2);
       expect(await count("task", "id = $1 and name = 'Renamed by guard test'", [leaf.id])).toBe(1);
     });
 
@@ -238,13 +253,21 @@ describe("wbs write guards (migration 0012)", () => {
       });
       expect(published.revision).toBe(2n);
 
-      // A second wbs in the same tenant, inserted the way task-id-tenancy.test.ts does.
-      await client.query("insert into project (id, tenant_id, name) values ($1, $2, 'Other')", [B, T]);
-      await client.query(
-        `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-         values ($1, $2, $1, 'Other', '2026-01-05', '2026-03-02')`,
-        [B, T],
-      );
+      // A second wbs in the same tenant. Revision 1 and its change commit together.
+      await client.query("begin");
+      try {
+        await client.query("insert into project (id, tenant_id, name) values ($1, $2, 'Other')", [B, T]);
+        await client.query(
+          `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision)
+           values ($1, $2, $1, 'Other', '2026-01-05', '2026-03-02', 1)`,
+          [B, T],
+        );
+        await insertEmptyWbsChange(client, T, B, 1);
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      }
 
       for (const table of CONTENT_TABLES) {
         const result = await client.query<{ attname: string }>(
@@ -342,6 +365,40 @@ describe("wbs write guards (migration 0012)", () => {
       });
     }
 
+    /**
+     * Bump `wbsId` by one and insert the change in the caller's transaction, then
+     * aim the marker at that revision. A content write commits only then.
+     */
+    async function recordRevision(wbsId: string, markerWbsId: string = wbsId): Promise<void> {
+      const current = await client.query<{ revision: string }>(
+        "select revision::text as revision from wbs where id = $1",
+        [wbsId],
+      );
+      const next = (BigInt(current.rows[0]!.revision) + 1n).toString();
+      await client.query("update wbs set revision = revision + 1 where id = $1", [wbsId]);
+      await insertEmptyWbsChange(client, T, wbsId, next);
+      await setMarker(client, `${markerWbsId}:${next}`);
+    }
+
+    /** Like `runOp`, but the marker names the revision this transaction records. */
+    async function runRecorded(
+      table: ContentTable,
+      op: Op,
+      probe: Row,
+      markerWbsId: string = A,
+    ): Promise<void> {
+      await inTx(async () => {
+        await recordRevision(A, markerWbsId);
+        const w = where(table, probe);
+        await insertProbe(table, probe);
+        if (op === "UPDATE") {
+          await client.query(`update ${table} set ${UPDATE_SPEC[table].set} where ${w.text}`, w.params);
+        } else if (op === "DELETE") {
+          await client.query(`delete from ${table} where ${w.text}`, w.params);
+        }
+      });
+    }
+
     const MALFORMED = (a: string): [string, string][] => [
       ["empty", ""],
       ["blank", "   "],
@@ -377,7 +434,7 @@ describe("wbs write guards (migration 0012)", () => {
               await expectRefusal(runOp(table, op, `${A}:1`, probe), immutable(op, table), "23001");
               return;
             }
-            await runOp(table, op, `${A}:1`, probe);
+            await runRecorded(table, op, probe);
             if (op === "INSERT") {
               expect(await count(table, w.text, w.params)).toBe(1);
             } else if (op === "UPDATE") {
@@ -395,7 +452,7 @@ describe("wbs write guards (migration 0012)", () => {
 
         it("2d. CONTROL: an UPPERCASE wbs id in the marker is accepted", async () => {
           const probe = await makeProbe(table);
-          await runOp(table, "INSERT", `${A.toUpperCase()}:1`, probe);
+          await runRecorded(table, "INSERT", probe, A.toUpperCase());
           const w = where(table, probe);
           expect(await count(table, w.text, w.params)).toBe(1);
         });
@@ -441,7 +498,7 @@ describe("wbs write guards (migration 0012)", () => {
       it("CONTROL: the same task update that keeps wbs_id passes under A:1 and changes the row", async () => {
         const task = await client.query<{ id: string }>("select id from task where wbs_id = $1 limit 1", [A]);
         await inTx(async () => {
-          await setMarker(client, `${A}:1`);
+          await recordRevision(A);
           await client.query("update task set note = 'kept in A' where id = $1", [task.rows[0]!.id]);
         });
         expect(await count("task", "id = $1 and wbs_id = $2 and note = 'kept in A'", [task.rows[0]!.id, A])).toBe(1);
@@ -465,7 +522,7 @@ describe("wbs write guards (migration 0012)", () => {
       it("CONTROL: the same insert inside a transaction that sets the marker succeeds", async () => {
         const probe = await makeProbe("task");
         await inTx(async () => {
-          await setMarker(client, `${A}:1`);
+          await recordRevision(A);
           await client.query("insert into task select (json_populate_record(null::task, $1::json)).*", [
             JSON.stringify(probe),
           ]);
@@ -488,14 +545,15 @@ describe("wbs write guards (migration 0012)", () => {
 
       async function createC(): Promise<void> {
         C = randomUUID();
-        await client.query("insert into project (id, tenant_id, name) values ($1, $2, 'C')", [C, T]);
-        await client.query(
-          `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-           values ($1, $2, $1, 'C', '2026-01-05', '2026-03-02')`,
-          [C, T],
-        );
         await inTx(async () => {
-          await setMarker(client, `${C}:0`);
+          await client.query("insert into project (id, tenant_id, name) values ($1, $2, 'C')", [C, T]);
+          await client.query(
+            `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision)
+             values ($1, $2, $1, 'C', '2026-01-05', '2026-03-02', 1)`,
+            [C, T],
+          );
+          await insertEmptyWbsChange(client, T, C, 1);
+          await setMarker(client, `${C}:1`);
           const ids = Array.from({ length: 5 }, () => randomUUID());
           await client.query(
             "insert into calendar (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates) values ($1,$2,'cal-c','Cal','{1,2,3,4,5}','{}')",
@@ -546,29 +604,32 @@ describe("wbs write guards (migration 0012)", () => {
         expect(await count("task", "wbs_id = $1", [C])).toBe(2);
       });
 
-      it("CONTROL: with marker C:0 the delete succeeds, C's rows are gone, A and B are untouched", async () => {
+      it("CONTROL: a marker naming C still cannot delete it; wbs_change refuses the cascade", async () => {
         await createC();
-        await client.query("begin");
-        await client.query("select set_config('vecta.wbs_write', $1, true)", [`${B}:0`]);
-        await client.query("insert into task (id, tenant_id, wbs_id, seq, name) values ($1,$2,$3,1,'b-task')", [
-          randomUUID(),
-          T,
-          B,
-        ]);
-        await client.query("commit");
+        await inTx(async () => {
+          await recordRevision(B);
+          await client.query("insert into task (id, tenant_id, wbs_id, seq, name) values ($1,$2,$3,1,'b-task')", [
+            randomUUID(),
+            T,
+            B,
+          ]);
+        });
 
         const before = new Map<string, number>();
         for (const table of CONTENT_TABLES) before.set(`${table}/A`, await count(table, "wbs_id = $1", [A]));
         const bBefore = await count("task", "wbs_id = $1", [B]);
         expect(bBefore).toBe(1);
 
-        await inTx(async () => {
-          await setMarker(client, `${C}:0`);
-          await client.query("delete from wbs where id = $1", [C]);
-        });
+        await expectRefusal(
+          inTx(async () => {
+            await setMarker(client, `${C}:1`);
+            await client.query("delete from wbs where id = $1", [C]);
+          }),
+          "DELETE on wbs_change is refused",
+        );
 
-        expect(await count("wbs", "id = $1", [C])).toBe(0);
-        for (const table of cascaded) expect(await count(table, "wbs_id = $1", [C]), table).toBe(0);
+        expect(await count("wbs", "id = $1", [C])).toBe(1);
+        for (const table of cascaded) expect(await count(table, "wbs_id = $1", [C]), table).toBeGreaterThan(0);
         for (const table of CONTENT_TABLES) {
           expect(await count(table, "wbs_id = $1", [A]), `${table}/A`).toBe(before.get(`${table}/A`));
         }

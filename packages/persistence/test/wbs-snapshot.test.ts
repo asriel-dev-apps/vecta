@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   canonicalWbsState,
   createProjectCommandService,
@@ -133,6 +135,19 @@ describe("wbs snapshot", () => {
 
   const revisionsOf = async () => (await snapshotRows()).map((row) => row.revision);
 
+  /** Append-only triggers stay enabled. Replica role is how a test simulates corruption. */
+  async function tamper(statement: string, params: unknown[] = []): Promise<void> {
+    await client.query("begin");
+    try {
+      await client.query("set local session_replication_role = replica");
+      await client.query(statement, params);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+  }
+
   const decodeRow = (row: SnapshotRow) =>
     decodeWbsSnapshot({ format: row.format, sha256: row.sha256, body: new Uint8Array(row.body) });
 
@@ -194,6 +209,11 @@ describe("wbs snapshot", () => {
     const update = await client.query("update wbs_snapshot set format = 1").catch((e: unknown) => e);
     expect((update as { code?: string }).code).toBe("P0001");
     expect((update as Error).message).toBe("wbs_snapshot is immutable");
+
+    const deleted = await client.query("delete from wbs_snapshot").catch((e: unknown) => e);
+    expect((deleted as { code?: string }).code).toBe("P0001");
+    expect((deleted as Error).message).toBe("wbs_snapshot is immutable");
+    expect(await revisionsOf()).toEqual([1]);
   });
 
   // ---- 2c ----
@@ -220,7 +240,7 @@ describe("wbs snapshot", () => {
   // ---- 2d ----
   it("d. a WBS with no snapshot gets its base inside the edit's transaction; a failed edit leaves none", async () => {
     const record = await seed();
-    await client.query("delete from wbs_snapshot"); // a WBS that never went through save
+    await tamper("delete from wbs_snapshot"); // a WBS that never went through save
     const leaf = leafIds(record)[0]!;
     const statements: string[] = [];
 
@@ -333,7 +353,7 @@ describe("wbs snapshot", () => {
   describe("g. WbsSnapshotStore (what db:snapshot calls)", () => {
     it("takeBase twice is 'inserted' then 'existed'", async () => {
       const record = await seed();
-      await client.query("delete from wbs_snapshot");
+      await tamper("delete from wbs_snapshot");
       const store = new WbsSnapshotStore(createPersistenceDatabase(client));
 
       expect(await store.takeBase(keyOf(record))).toEqual({ revision: 1n, result: "inserted" });
@@ -376,7 +396,7 @@ describe("wbs snapshot", () => {
       );
       const change = readWbsChange(stored.rows[0]!.change);
       expect(change.changes.map((entry) => entry.field)).toEqual(["name", "note"]);
-      await client.query("update wbs_change set change = $1::jsonb where wbs_id = $2 and revision = 4", [
+      await tamper("update wbs_change set change = $1::jsonb where wbs_id = $2 and revision = 4", [
         JSON.stringify({ ...change, changes: change.changes.filter((entry) => entry.field !== "note") }),
         record.project.id,
       ]);
@@ -386,5 +406,81 @@ describe("wbs snapshot", () => {
       expect(verdict).toMatchObject({ ok: false, from: 1n, to: 4n, reason: "hash" });
       expect(await verifiedRows()).toEqual([{ from_revision: 1, to_revision: 4, failure: "hash" }]);
     }, 60_000);
+
+    it("a corrupt change is corrupt@ that revision; a later range and another WBS still verify, and verify exits 1 twice", async () => {
+      const broken = await seed();
+      const brokenLeaf = leafIds(broken)[0]!;
+      for (let step = 1; step <= 7; step += 1) {
+        await edit(broken, step, [rename(brokenLeaf, `B${step.toString()}`)]);
+      }
+      expect(await revisionsOf()).toEqual([1, 4, 7]);
+      await tamper(`update wbs_change set change = '{"format":1}'::jsonb where wbs_id = $1 and revision = 2`, [
+        broken.project.id,
+      ]);
+
+      // Task ids in a seed are a fixed sequence, so a second record needs its own.
+      const shiftIds = <T>(value: T, marker: string): T => {
+        if (typeof value === "string") return value.replaceAll("-4000-8000-", `-4000-${marker}-`) as T;
+        if (Array.isArray(value)) return value.map((item) => shiftIds(item, marker)) as T;
+        if (typeof value === "bigint" || value === null || typeof value !== "object") return value;
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value)) out[key] = shiftIds(item, marker);
+        return out as T;
+      };
+      const other = shiftIds(createSeedProjectRecord(SHAPE), "8001");
+      await repository.save(other);
+      const otherLeaf = leafIds(other)[0]!;
+      for (let step = 1; step <= 4; step += 1) {
+        await edit(other, step, [rename(otherLeaf, `O${step.toString()}`)]);
+      }
+
+      const throwing = shiftIds(createSeedProjectRecord(SHAPE), "7000");
+      await repository.save(throwing);
+      const throwingLeaf = leafIds(throwing)[0]!;
+      for (let step = 1; step <= 4; step += 1) {
+        await edit(throwing, step, [rename(throwingLeaf, `T${step.toString()}`)]);
+      }
+      await tamper("update wbs_snapshot set body = '\\x00' where wbs_id = $1 and revision = 1", [
+        throwing.project.id,
+      ]);
+
+      const script = fileURLToPath(new URL("../scripts/wbs-snapshot.mjs", import.meta.url));
+      const target = new URL(testDatabase.connectionString);
+      const runVerify = () =>
+        spawnSync(process.execPath, ["--experimental-transform-types", script, "verify"], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DATABASE_URL: testDatabase.connectionString,
+            EXPECTED_DATABASE_HOST: target.hostname,
+            EXPECTED_DATABASE_NAME: decodeURIComponent(target.pathname.replace(/^\//u, "")),
+          },
+        });
+
+      const first = runVerify();
+      expect(first.status).toBe(1);
+      const firstOut = first.stdout;
+      expect(firstOut).toContain(`${throwing.project.id} error`);
+      expect(firstOut).toContain(`${broken.project.id} 1->4 corrupt@2`);
+      expect(firstOut).toContain(`${broken.project.id} 4->7 ok`);
+      expect(firstOut).toContain(`${other.project.id} 1->4 ok`);
+
+      const stored = await client.query<{ wbs_id: string; from_revision: string; to_revision: string; failure: string | null }>(
+        `select wbs_id, from_revision::text, to_revision::text, failure
+           from wbs_verified_range
+          order by wbs_id, from_revision`,
+      );
+      expect(stored.rows).toEqual([
+        { wbs_id: broken.project.id, from_revision: "1", to_revision: "4", failure: "corrupt@2" },
+        { wbs_id: broken.project.id, from_revision: "4", to_revision: "7", failure: null },
+        { wbs_id: other.project.id, from_revision: "1", to_revision: "4", failure: null },
+      ]);
+
+      const second = runVerify();
+      expect(second.status).toBe(1);
+      expect(second.stdout).toContain(`${broken.project.id} 1->4 corrupt@2`);
+      expect(second.stdout).toContain(`${throwing.project.id} error`);
+      expect(second.stdout).not.toContain(`${broken.project.id} 4->7 ok`);
+    }, 90_000);
   });
 });

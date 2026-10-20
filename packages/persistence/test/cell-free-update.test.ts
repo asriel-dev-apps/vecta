@@ -165,17 +165,20 @@ async function run(client: Client, interval: number): Promise<Run> {
     "select revision::int as revision, change from wbs_change where wbs_id = $1 order by revision",
     [record.project.id],
   );
-  expect(stored.rows.map((row) => row.revision)).toEqual(all.map((_, index) => index + 2));
+  expect(stored.rows.map((row) => row.revision)).toEqual([1, ...all.map((_, index) => index + 2)]);
+  // Revision 1 is creation. Replay starts at the base snapshot, which is that state.
+  const afterBase = stored.rows.filter((row) => row.revision > snapshots.rows[0]!.revision);
   let replayed = await decodeWbsSnapshot(snapshots.rows[0]!);
   const c = [canonicalWbsState(replayed)];
-  for (const row of stored.rows) {
+  for (const row of afterBase) {
     replayed = applyWbsChange(replayed, readWbsChange(row.change));
     c.push(canonicalWbsState(replayed));
   }
   const fields = (
     await client.query<{ field: string }>(
       `select e->>'field' as field from wbs_change w, jsonb_array_elements(w.change->'changes') e
-        where w.wbs_id = $1 and (e->>'field' like 'dailyPlan%' or e->>'field' like 'datedActuals%')`,
+        where w.wbs_id = $1 and w.revision > 1
+          and (e->>'field' like 'dailyPlan%' or e->>'field' like 'datedActuals%')`,
       [record.project.id],
     )
   ).rows.map((row) => row.field);
@@ -227,7 +230,7 @@ describe("cell-free fast path (interval 1000: nothing is due after the base)", (
     expect((result.dbCells as Cells)[seededLeaf.id]!.plan).toEqual({ "2026-01-05": 0.5, "2026-01-06": 240, "2026-02-01": 1.5 });
   });
 
-  it("no stored wbs_change row holds a dailyPlan* or datedActuals* field change", () => {
+  it("no operation after creation stores a dailyPlan* or datedActuals* field change", () => {
     expect(result.storedCellFieldChanges).toEqual([]);
   });
 

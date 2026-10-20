@@ -131,16 +131,22 @@ describe("baseline.publish", () => {
     // Measured 2026-08-05: BAC comes from the daily plot, so an unplotted leaf is
     // worth ZERO to the baseline and every later SV is kinder by that amount —
     // permanently, and with nothing on screen to say so.
+    // The marker helper consumes one revision, so the plan is at 2 when publish runs.
     await withWbsWriteMarker(client, projectId, 0, () =>
       client.query("update task set daily_plan = '{}'::jsonb where id = $1", [firstLeaf.id]),
     );
-    await expect(publish()).rejects.toThrow(/empty or inconsistent daily plot/u);
+    await expect(publish({ type: "baseline.publish" }, 2n)).rejects.toThrow(
+      /empty or inconsistent daily plot/u,
+    );
 
-    const acknowledged = await publish({
-      type: "baseline.publish",
-      acknowledgeUnplottedTasks: true,
-    });
-    expect(acknowledged.revision).toBe(2n);
+    const acknowledged = await publish(
+      {
+        type: "baseline.publish",
+        acknowledgeUnplottedTasks: true,
+      },
+      2n,
+    );
+    expect(acknowledged.revision).toBe(3n);
   });
 
   it("advances the version counter, so a second publish is version 2", async () => {

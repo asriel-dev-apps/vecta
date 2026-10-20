@@ -6,6 +6,7 @@ import {
   PostgresProjectListReader,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { insertEmptyWbsChange } from "./wbs-write-marker.js";
 
 const TENANT_ID = "20000000-0000-4000-8000-000000000001";
 const PRINCIPAL_ID = "90000000-0000-4000-8000-000000000001";
@@ -34,20 +35,30 @@ describe("PostgresProjectListReader", () => {
     // Three synthetic projects, inserted out of alphabetical order to prove the
     // reader sorts by name. Each WBS shares its id with its parent project so
     // membership rows can keep using that id.
-    await client.query(
-      `insert into project (id, tenant_id, name) values
-         ($1, $4, 'Gamma project'),
-         ($2, $4, 'Alpha project'),
-         ($3, $4, 'Beta project')`,
-      [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
-    );
-    await client.query(
-      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date) values
-         ($1, $4, $1, 'Gamma project', '2026-07-13', '2026-07-13'),
-         ($2, $4, $2, 'Alpha project', '2026-07-13', '2026-07-13'),
-         ($3, $4, $3, 'Beta project',  '2026-07-13', '2026-07-13')`,
-      [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
-    );
+    await client.query("begin");
+    try {
+      await client.query(
+        `insert into project (id, tenant_id, name) values
+           ($1, $4, 'Gamma project'),
+           ($2, $4, 'Alpha project'),
+           ($3, $4, 'Beta project')`,
+        [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
+      );
+      await client.query(
+        `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision) values
+           ($1, $4, $1, 'Gamma project', '2026-07-13', '2026-07-13', 1),
+           ($2, $4, $2, 'Alpha project', '2026-07-13', '2026-07-13', 1),
+           ($3, $4, $3, 'Beta project',  '2026-07-13', '2026-07-13', 1)`,
+        [GAMMA_ID, ALPHA_ID, BETA_ID, TENANT_ID],
+      );
+      for (const wbsId of [GAMMA_ID, ALPHA_ID, BETA_ID]) {
+        await insertEmptyWbsChange(client, TENANT_ID, wbsId, 1);
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
     await client.query(
       `insert into principal (id, issuer, subject, type, display_name) values
          ($1, 'https://identity.example.test/', 'principal-1', 'HUMAN', 'Principal 1'),

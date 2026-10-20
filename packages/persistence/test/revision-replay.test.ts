@@ -26,7 +26,7 @@ import { startTestDatabase, type TestDatabase } from "./database.js";
  * M1 #2 unit 6: at EVERY revision the state three independent ways must agree.
  *   (a) `applyProjectCommand` folded over the script only (no database, no diff);
  *   (b) `repository.load` right after the operation (what the tables hold);
- *   (c) the base snapshot plus every stored `wbs_change` up to that revision.
+ *   (c) the base snapshot plus every stored `wbs_change` after that snapshot.
  * Two mutations, injected from this file only, show the comparison can fail in
  * the two directions that matter: a diff that loses an entry, and a table write
  * that is lost while the diff is recorded.
@@ -187,10 +187,12 @@ async function runScript(client: Client, afterSeed?: () => Promise<void>): Promi
     "select revision::int as revision, change from wbs_change where wbs_id = $1 order by revision",
     [record.project.id],
   );
-  expect(stored.rows.map((row) => row.revision)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  expect(stored.rows.map((row) => row.revision)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  // Revision 1 is the creation record. The base snapshot is already that state.
+  const afterBase = stored.rows.filter((row) => row.revision > snapshots.rows[0]!.revision);
   let replayed = base;
   const c: string[] = [canonicalWbsState(base)];
-  for (const row of stored.rows) {
+  for (const row of afterBase) {
     replayed = applyWbsChange(replayed, readWbsChange(row.change));
     c.push(canonicalWbsState(replayed));
   }

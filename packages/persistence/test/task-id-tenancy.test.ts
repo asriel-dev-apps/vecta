@@ -9,7 +9,7 @@ import {
   ProjectRepository,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
-import { withWbsWriteMarker } from "./wbs-write-marker.js";
+import { insertEmptyWbsChange, withWbsWriteMarker } from "./wbs-write-marker.js";
 
 /**
  * A command scoped to one project cannot touch another project's task row.
@@ -61,15 +61,23 @@ describe("task ids cannot cross a project boundary", () => {
     // A SECOND project under the SAME tenant, holding one task. Inserted
     // directly rather than through the repository, which writes its own tenant
     // row and would collide.
-    await client.query(
-      `insert into project (id, tenant_id, name) values ($1, $2, 'Other project')`,
-      [VICTIM_PROJECT_ID, TENANT_ID],
-    );
-    await client.query(
-      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-       values ($1, $2, $1, 'Other project', '2026-01-05', '2026-03-02')`,
-      [VICTIM_PROJECT_ID, TENANT_ID],
-    );
+    await client.query("begin");
+    try {
+      await client.query(
+        `insert into project (id, tenant_id, name) values ($1, $2, 'Other project')`,
+        [VICTIM_PROJECT_ID, TENANT_ID],
+      );
+      await client.query(
+        `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision)
+         values ($1, $2, $1, 'Other project', '2026-01-05', '2026-03-02', 1)`,
+        [VICTIM_PROJECT_ID, TENANT_ID],
+      );
+      await insertEmptyWbsChange(client, TENANT_ID, VICTIM_PROJECT_ID, 1);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
     await withWbsWriteMarker(client, VICTIM_PROJECT_ID, 0, () =>
       client.query(
         `insert into task (id, tenant_id, wbs_id, seq, name, sort_order, planned_effort_minutes)

@@ -2,7 +2,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migratePersistenceDatabase } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
-import { withWbsWriteMarker } from "./wbs-write-marker.js";
+import { insertEmptyWbsChange, withWbsWriteMarker } from "./wbs-write-marker.js";
 
 describe("persistence migrations", () => {
   let client: Client;
@@ -20,23 +20,29 @@ describe("persistence migrations", () => {
 
     await client.query("insert into tenant (id, name) values ($1, 'Tenant A')", [tenantId]);
     await client.query("begin");
-    await client.query(
-      `insert into project (id, tenant_id, name) values ($1, $2, 'Project A')`,
-      [projectId, tenantId],
-    );
-    await client.query(
-      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-       values ($1, $2, $1, 'Project A', '2026-01-05', '2026-01-20')`,
-      [projectId, tenantId],
-    );
-    await client.query("select set_config('vecta.wbs_write', $1, true)", [`${projectId}:0`]);
-    await client.query(
-      `insert into calendar
-         (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
-       values ($1, $2, 'standard', 'Standard', array[1,2,3,4,5], array[]::date[])`,
-      [tenantId, projectId],
-    );
-    await client.query("commit");
+    try {
+      await client.query(
+        `insert into project (id, tenant_id, name) values ($1, $2, 'Project A')`,
+        [projectId, tenantId],
+      );
+      await client.query(
+        `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision)
+         values ($1, $2, $1, 'Project A', '2026-01-05', '2026-01-20', 1)`,
+        [projectId, tenantId],
+      );
+      await insertEmptyWbsChange(client, tenantId, projectId, 1);
+      await client.query("select set_config('vecta.wbs_write', $1, true)", [`${projectId}:1`]);
+      await client.query(
+        `insert into calendar
+           (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
+         values ($1, $2, 'standard', 'Standard', array[1,2,3,4,5], array[]::date[])`,
+        [tenantId, projectId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
     await withWbsWriteMarker(client, projectId, 0, () =>
       client.query(
         `insert into member (id, tenant_id, wbs_id, name, calendar_id, daily_capacity_minutes)

@@ -20,6 +20,7 @@ import {
   applyWbsChange,
   canonicalWbsState,
   sha256Hex,
+  WbsChangeStaleError,
   type Sha256Hex,
   type WbsChange,
 } from "./wbs-change.js";
@@ -481,12 +482,21 @@ export type RangeVerdict =
       readonly reason: "hash";
       readonly expected: Sha256Hex;
       readonly actual: Sha256Hex;
+    }
+  | {
+      readonly ok: false;
+      readonly from: bigint;
+      readonly to: bigint;
+      readonly reason: "corrupt";
+      readonly at: bigint;
+      readonly detail: string;
     };
 
 /**
  * Pure. `changes` must be exactly revisions from+1 .. to (a hole is "gap").
- * Folds `applyWbsChange` (one call per revision). A stale-check throw becomes
- * "stale" at that revision. A replay that finishes with a different hash is "hash".
+ * Folds `applyWbsChange` (one call per revision). A {@link WbsChangeStaleError}
+ * becomes "stale" at that revision. Any other throw becomes "corrupt" at that
+ * revision. A replay that finishes with a different hash is "hash".
  */
 export async function verifyWbsRange(
   from: { readonly revision: bigint; readonly state: ProjectState },
@@ -506,10 +516,11 @@ export async function verifyWbsRange(
     try {
       state = applyWbsChange(state, entry.change);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith("WBS change is stale")) {
+      if (error instanceof WbsChangeStaleError) {
         return { ok: false, ...bounds, reason: "stale", at: entry.revision, detail: error.message };
       }
-      throw error;
+      const detail = error instanceof Error ? error.message : "WBS change is corrupt";
+      return { ok: false, ...bounds, reason: "corrupt", at: entry.revision, detail };
     }
     expected += 1n;
   }

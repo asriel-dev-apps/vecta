@@ -144,8 +144,24 @@ function compareCodeUnit(left: string, right: string): number {
   return 0;
 }
 
-function invalid(detail: string): Error {
-  return new Error(`Invalid WBS change: ${detail}`);
+/** A stored record that cannot be read or applied. Verifiers record this; they do not match message text. */
+export class WbsChangeCorruptError extends Error {
+  constructor(detail: string) {
+    super(`Invalid WBS change: ${detail}`);
+    this.name = "WbsChangeCorruptError";
+  }
+}
+
+/** The record's `before` is not the state it was applied to. */
+export class WbsChangeStaleError extends Error {
+  constructor(target: string, field: string) {
+    super(`WBS change is stale for ${target} field ${JSON.stringify(field)}`);
+    this.name = "WbsChangeStaleError";
+  }
+}
+
+function invalid(detail: string): WbsChangeCorruptError {
+  return new WbsChangeCorruptError(detail);
 }
 
 function isPlainRecord(value: object): boolean {
@@ -782,6 +798,45 @@ export function diffOperation(
   return {
     after,
     change: { format: WBS_CHANGE_FORMAT, changes: change },
+  };
+}
+
+/**
+ * The state before any row of this WBS exists.
+ *
+ * `id` is the only identity. Currency stays `"JPY"` because the record has no
+ * currency field. Counters start at 1, the same default a new `wbs` row uses.
+ * The epoch day is the blank project start and status date, so a real date is
+ * always an entry. Masters, tasks and edges are empty arrays.
+ */
+export function emptyWbsState(id: string): ProjectState {
+  return {
+    id,
+    name: "",
+    projectStart: "1970-01-01",
+    statusDate: "1970-01-01",
+    currency: "JPY",
+    defaultCalendarId: "",
+    calendars: [],
+    members: [],
+    processes: [],
+    products: [],
+    templates: [],
+    tasks: [],
+    nextTaskSeq: 1,
+    nextBaselineVersion: 1,
+  };
+}
+
+/**
+ * The revision-1 record: every row of `state` added from {@link emptyWbsState}.
+ * Pure. `applyWbsChange(emptyWbsState(state.id), creationChange(state))` is the
+ * same WBS as `state` (canonical form; row order in the record is by target).
+ */
+export function creationChange(state: ProjectState): WbsChange {
+  return {
+    format: WBS_CHANGE_FORMAT,
+    changes: diffFlat(flatten(emptyWbsState(state.id)), flatten(state), []),
   };
 }
 
@@ -1465,7 +1520,7 @@ export function applyWbsChange(state: ProjectState, change: WbsChange): ProjectS
   const flat = flatten(state);
   for (const entry of change.changes) {
     if (!sameMaybe(valueAt(flat, entry.target, entry.field), entrySide(entry.before))) {
-      throw new Error(`WBS change is stale for ${entry.target} field ${JSON.stringify(entry.field)}`);
+      throw new WbsChangeStaleError(entry.target, entry.field);
     }
   }
   const draft = cloneState(state);

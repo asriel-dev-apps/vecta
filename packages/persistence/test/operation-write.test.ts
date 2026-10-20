@@ -345,7 +345,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
     expect(result).toEqual({ projectId: record.project.id, revision: 2n, replayed: false });
     expect(await wbsRevision(record)).toBe(2);
     const changes = await client.query<{ n: number; lo: number; hi: number }>(
-      "select count(*)::int as n, min(revision)::int as lo, max(revision)::int as hi from wbs_change",
+      "select count(*)::int as n, min(revision)::int as lo, max(revision)::int as hi from wbs_change where revision > 1",
     );
     expect(changes.rows[0]).toEqual({ n: 1, lo: 2, hi: 2 });
     expect(await count("audit_event", "wbs_revision = 2")).toBe(1);
@@ -377,7 +377,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
     expect(await wbsRevision(record)).toBe(1);
     expect(await count("command_receipt")).toBe(0);
     expect(await count("audit_event")).toBe(1);
-    expect(await count("wbs_change")).toBe(0);
+    expect(await count("wbs_change")).toBe(1);
 
     await expect(
       operation(record, 1n, "op-atomic", [
@@ -390,7 +390,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
     expect(await wbsRevision(record)).toBe(1);
     expect(await count("command_receipt")).toBe(0);
     expect(await count("audit_event")).toBe(1);
-    expect(await count("wbs_change")).toBe(0);
+    expect(await count("wbs_change")).toBe(1);
     expect(await count("command_receipt", "idempotency_key = 'op-atomic'")).toBe(0);
     expect(await hashOf(record)).toBe(hashBefore);
     const names = await client.query<{ name: string }>("select name from task where id in ($1, $2) order by name", [a.id, b.id]);
@@ -432,7 +432,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
       expect(current).toEqual({ projectId: record.project.id, revision: 2n, replayed: true });
 
       expect(await count("audit_event")).toBe(2);
-      expect(await count("wbs_change")).toBe(1);
+      expect(await count("wbs_change")).toBe(2);
       expect(await count("command_receipt")).toBe(1);
       expect(await wbsRevision(record)).toBe(2);
       expect(await hashOf(record)).toBe(hash);
@@ -445,7 +445,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
         operation(record, 2n, "op-5", rename("Renamed"), { type: "HUMAN", id: "user-002" }),
       ).rejects.toBeInstanceOf(IdempotencyConflictError);
       expect(await count("audit_event")).toBe(2);
-      expect(await count("wbs_change")).toBe(1);
+      expect(await count("wbs_change")).toBe(2);
       expect(await count("command_receipt")).toBe(1);
       expect(await wbsRevision(record)).toBe(2);
     });
@@ -487,7 +487,7 @@ describe("operation write (one operation, one transaction, one revision)", () =>
       format: 1,
       changes: [{ target: `task:${leaf.id}`, field: "name", before: "Subtask 1.1", after: "Subtask 1.1", kind: "direct" }],
     });
-    expect(await count("wbs_change")).toBe(1);
+    expect(await count("wbs_change")).toBe(2);
     expect(await count("audit_event")).toBe(2);
     expect(await wbsRevision(record)).toBe(2);
   });

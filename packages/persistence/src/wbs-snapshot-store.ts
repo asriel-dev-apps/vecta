@@ -82,6 +82,7 @@ function failureText(verdict: RangeVerdict): string | null {
   if (verdict.ok) return null;
   if (verdict.reason === "gap") return `gap@${verdict.missing.toString()}`;
   if (verdict.reason === "stale") return `stale@${verdict.at.toString()}`;
+  if (verdict.reason === "corrupt") return `corrupt@${verdict.at.toString()}`;
   return "hash";
 }
 
@@ -208,10 +209,34 @@ export class WbsSnapshotStore {
           and revision <= ${toRevision}
         order by revision asc
       `);
-      const changes: RevisionChange[] = stored.rows.map((row) => ({
-        revision: BigInt(row.revision),
-        change: readWbsChange(row.change),
-      }));
+      const changes: RevisionChange[] = [];
+      for (const row of stored.rows) {
+        const revision = BigInt(row.revision);
+        try {
+          changes.push({ revision, change: readWbsChange(row.change) });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "WBS change is corrupt";
+          const verdict: RangeVerdict = {
+            ok: false,
+            from: fromRevision,
+            to: toRevision,
+            reason: "corrupt",
+            at: revision,
+            detail,
+          };
+          await transaction
+            .insert(wbsVerifiedRange)
+            .values({
+              tenantId: key.tenantId,
+              wbsId: key.wbsId,
+              fromRevision,
+              toRevision,
+              failure: failureText(verdict),
+            })
+            .onConflictDoNothing();
+          return verdict;
+        }
+      }
       const verdict = await verifyWbsRange(
         { revision: fromRevision, state },
         changes,

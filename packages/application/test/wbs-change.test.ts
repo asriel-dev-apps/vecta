@@ -4,8 +4,10 @@ import {
   applyWbsChange,
   canonicalJson,
   canonicalWbsState,
+  creationChange,
   deriveSubtaskId,
   diffOperation,
+  emptyWbsState,
   hashWbsState,
   readWbsChange,
   type JsonValue,
@@ -1080,6 +1082,13 @@ describe("negative controls: the replay check can fail", () => {
     const commands: ProjectCommand[] = [{ type: "task.update", taskId: "t2", changes: { name: "New" } }];
     expect(replaysWith((state) => state, S0, commands)).toBe(false);
     expect(replaysWith(applyWbsChange, S0, commands)).toBe(true);
+  });
+});
+
+describe("creationChange", () => {
+  it("replays every row of S0 from the empty state", () => {
+    const empty = emptyWbsState(S0.id);
+    expect(canonicalWbsState(applyWbsChange(empty, creationChange(S0)))).toBe(canonicalWbsState(S0));
   });
 });
 

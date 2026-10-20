@@ -10,7 +10,7 @@
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "node scripts/migrate.mjs",
     "db:snapshot": "node --experimental-transform-types scripts/wbs-snapshot.mjs",
-    "db:seed": "node scripts/seed-admin.mjs",
+    "db:seed": "node --experimental-transform-types scripts/seed-admin.mjs",
     "db:seed:demo": "node --experimental-transform-types scripts/seed-demo-project.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

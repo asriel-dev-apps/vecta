@@ -13,6 +13,7 @@ import {
   ProjectRepository,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { insertEmptyWbsChange } from "./wbs-write-marker.js";
 
 describe("PostgreSQL project access", () => {
   let client: Client;
@@ -173,23 +174,29 @@ describe("PostgreSQL project access", () => {
       secondTenantId,
     ]);
     await client.query("begin");
-    await client.query(
-      `insert into project (id, tenant_id, name) values ($1, $2, 'Second project')`,
-      [secondProjectId, secondTenantId],
-    );
-    await client.query(
-      `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-       values ($1, $2, $1, 'Second project', '2026-07-13', '2026-07-13')`,
-      [secondProjectId, secondTenantId],
-    );
-    await client.query("select set_config('vecta.wbs_write', $1, true)", [`${secondProjectId}:0`]);
-    await client.query(
-      `insert into calendar
-         (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
-       values ($1, $2, 'standard', 'Standard', array[1,2,3,4,5], array[]::date[])`,
-      [secondTenantId, secondProjectId],
-    );
-    await client.query("commit");
+    try {
+      await client.query(
+        `insert into project (id, tenant_id, name) values ($1, $2, 'Second project')`,
+        [secondProjectId, secondTenantId],
+      );
+      await client.query(
+        `insert into wbs (id, tenant_id, project_id, name, project_start, status_date, revision)
+         values ($1, $2, $1, 'Second project', '2026-07-13', '2026-07-13', 1)`,
+        [secondProjectId, secondTenantId],
+      );
+      await insertEmptyWbsChange(client, secondTenantId, secondProjectId, 1);
+      await client.query("select set_config('vecta.wbs_write', $1, true)", [`${secondProjectId}:1`]);
+      await client.query(
+        `insert into calendar
+           (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
+         values ($1, $2, 'standard', 'Standard', array[1,2,3,4,5], array[]::date[])`,
+        [secondTenantId, secondProjectId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
 
     await accessRepository.provision({
       principal,

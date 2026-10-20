@@ -1,17 +1,22 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { register } from "node:module";
+import process from "node:process";
 import pg from "pg";
 
-// One-off seed for an authenticated deployment: creates a single tenant, a
-// single project, and one admin principal bound as OWNER on both, so a human who
-// signs in with the configured OIDC provider resolves to a PRIVILEGED grant.
+// One-off seed for an authenticated deployment: creates a single tenant, one
+// WBS (PROJECT_ID is the WBS id), and one admin principal bound as OWNER of the
+// tenant and of that WBS's parent project. A WBS that already exists — including
+// one whose parent project id was assigned by migration 0010 — is not inserted
+// again; the grant is written on its actual parent and raised to OWNER.
+//
+// A new WBS goes through ProjectRepository.save: revision 1, its creation
+// change, and the base snapshot in one transaction.
 //
 // Every identity value is read from the environment — no real email, subject, or
 // connection string is written here. Applies the existing migrations first, then
-// upserts the five rows idempotently, so re-running is safe. Pass `--dry-run` to
-// validate the parameters and print the plan without connecting.
+// upserts idempotently, so re-running is safe. Pass `--dry-run` to validate the
+// parameters and print the plan without connecting.
 //
 // Required env:
 //   DATABASE_URL    Postgres/Neon connection string (never committed)
@@ -94,10 +99,10 @@ if (statusDate < projectStart) {
 
 const plan = {
   tenant: { id: tenantId, name: tenantName },
-  project: { id: projectId, name: projectName, projectStart, statusDate },
+  wbs: { id: projectId, name: projectName, projectStart, statusDate },
   principal: { id: principalId, issuer, subject, type: "HUMAN", displayName },
   tenantMembership: { role: "OWNER" },
-  projectMembership: { role: "OWNER" },
+  projectMembership: { role: "OWNER", on: "wbs.project_id" },
 };
 
 console.log(
@@ -111,13 +116,83 @@ console.log(
 
 if (dryRun) {
   console.log(JSON.stringify({ event: "seed_admin_dry_run_complete" }));
+} else if (!process.execArgv.includes("--experimental-transform-types")) {
+  // ProjectRepository is TypeScript with a parameter property. Re-exec so a
+  // caller that launches this file with plain `node` still reaches it.
+  const child = spawnSync(
+    process.execPath,
+    ["--experimental-transform-types", ...process.argv.slice(1)],
+    { stdio: "inherit", env: process.env },
+  );
+  process.exit(child.status ?? 1);
 } else {
+  register(
+    `data:text/javascript,${encodeURIComponent(`
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith(".") && specifier.endsWith(".js")) {
+    try {
+      return await nextResolve(specifier.slice(0, -3) + ".ts", context);
+    } catch (error) {
+      if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
+    }
+  }
+  return nextResolve(specifier, context);
+}
+`)}`,
+  );
+  const { ProjectRepository, createPersistenceDatabase, migratePersistenceDatabase } = await import(
+    "../src/index.ts"
+  );
+
   const client = new pg.Client({ connectionString });
   await client.connect();
   try {
-    await migrate(drizzle(client), {
-      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+    await migratePersistenceDatabase(client);
+
+    const existing = await client.query({
+      text: "select project_id from wbs where tenant_id = $1 and id = $2",
+      values: [tenantId, projectId],
     });
+    if (existing.rowCount === 0) {
+      const tenant = await client.query({
+        text: "select 1 from tenant where id = $1",
+        values: [tenantId],
+      });
+      if (tenant.rowCount > 0) {
+        fail("tenant exists without this WBS; refusing to invent a second project graph");
+      }
+      await new ProjectRepository(createPersistenceDatabase(client)).save({
+        tenant: { id: tenantId, name: tenantName },
+        project: {
+          id: projectId,
+          tenantId,
+          name: projectName,
+          currency: "JPY",
+          timezone: "Asia/Tokyo",
+          projectStart,
+          statusDate,
+          defaultCalendarId: "standard",
+          revision: 1n,
+          nextTaskSeq: 1,
+          nextBaselineVersion: 1,
+        },
+        calendars: [],
+        members: [],
+        processes: [],
+        products: [],
+        templates: [],
+        tasks: [],
+        dependencies: [],
+        auditEvents: [],
+      });
+    }
+
+    const parent = await client.query({
+      text: "select project_id from wbs where tenant_id = $1 and id = $2",
+      values: [tenantId, projectId],
+    });
+    const parentProjectId = parent.rows[0]?.project_id;
+    if (parentProjectId === undefined) fail("WBS was not created");
 
     await client.query("begin");
     try {
@@ -126,19 +201,10 @@ if (dryRun) {
         values: [tenantId, tenantName],
       });
       await client.query({
-        text: `insert into project (id, tenant_id, name)
-               values ($1, $2, $3)
-               on conflict (id) do update set name = excluded.name`,
-        values: [projectId, tenantId, projectName],
-      });
-      await client.query({
-        text: `insert into wbs (id, tenant_id, project_id, name, project_start, status_date)
-               values ($1, $2, $1, $3, $4, $5)
-               on conflict (id) do update set
-                 name = excluded.name,
-                 project_start = excluded.project_start,
-                 status_date = excluded.status_date`,
-        values: [projectId, tenantId, projectName, projectStart, statusDate],
+        text: `update wbs
+                  set name = $3, project_start = $4, status_date = $5
+                where tenant_id = $1 and id = $2`,
+        values: [tenantId, projectId, projectName, projectStart, statusDate],
       });
       const principal = await client.query({
         text: `insert into principal (id, issuer, subject, type, display_name, allowed_scopes)
@@ -154,11 +220,13 @@ if (dryRun) {
                on conflict (tenant_id, principal_id) do update set role = 'OWNER'`,
         values: [tenantId, resolvedPrincipalId],
       });
+      // Membership is on the WBS's parent project, the id 0010 assigned, not
+      // the WBS id. A grant already on that parent is raised to OWNER.
       await client.query({
         text: `insert into project_membership (tenant_id, project_id, principal_id, role)
                values ($1, $2, $3, 'OWNER')
                on conflict (tenant_id, project_id, principal_id) do update set role = 'OWNER'`,
-        values: [tenantId, projectId, resolvedPrincipalId],
+        values: [tenantId, parentProjectId, resolvedPrincipalId],
       });
       await client.query("commit");
       console.log(
@@ -166,6 +234,7 @@ if (dryRun) {
           event: "seed_admin_complete",
           tenantId,
           projectId,
+          parentProjectId,
           principalId: resolvedPrincipalId,
         }),
       );

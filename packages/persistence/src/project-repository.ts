@@ -1,3 +1,4 @@
+import { creationChange } from "@vecta/application";
 import { and, asc, eq, sql, type ExtractTablesWithRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import type {
@@ -30,6 +31,7 @@ import {
   taskDependency,
   tenant,
   wbs,
+  wbsChange,
 } from "./schema.js";
 
 function withoutGeneratedFields<T extends object>(
@@ -65,6 +67,15 @@ function auditToRow(event: AuditEventRecord) {
 
 /** Postgres binds at most 65535 parameters. 5,000 tasks do not fit in one insert. */
 const TASK_INSERT_BATCH = 2000;
+
+/**
+ * One creation per WBS. `audit_actor_type` has no creation-specific value;
+ * SYSTEM is the actor that is not a person at the keyboard and not an agent.
+ * The operation id is stable because the primary key already makes a second
+ * creation of the same WBS impossible.
+ */
+const CREATION_OPERATION_ID = "wbs-creation";
+const CREATION_ACTOR_ID = "wbs-creation";
 
 type TaskInsert = NodePgTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
 
@@ -103,14 +114,20 @@ export class ProjectRepository {
   ) {}
 
   async save(record: PersistedProjectRecord): Promise<void> {
+    if (record.project.revision !== 1n) {
+      throw new Error(
+        `WBS creation requires revision 1, received ${record.project.revision.toString()}`,
+      );
+    }
     await this.database.transaction(async (transaction) => {
-      // Content-table triggers allow the write only while `vecta.wbs_write` is
-      // `<wbsId>:<revision>`. save creates the WBS; it does not advance one,
-      // so the marker is `<id>:0`.
+      // Content-table triggers commit only when this marker's revision is the
+      // WBS revision and this transaction wrote the matching wbs_change row.
+      // Creation is that transaction: revision 1, its change, the marker, and
+      // the base snapshot.
       await transaction.execute(sql`
         select set_config(
           'vecta.wbs_write',
-          ${`${record.project.id}:0`},
+          ${`${record.project.id}:1`},
           true
         )
       `);
@@ -174,11 +191,22 @@ export class ProjectRepository {
         record.project.id,
       );
       if (loaded === null) throw new Error("saved WBS could not be re-read");
+      const state = toProjectState(loaded);
+      await transaction.insert(wbsChange).values({
+        tenantId: record.project.tenantId,
+        wbsId: record.project.id,
+        revision: 1n,
+        operationId: CREATION_OPERATION_ID,
+        actorType: "SYSTEM",
+        actorId: CREATION_ACTOR_ID,
+        format: 1,
+        change: creationChange(state),
+      });
       await takeWbsSnapshot(
         transaction,
         { tenantId: record.project.tenantId, wbsId: record.project.id },
-        loaded.project.revision,
-        toProjectState(loaded),
+        1n,
+        state,
       );
     });
   }

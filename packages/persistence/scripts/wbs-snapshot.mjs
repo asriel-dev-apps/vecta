@@ -8,8 +8,10 @@
 //   pnpm --filter @vecta/persistence db:snapshot -- verify
 //
 // `base` prints one line per WBS (`inserted` or `existed`). A second run prints
-// only `existed`. `verify` walks every unverified snapshot pair and exits
-// non-zero if any verdict failed.
+// only `existed`. `verify` walks every unverified snapshot pair. It exits
+// non-zero while ANY stored verdict has a failure, and prints each of those,
+// including on a later run that finds nothing new. One WBS throwing does not
+// stop the walk over the others.
 //
 // Same host/name confirmation as seed-demo-project.mjs: the URL must match the
 // two EXPECTED_ variables, so a stray DATABASE_URL cannot reach another database.
@@ -69,7 +71,12 @@ function formatVerdict(wbsId, verdict) {
   if (verdict.ok) return `${wbsId} ${span} ok`;
   if (verdict.reason === "gap") return `${wbsId} ${span} gap@${verdict.missing}`;
   if (verdict.reason === "stale") return `${wbsId} ${span} stale@${verdict.at}`;
+  if (verdict.reason === "corrupt") return `${wbsId} ${span} corrupt@${verdict.at}`;
   return `${wbsId} ${span} hash`;
+}
+
+function failureLine(wbsId, from, to, failure) {
+  return `${wbsId} ${from}->${to} ${failure}`;
 }
 
 const client = new pg.Client({ connectionString });
@@ -78,6 +85,7 @@ try {
   const listed = await client.query("select tenant_id, id from wbs order by tenant_id, id");
   const store = new WbsSnapshotStore(createPersistenceDatabase(client));
   let failed = false;
+  const printed = new Set();
   for (const row of listed.rows) {
     const key = { tenantId: row.tenant_id, wbsId: row.id };
     if (command === "base") {
@@ -85,12 +93,34 @@ try {
       console.log(`${row.id} ${outcome.result}`);
       continue;
     }
-    for (;;) {
-      const verdict = await store.verifyNext(key);
-      if (verdict === null) break;
-      console.log(formatVerdict(row.id, verdict));
-      if (!verdict.ok) failed = true;
+    try {
+      for (;;) {
+        const verdict = await store.verifyNext(key);
+        if (verdict === null) break;
+        console.log(formatVerdict(row.id, verdict));
+        printed.add(`${row.id}:${verdict.from}:${verdict.to}`);
+        if (!verdict.ok) failed = true;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "verify failed";
+      console.log(`${row.id} error ${message}`);
+      failed = true;
     }
+  }
+  if (command === "verify") {
+    const outstanding = await client.query(
+      `select wbs_id, from_revision::text as from_revision, to_revision::text as to_revision, failure
+         from wbs_verified_range
+        where failure is not null
+        order by wbs_id, from_revision, to_revision`,
+    );
+    for (const failure of outstanding.rows) {
+      const key = `${failure.wbs_id}:${failure.from_revision}:${failure.to_revision}`;
+      if (!printed.has(key)) {
+        console.log(failureLine(failure.wbs_id, failure.from_revision, failure.to_revision, failure.failure));
+      }
+    }
+    if (outstanding.rows.length > 0) failed = true;
   }
   if (failed) process.exitCode = 1;
 } finally {
