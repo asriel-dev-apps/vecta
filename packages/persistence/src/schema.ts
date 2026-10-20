@@ -4,6 +4,7 @@ import {
   bigserial,
   char,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -29,6 +30,18 @@ export const projectRole = pgEnum("project_role", ["OWNER", "EDITOR", "VIEWER"])
 
 const auditTimestamp = (name: string) =>
   timestamp(name, { withTimezone: true, mode: "string", precision: 6 });
+
+const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+  toDriver(value: Uint8Array): Buffer {
+    return Buffer.from(value);
+  },
+  fromDriver(value: Buffer): Uint8Array {
+    return new Uint8Array(value);
+  },
+});
 
 export const principal = pgTable(
   "principal",
@@ -645,6 +658,72 @@ export const commandReceipt = pgTable(
   ],
 );
 
+/**
+ * Periodic gzip of `canonicalWbsState` (Design 0016 §2.3, §3.5).
+ * Immutable: a BEFORE UPDATE trigger raises. No write marker — a snapshot of
+ * revision r−1 is not "this transaction writes revision r".
+ */
+export const wbsSnapshot = pgTable(
+  "wbs_snapshot",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    wbsId: uuid("wbs_id").notNull(),
+    revision: bigint({ mode: "bigint" }).notNull(),
+    format: smallint("format").notNull(),
+    sha256: text("sha256").notNull(),
+    body: bytea("body").notNull(),
+    bodyBytes: integer("body_bytes").notNull(),
+    rawBytes: integer("raw_bytes").notNull(),
+    createdAt: auditTimestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "wbs_snapshot_pkey",
+      columns: [table.tenantId, table.wbsId, table.revision],
+    }),
+    foreignKey({
+      name: "wbs_snapshot_wbs_fk",
+      columns: [table.tenantId, table.wbsId],
+      foreignColumns: [wbs.tenantId, wbs.id],
+    }).onDelete("cascade"),
+    check("wbs_snapshot_revision_non_negative", sql`${table.revision} >= 0`),
+    check("wbs_snapshot_format_positive", sql`${table.format} >= 1`),
+    check("wbs_snapshot_sha256_hex", sql`${table.sha256} ~ '^[0-9a-f]{64}$'`),
+    check("wbs_snapshot_body_bytes_positive", sql`${table.bodyBytes} > 0`),
+    check("wbs_snapshot_raw_bytes_positive", sql`${table.rawBytes} > 0`),
+  ],
+);
+
+/** One verdict per consecutive snapshot pair. NULL `failure` means verified. */
+export const wbsVerifiedRange = pgTable(
+  "wbs_verified_range",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    wbsId: uuid("wbs_id").notNull(),
+    fromRevision: bigint("from_revision", { mode: "bigint" }).notNull(),
+    toRevision: bigint("to_revision", { mode: "bigint" }).notNull(),
+    failure: text("failure"),
+    verifiedAt: auditTimestamp("verified_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "wbs_verified_range_pkey",
+      columns: [table.tenantId, table.wbsId, table.fromRevision, table.toRevision],
+    }),
+    foreignKey({
+      name: "wbs_verified_range_from_fk",
+      columns: [table.tenantId, table.wbsId, table.fromRevision],
+      foreignColumns: [wbsSnapshot.tenantId, wbsSnapshot.wbsId, wbsSnapshot.revision],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "wbs_verified_range_to_fk",
+      columns: [table.tenantId, table.wbsId, table.toRevision],
+      foreignColumns: [wbsSnapshot.tenantId, wbsSnapshot.wbsId, wbsSnapshot.revision],
+    }).onDelete("cascade"),
+    check("wbs_verified_range_ordered", sql`${table.fromRevision} < ${table.toRevision}`),
+  ],
+);
+
 export const schema = {
   principal,
   tenant,
@@ -662,4 +741,6 @@ export const schema = {
   auditEvent,
   commandReceipt,
   wbsChange,
+  wbsSnapshot,
+  wbsVerifiedRange,
 };

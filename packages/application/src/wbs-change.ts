@@ -247,14 +247,21 @@ export function canonicalWbsState(state: ProjectState): string {
   });
 }
 
-export async function hashWbsState(state: ProjectState): Promise<string> {
-  const bytes = new TextEncoder().encode(canonicalWbsState(state));
+/** Lowercase 64-char hex of SHA-256 over UTF-8 text. */
+export type Sha256Hex = string & { readonly __brand: "Sha256Hex" };
+
+export async function sha256Hex(text: string): Promise<Sha256Hex> {
+  const bytes = new TextEncoder().encode(text);
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   let hex = "";
   for (const byte of new Uint8Array(digest)) {
     hex += byte.toString(16).padStart(2, "0");
   }
-  return hex;
+  return hex as Sha256Hex;
+}
+
+export async function hashWbsState(state: ProjectState): Promise<string> {
+  return sha256Hex(canonicalWbsState(state));
 }
 
 function subtasksToJson(steps: readonly SubtaskTemplateStep[]): JsonValue {

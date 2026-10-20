@@ -26,3 +26,4 @@ export * from "./project-command-unit-of-work.js";
 export * from "./project-access.js";
 export * from "./project-list.js";
 export * from "./project-workspace.js";
+export * from "./wbs-snapshot-store.js";

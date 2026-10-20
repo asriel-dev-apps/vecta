@@ -15,6 +15,8 @@ import {
   projectDetailQueries,
   projectHeaderQuery,
 } from "./project-read-queries.js";
+import { toProjectState } from "./project-workspace.js";
+import { takeWbsSnapshot } from "./wbs-snapshot-store.js";
 import {
   auditEvent,
   calendar,
@@ -59,6 +61,38 @@ function fromWbsColumn<T extends { wbsId: string }>(
 function auditToRow(event: AuditEventRecord) {
   const { projectId, projectRevision, ...rest } = event;
   return { ...rest, wbsId: projectId, wbsRevision: projectRevision };
+}
+
+/** Postgres binds at most 65535 parameters. 5,000 tasks do not fit in one insert. */
+const TASK_INSERT_BATCH = 2000;
+
+type TaskInsert = NodePgTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
+
+async function insertTasks(transaction: TaskInsert, tasks: readonly TaskRecord[]): Promise<void> {
+  const write = (rows: readonly TaskRecord[]) =>
+    transaction.insert(task).values(rows.map((row) => ({ ...toWbsColumn(row), dailyPlan: row.dailyPlan })));
+
+  if (tasks.length <= TASK_INSERT_BATCH) {
+    // Self-referential parent FK is satisfied within a single batched
+    // insert (immediate constraints are checked at statement end).
+    await write(tasks);
+    return;
+  }
+
+  const pending = [...tasks];
+  const inserted = new Set<string>();
+  while (pending.length > 0) {
+    const ready = pending.filter((row) => row.parentTaskId === null || inserted.has(row.parentTaskId));
+    if (ready.length === 0) throw new Error("task insert has a parent that is not in the record");
+    const readyIds = new Set(ready.map((row) => row.id));
+    const waiting = pending.filter((row) => !readyIds.has(row.id));
+    for (let index = 0; index < ready.length; index += TASK_INSERT_BATCH) {
+      const slice = ready.slice(index, index + TASK_INSERT_BATCH);
+      await write(slice);
+      for (const row of slice) inserted.add(row.id);
+    }
+    pending.splice(0, pending.length, ...waiting);
+  }
 }
 
 export class ProjectRepository {
@@ -124,11 +158,7 @@ export class ProjectRepository {
         );
       }
       if (record.tasks.length > 0) {
-        // Self-referential parent FK is satisfied within a single batched
-        // insert (immediate constraints are checked at statement end).
-        await transaction.insert(task).values(
-          record.tasks.map((row) => ({ ...toWbsColumn(row), dailyPlan: row.dailyPlan })),
-        );
+        await insertTasks(transaction, record.tasks);
       }
       if (record.dependencies.length > 0) {
         await transaction
@@ -138,6 +168,18 @@ export class ProjectRepository {
       if (record.auditEvents.length > 0) {
         await transaction.insert(auditEvent).values(record.auditEvents.map((row) => auditToRow(row)));
       }
+
+      const loaded = await new ProjectRepository(transaction).load(
+        record.project.tenantId,
+        record.project.id,
+      );
+      if (loaded === null) throw new Error("saved WBS could not be re-read");
+      await takeWbsSnapshot(
+        transaction,
+        { tenantId: record.project.tenantId, wbsId: record.project.id },
+        loaded.project.revision,
+        toProjectState(loaded),
+      );
     });
   }
 

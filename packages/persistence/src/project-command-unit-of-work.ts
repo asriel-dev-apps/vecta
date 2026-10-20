@@ -4,15 +4,19 @@ import {
   diffOperation,
   IdempotencyConflictError,
   leafTaskIds,
+  isSnapshotDue,
+  productionSnapshotInterval,
   ProjectCommandValidationError,
   ProjectNotFoundError,
   ProjectVersionConflictError,
   type FieldChange,
   type JsonValue,
+  type LastSnapshot,
   type ProjectCommandExecution,
   type ProjectCommandRequest,
   type ProjectCommandUnitOfWork,
   type ProjectState,
+  type SnapshotInterval,
   type SubtaskTemplateStep,
   type WbsChange,
 } from "@vecta/application";
@@ -34,6 +38,7 @@ import {
   task,
   wbsChange,
 } from "./schema.js";
+import { takeWbsSnapshot } from "./wbs-snapshot-store.js";
 
 type CommandTransaction = Parameters<
   Parameters<NodePgDatabase<typeof schema>["transaction"]>[0]
@@ -442,13 +447,38 @@ function taskAfter(after: ProjectState, id: string) {
 }
 
 
+export interface UnitOfWorkOptions {
+  /** Replaces the whole interval rule. Tests pass `() => 3`. */
+  readonly snapshotInterval?: SnapshotInterval;
+}
+
+interface ExecuteOutcome {
+  readonly execution: ProjectCommandExecution;
+  readonly pendingSnapshot: ProjectState | null;
+  readonly snapshotRevision: bigint;
+}
+
+function lastSnapshotOf(row: {
+  snapshot_revision: string | null;
+  snapshot_body_bytes: number | string | null;
+}): LastSnapshot | null {
+  if (row.snapshot_revision === null || row.snapshot_body_bytes === null) return null;
+  const bodyBytes = Number(row.snapshot_body_bytes);
+  if (!Number.isFinite(bodyBytes)) return null;
+  return { revision: BigInt(row.snapshot_revision), bodyBytes };
+}
+
 export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWork {
-  constructor(private readonly database: NodePgDatabase<typeof schema>) {}
+  constructor(
+    private readonly database: NodePgDatabase<typeof schema>,
+    private readonly options: UnitOfWorkOptions = {},
+  ) {}
 
   async execute(request: ProjectCommandRequest): Promise<ProjectCommandExecution> {
     const fingerprint = operationFingerprint(request);
+    const interval = this.options.snapshotInterval ?? productionSnapshotInterval;
 
-    return this.database.transaction(async (transaction) => {
+    const outcome = await this.database.transaction(async (transaction) => {
       const findReceipt = () =>
         transaction
           .select()
@@ -462,15 +492,19 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           )
           .limit(1);
 
-      const replay = (receipt: typeof commandReceipt.$inferSelect) => {
+      const replay = (receipt: typeof commandReceipt.$inferSelect): ExecuteOutcome => {
         if (receipt.requestHash !== fingerprint) {
           throw new IdempotencyConflictError(request.operationId);
         }
         return {
-          projectId: request.projectId,
-          revision: receipt.resultRevision,
-          replayed: true,
-        } satisfies ProjectCommandExecution;
+          execution: {
+            projectId: request.projectId,
+            revision: receipt.resultRevision,
+            replayed: true,
+          },
+          pendingSnapshot: null,
+          snapshotRevision: 0n,
+        };
       };
 
       const [existingReceipt] = await findReceipt();
@@ -478,8 +512,26 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
         return replay(existingReceipt);
       }
 
-      const lockedProject = await transaction.execute<{ revision: string }>(sql`
-        select revision::text as revision
+      const lockedProject = await transaction.execute<{
+        revision: string;
+        snapshot_revision: string | null;
+        snapshot_body_bytes: number | string | null;
+      }>(sql`
+        select revision::text as revision,
+          (
+            select s.revision::text
+            from wbs_snapshot s
+            where s.tenant_id = wbs.tenant_id and s.wbs_id = wbs.id
+            order by s.revision desc
+            limit 1
+          ) as snapshot_revision,
+          (
+            select s.body_bytes
+            from wbs_snapshot s
+            where s.tenant_id = wbs.tenant_id and s.wbs_id = wbs.id
+            order by s.revision desc
+            limit 1
+          ) as snapshot_body_bytes
         from wbs
         where tenant_id = ${request.tenantId} and id = ${request.projectId}
         for update
@@ -645,6 +697,18 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
           dependencies: dependenciesByTask.get(row.id) ?? [],
         })),
       };
+
+      const lastSnapshot = lastSnapshotOf(lockedRow);
+      const due = isSnapshotDue(actualRevision, lastSnapshot, interval);
+      if (lastSnapshot === null) {
+        await takeWbsSnapshot(
+          transaction,
+          { tenantId: request.tenantId, wbsId: request.projectId },
+          actualRevision,
+          current,
+        );
+      }
+      const pendingSnapshot = due && lastSnapshot !== null ? current : null;
 
       let diffed: ReturnType<typeof diffOperation>;
       try {
@@ -988,11 +1052,32 @@ export class PostgresProjectCommandUnitOfWork implements ProjectCommandUnitOfWor
       });
 
       return {
-        projectId: request.projectId,
-        revision: resultRevision,
-        replayed: false,
+        execution: {
+          projectId: request.projectId,
+          revision: resultRevision,
+          replayed: false,
+        },
+        pendingSnapshot,
+        snapshotRevision: actualRevision,
       };
     });
+
+    if (outcome.pendingSnapshot !== null) {
+      try {
+        await takeWbsSnapshot(
+          this.database,
+          { tenantId: request.tenantId, wbsId: request.projectId },
+          outcome.snapshotRevision,
+          outcome.pendingSnapshot,
+        );
+      } catch (error) {
+        const name = error instanceof Error ? error.name : "Error";
+        console.error(
+          `wbs snapshot failed for ${request.projectId} revision ${outcome.snapshotRevision.toString()} (${name})`,
+        );
+      }
+    }
+    return outcome.execution;
   }
 }
 

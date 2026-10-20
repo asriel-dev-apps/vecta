@@ -80,6 +80,8 @@ describe("persistence migrations", () => {
       "tenant_membership",
       "wbs",
       "wbs_change",
+      "wbs_snapshot",
+      "wbs_verified_range",
     ]);
   });
 
