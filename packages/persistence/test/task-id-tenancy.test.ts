@@ -9,6 +9,7 @@ import {
   ProjectRepository,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { withWbsWriteMarker } from "./wbs-write-marker.js";
 
 /**
  * A command scoped to one project cannot touch another project's task row.
@@ -69,10 +70,12 @@ describe("task ids cannot cross a project boundary", () => {
        values ($1, $2, $1, 'Other project', '2026-01-05', '2026-03-02')`,
       [VICTIM_PROJECT_ID, TENANT_ID],
     );
-    await client.query(
-      `insert into task (id, tenant_id, wbs_id, seq, name, sort_order, planned_effort_minutes)
-       values ($1, $2, $3, 1, $4, 10, 480)`,
-      [VICTIM_TASK_ID, TENANT_ID, VICTIM_PROJECT_ID, VICTIM_NAME],
+    await withWbsWriteMarker(client, VICTIM_PROJECT_ID, 0, () =>
+      client.query(
+        `insert into task (id, tenant_id, wbs_id, seq, name, sort_order, planned_effort_minutes)
+         values ($1, $2, $3, 1, $4, 10, 480)`,
+        [VICTIM_TASK_ID, TENANT_ID, VICTIM_PROJECT_ID, VICTIM_NAME],
+      ),
     );
   });
 

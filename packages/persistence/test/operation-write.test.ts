@@ -26,6 +26,7 @@ import {
   type TaskRecord,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { withWbsWriteMarker } from "./wbs-write-marker.js";
 
 /**
  * One operation = one transaction = one revision (M1 #2 unit 4), driven through
@@ -934,7 +935,9 @@ describe("operation write (one operation, one transaction, one revision)", () =>
       const replayed = await hashWbsState(applyWbsChange(run.before, run.rec));
 
       expect(replayed).toBe(await hashOf(record));
-      await client.query("update task set name = 'TAMPERED' where id = $1", [leaf.id]);
+      await withWbsWriteMarker(client, record.project.id, 0, () =>
+        client.query("update task set name = 'TAMPERED' where id = $1", [leaf.id]),
+      );
       expect(replayed).not.toBe(await hashOf(record));
     });
   });

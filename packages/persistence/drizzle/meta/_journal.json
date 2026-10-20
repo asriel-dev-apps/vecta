@@ -85,6 +85,13 @@
       "when": 1785300000000,
       "tag": "0011_wbs_change",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785400000000,
+      "tag": "0012_wbs_write_guards",
+      "breakpoints": true
     }
   ]
 }

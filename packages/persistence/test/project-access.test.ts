@@ -182,6 +182,7 @@ describe("PostgreSQL project access", () => {
        values ($1, $2, $1, 'Second project', '2026-07-13', '2026-07-13')`,
       [secondProjectId, secondTenantId],
     );
+    await client.query("select set_config('vecta.wbs_write', $1, true)", [`${secondProjectId}:0`]);
     await client.query(
       `insert into calendar
          (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)

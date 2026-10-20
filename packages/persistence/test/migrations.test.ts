@@ -2,6 +2,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migratePersistenceDatabase } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { withWbsWriteMarker } from "./wbs-write-marker.js";
 
 describe("persistence migrations", () => {
   let client: Client;
@@ -28,6 +29,7 @@ describe("persistence migrations", () => {
        values ($1, $2, $1, 'Project A', '2026-01-05', '2026-01-20')`,
       [projectId, tenantId],
     );
+    await client.query("select set_config('vecta.wbs_write', $1, true)", [`${projectId}:0`]);
     await client.query(
       `insert into calendar
          (tenant_id, wbs_id, id, name, working_weekdays, non_working_dates)
@@ -35,15 +37,19 @@ describe("persistence migrations", () => {
       [tenantId, projectId],
     );
     await client.query("commit");
-    await client.query(
-      `insert into member (id, tenant_id, wbs_id, name, calendar_id, daily_capacity_minutes)
-       values ($1, $2, $3, 'Member 01', 'standard', 480)`,
-      [memberId, tenantId, projectId],
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query(
+        `insert into member (id, tenant_id, wbs_id, name, calendar_id, daily_capacity_minutes)
+         values ($1, $2, $3, 'Member 01', 'standard', 480)`,
+        [memberId, tenantId, projectId],
+      ),
     );
-    await client.query(
-      `insert into task (id, tenant_id, wbs_id, name, seq, planned_effort_minutes, progress_basis_points)
-       values ($1, $2, $3, 'Subtask', 1, 480, 5000)`,
-      [taskId, tenantId, projectId],
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query(
+        `insert into task (id, tenant_id, wbs_id, name, seq, planned_effort_minutes, progress_basis_points)
+         values ($1, $2, $3, 'Subtask', 1, 480, 5000)`,
+        [taskId, tenantId, projectId],
+      ),
     );
   }, 60_000);
 
@@ -113,47 +119,61 @@ describe("persistence migrations", () => {
     // Each insert carries a distinct, non-colliding `seq` (NOT NULL after 0006)
     // so it is rejected on the invariant under test, not the seq column itself.
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, planned_effort_minutes) values ($1, $2, 'Bad', 101, -1)",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, planned_effort_minutes) values ($1, $2, 'Bad', 101, -1)",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, progress_basis_points) values ($1, $2, 'Bad', 102, 10001)",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, progress_basis_points) values ($1, $2, 'Bad', 102, 10001)",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
-        "insert into task (id, tenant_id, wbs_id, name, seq, parent_task_id) values ($3, $1, $2, 'Bad', 103, $3)",
-        [tenantId, projectId, "d0000000-0000-4000-8000-000000000099"],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (id, tenant_id, wbs_id, name, seq, parent_task_id) values ($3, $1, $2, 'Bad', 103, $3)",
+          [tenantId, projectId, "d0000000-0000-4000-8000-000000000099"],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, actual_start, actual_finish) values ($1, $2, 'Bad', 104, '2026-02-01', '2026-01-01')",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, actual_start, actual_finish) values ($1, $2, 'Bad', 104, '2026-02-01', '2026-01-01')",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, assignee_member_id) values ($1, $2, 'Bad', 105, $3)",
-        [tenantId, projectId, "c0000000-0000-4000-8000-0000000000ff"],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, assignee_member_id) values ($1, $2, 'Bad', 105, $3)",
+          [tenantId, projectId, "c0000000-0000-4000-8000-0000000000ff"],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23503" });
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, proration_weight_bp) values ($1, $2, 'Bad', 106, 10001)",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, proration_weight_bp) values ($1, $2, 'Bad', 106, 10001)",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("accepts a null or in-range proration weight from the additive migration", async () => {
-    await client.query(
-      "insert into task (tenant_id, wbs_id, name, seq, proration_weight_bp) values ($1, $2, 'Weighted subtask', 2, 2500)",
-      [tenantId, projectId],
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query(
+        "insert into task (tenant_id, wbs_id, name, seq, proration_weight_bp) values ($1, $2, 'Weighted subtask', 2, 2500)",
+        [tenantId, projectId],
+      ),
     );
     const weighted = await client.query<{ proration_weight_bp: number | null }>(
       "select proration_weight_bp from task where name = 'Weighted subtask'",
@@ -169,16 +189,20 @@ describe("persistence migrations", () => {
   it("enforces the immutable display-No. column added by 0006 (§F-1)", async () => {
     // seq is NOT NULL after the backfill sets it SET NOT NULL.
     await expect(
-      client.query("insert into task (tenant_id, wbs_id, name) values ($1, $2, 'No seq')", [
-        tenantId,
-        projectId,
-      ]),
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query("insert into task (tenant_id, wbs_id, name) values ($1, $2, 'No seq')", [
+          tenantId,
+          projectId,
+        ]),
+      ),
     ).rejects.toMatchObject({ code: "23502" });
     // seq is unique within (tenant, project): the seed task already holds seq 1.
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq) values ($1, $2, 'Dup seq', 1)",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq) values ($1, $2, 'Dup seq', 1)",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23505" });
     // The per-project counter must stay >= 1.
@@ -189,43 +213,55 @@ describe("persistence migrations", () => {
 
   it("enforces member capacity and task-dependency invariants", async () => {
     await expect(
-      client.query(
-        "insert into member (tenant_id, wbs_id, name, calendar_id, daily_capacity_minutes) values ($1, $2, 'Bad', 'standard', 0)",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into member (tenant_id, wbs_id, name, calendar_id, daily_capacity_minutes) values ($1, $2, 'Bad', 'standard', 0)",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     await expect(
-      client.query(
-        `insert into task_dependency (tenant_id, wbs_id, predecessor_task_id, successor_task_id)
-         values ($1, $2, $3, $3)`,
-        [tenantId, projectId, taskId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          `insert into task_dependency (tenant_id, wbs_id, predecessor_task_id, successor_task_id)
+           values ($1, $2, $3, $3)`,
+          [tenantId, projectId, taskId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("enforces process/product master invariants and the task master FKs", async () => {
     const processId = "70000000-0000-4000-8000-000000000001";
-    await client.query(
-      "insert into process (id, tenant_id, wbs_id, name, sort_order) values ($1, $2, $3, 'Phase A', 0)",
-      [processId, tenantId, projectId],
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query(
+        "insert into process (id, tenant_id, wbs_id, name, sort_order) values ($1, $2, $3, 'Phase A', 0)",
+        [processId, tenantId, projectId],
+      ),
     );
     // A task may reference a master row in the same project.
-    await client.query(
-      "insert into task (tenant_id, wbs_id, name, seq, process_id) values ($1, $2, 'Bound', 3, $3)",
-      [tenantId, projectId, processId],
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query(
+        "insert into task (tenant_id, wbs_id, name, seq, process_id) values ($1, $2, 'Bound', 3, $3)",
+        [tenantId, projectId, processId],
+      ),
     );
     // A blank master name is rejected.
     await expect(
-      client.query(
-        "insert into product (tenant_id, wbs_id, name) values ($1, $2, '  ')",
-        [tenantId, projectId],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into product (tenant_id, wbs_id, name) values ($1, $2, '  ')",
+          [tenantId, projectId],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23514" });
     // A task referencing an unknown process is rejected by the restrict FK.
     await expect(
-      client.query(
-        "insert into task (tenant_id, wbs_id, name, seq, process_id) values ($1, $2, 'Bad', 107, $3)",
-        [tenantId, projectId, "70000000-0000-4000-8000-0000000000ff"],
+      withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(
+          "insert into task (tenant_id, wbs_id, name, seq, process_id) values ($1, $2, 'Bad', 107, $3)",
+          [tenantId, projectId, "70000000-0000-4000-8000-0000000000ff"],
+        ),
       ),
     ).rejects.toMatchObject({ code: "23503" });
   });

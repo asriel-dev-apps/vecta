@@ -16,6 +16,7 @@ import {
   toBaselineSnapshot,
 } from "../src/index.js";
 import { startTestDatabase, type TestDatabase } from "./database.js";
+import { withWbsWriteMarker } from "./wbs-write-marker.js";
 
 /**
  * `baseline.publish` through the real unit of work (Design 0009).
@@ -106,10 +107,12 @@ describe("baseline.publish", () => {
   it("CONTROL: editing the current plan afterwards does not move the frozen plot", async () => {
     await publish();
     const before = await frozenRows();
-    await client.query("update task set daily_plan = $1::jsonb where id = $2", [
-      JSON.stringify({ "2099-01-01": 9_999 }),
-      firstLeaf.id,
-    ]);
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query("update task set daily_plan = $1::jsonb where id = $2", [
+        JSON.stringify({ "2099-01-01": 9_999 }),
+        firstLeaf.id,
+      ]),
+    );
     const after = await frozenRows();
     expect(after.rows).toEqual(before.rows);
   });
@@ -128,7 +131,9 @@ describe("baseline.publish", () => {
     // Measured 2026-08-05: BAC comes from the daily plot, so an unplotted leaf is
     // worth ZERO to the baseline and every later SV is kinder by that amount —
     // permanently, and with nothing on screen to say so.
-    await client.query("update task set daily_plan = '{}'::jsonb where id = $1", [firstLeaf.id]);
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query("update task set daily_plan = '{}'::jsonb where id = $1", [firstLeaf.id]),
+    );
     await expect(publish()).rejects.toThrow(/empty or inconsistent daily plot/u);
 
     const acknowledged = await publish({
@@ -243,14 +248,20 @@ describe("baseline.publish", () => {
       ],
     ];
     for (const [label, statement, parameters] of mutations) {
-      await client.query(statement, parameters as never[]);
+      await withWbsWriteMarker(client, projectId, 0, () =>
+        client.query(statement, parameters as never[]),
+      );
       const after = await read();
       expect(after, `changing ${label} moved the baseline`).toEqual(before);
     }
 
     // Deleting a task must not move it either — and the frozen row survives.
-    await client.query("delete from task_dependency where tenant_id = $1", [tenantId]);
-    await client.query("delete from task where id = $1", [firstLeaf.id]);
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query("delete from task_dependency where tenant_id = $1", [tenantId]),
+    );
+    await withWbsWriteMarker(client, projectId, 0, () =>
+      client.query("delete from task where id = $1", [firstLeaf.id]),
+    );
     expect(await read()).toEqual(before);
   });
 

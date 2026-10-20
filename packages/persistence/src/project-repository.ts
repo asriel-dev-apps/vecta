@@ -1,4 +1,4 @@
-import { and, asc, eq, type ExtractTablesWithRelations } from "drizzle-orm";
+import { and, asc, eq, sql, type ExtractTablesWithRelations } from "drizzle-orm";
 import type { NodePgDatabase, NodePgTransaction } from "drizzle-orm/node-postgres";
 import type {
   AuditEventRecord,
@@ -70,6 +70,16 @@ export class ProjectRepository {
 
   async save(record: PersistedProjectRecord): Promise<void> {
     await this.database.transaction(async (transaction) => {
+      // Content-table triggers allow the write only while `vecta.wbs_write` is
+      // `<wbsId>:<revision>`. save creates the WBS; it does not advance one,
+      // so the marker is `<id>:0`.
+      await transaction.execute(sql`
+        select set_config(
+          'vecta.wbs_write',
+          ${`${record.project.id}:0`},
+          true
+        )
+      `);
       await transaction.insert(tenant).values(record.tenant);
       const [parent] = await transaction
         .insert(project)
