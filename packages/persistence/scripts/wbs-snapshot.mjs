@@ -32,11 +32,12 @@ export async function resolve(specifier, context, nextResolve) {
 register(`data:text/javascript,${encodeURIComponent(TS_SOURCE_RESOLVE_HOOK)}`);
 
 const { default: pg } = await import("pg");
-const { WbsSnapshotStore, createPersistenceDatabase, migratePersistenceDatabase } = await import(
+const { WbsSnapshotStore, createPersistenceDatabase } = await import(
   "../src/index.ts"
 );
 
-const command = process.argv[2];
+// pnpm passes the `--` separator through to the script.
+const command = process.argv.slice(2).find((argument) => argument !== "--");
 if (command !== "base" && command !== "verify") {
   throw new Error("usage: pnpm --filter @vecta/persistence db:snapshot -- base|verify");
 }
@@ -74,7 +75,6 @@ function formatVerdict(wbsId, verdict) {
 const client = new pg.Client({ connectionString });
 await client.connect();
 try {
-  await migratePersistenceDatabase(client);
   const listed = await client.query("select tenant_id, id from wbs order by tenant_id, id");
   const store = new WbsSnapshotStore(createPersistenceDatabase(client));
   let failed = false;
