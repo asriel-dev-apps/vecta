@@ -41,7 +41,7 @@
     "@types/react-dom": "19.2.3",
     "happy-dom": "20.11.1",
     "typescript": "6.0.3",
-    "vite": "8.1.5",
+    "vite": "8.1.6",
     "vite-tsconfig-paths": "6.1.1",
     "vitest": "4.1.10",
     "wrangler": "4.114.0"
